@@ -71,7 +71,7 @@ Supabase is the canonical system of record for users, devices, integrations, pen
 - **Derived context engine:** Cognee
 - **Purpose:** Cross-service relationships, projects, commitments, communication preferences, and similar approved decisions
 - **Deployment:** Separate Python/Docker service called only by the Hono backend
-- **Models:** OpenAI language and embedding models
+- **Models:** `gpt-5-nano` and `text-embedding-3-small`
 
 Cognee enriches decisions but is not a source of live truth. Hono reads changing facts directly from Gmail, Google Calendar, GitHub, and other connected services before each decision. Live data overrides remembered context.
 
@@ -81,8 +81,8 @@ Cognee does not store credentials, manage the approval queue, execute actions, o
 
 - **SDK:** Official OpenAI JavaScript SDK, used only by the server
 - **Text API:** Responses API
-- **Default model:** `gpt-5.6-terra`
-- **Complex or high-risk analysis:** `gpt-5.6-sol`
+- **Text model:** `gpt-5-nano`
+- **Embeddings:** `text-embedding-3-small`
 - **Dictation:** `gpt-4o-mini-transcribe`
 - **Output format:** Structured Outputs with a strict JSON Schema
 
@@ -96,7 +96,9 @@ The default model converts incoming workflow data into a compact decision brief 
 - Warnings
 - Recommendation and reason
 
-Use `gpt-5.6-sol` only when the request needs deeper reasoning, such as a security-sensitive pull request, permission change, financial action, or destructive operation. The model may summarize and recommend, but it never approves or executes the action.
+Use `gpt-5-nano` for decision briefs, extraction, classification, recommendations, and personalized drafts. It supports function calling and Structured Outputs while keeping latency and API cost low. Use one text model for the MVP; consider a larger model only if measured approval and correction rates show that nano is insufficient for a specific task.
+
+The model may summarize and recommend, but it never approves or executes an action. High-risk actions rely on explicit user approval and strict validation, not a larger model.
 
 Authoritative values such as recipients, amounts, repository names, permissions, and callback targets come from the original integration payload. AI-generated text must not replace or modify those values.
 
@@ -149,6 +151,7 @@ Use one Hono backend, one dashboard, Supabase, and one Cognee deployment for the
 ## References
 
 - [OpenAI model selection](https://developers.openai.com/api/docs/models)
+- [GPT-5 nano](https://developers.openai.com/api/docs/models/gpt-5-nano)
 - [Responses API](https://developers.openai.com/api/docs/guides/migrate-to-responses)
 - [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
 - [Speech to text](https://developers.openai.com/api/docs/guides/speech-to-text)
