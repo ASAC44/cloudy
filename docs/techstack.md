@@ -12,7 +12,7 @@
 
 The exact display driver and interface depend on the selected screen controller.
 
-## Device
+## Pod runtime
 
 - **OS:** Raspberry Pi OS Lite 64-bit
 - **Language:** Python 3
@@ -24,9 +24,9 @@ The exact display driver and interface depend on the selected screen controller.
 - **Process management:** systemd
 - **Communication:** HTTPS
 
-The device runs directly into a fullscreen text interface without loading a desktop. It polls for pending requests every 2–3 seconds. Requests remain stored on the server, so temporary disconnections do not lose decisions. Realtime messaging can replace polling if latency or scale requires it.
+The Pod runs directly into a fullscreen text interface without loading a desktop. It polls for pending requests every two seconds. Requests remain stored on the server, so temporary disconnections do not lose decisions. Realtime messaging can replace polling if latency or scale requires it.
 
-### Device interaction
+### Pod interaction
 
 - Show the action title, source, short summary, status, and queue position first.
 - Swipe up to scroll through details.
@@ -55,7 +55,7 @@ The device runs directly into a fullscreen text interface without loading a desk
 - **Dashboard hosting:** Vercel
 - **Backend hosting:** One Docker-compatible service
 
-Next.js provides the dashboard only. Hono is the single backend for device communication, OAuth callbacks, webhooks, MCP access, OpenAI calls, approval state changes, and action execution. Keep it as one service; do not split integrations into separate microservices.
+Next.js provides the dashboard only. Hono is the single backend for Pod communication, OAuth callbacks, webhooks, MCP access, OpenAI calls, approval state changes, and action execution. Keep it as one service; do not split integrations into separate microservices.
 
 ## Data and Authentication
 
@@ -64,7 +64,7 @@ Next.js provides the dashboard only. Hono is the single backend for device commu
 - **Authorization:** Postgres Row-Level Security
 - **Realtime, if needed:** Supabase Broadcast
 
-Supabase is the canonical system of record for users, devices, integrations, pending approvals, exact action payloads, decisions, and audit logs. OAuth credentials stay server-side and are encrypted before storage.
+Supabase is the canonical system of record for users, Pods, integrations, pending approvals, exact action payloads, decisions, and audit logs. OAuth credentials stay server-side and are encrypted before storage.
 
 ## Context and Memory
 
@@ -106,7 +106,7 @@ Keep the OpenAI API key on the server. The Raspberry Pi sends requests through t
 
 ## Dictation
 
-The Pi records audio while both buttons are held and uploads it to the Podex API. The server transcribes it with `gpt-4o-mini-transcribe`. The device shows the transcript for confirmation before submitting it. Use uploaded recordings for the MVP; live Realtime transcription is unnecessary for short push-to-talk responses.
+The Pi records audio while both buttons are held and uploads it to the Podex API. The server transcribes it with `gpt-4o-mini-transcribe`. The Pod shows the transcript for confirmation before submitting it. Use uploaded recordings for the MVP; live Realtime transcription is unnecessary for short push-to-talk responses.
 
 ## Integration Flow
 
@@ -124,10 +124,10 @@ For n8n, the workflow sends its decision data and resume URL to Podex, then wait
 
 ## Security
 
-- Pair devices with a one-time code.
-- Give every device a revocable, scoped token.
+- Pair Pods with a one-time code.
+- Give every Pod a revocable, scoped token.
 - Sign integration requests.
-- Keep integration credentials on the server, never on the device.
+- Keep integration credentials on the server, never on the Pod.
 - Allow each request to transition from pending only once.
 - Require idempotency keys to prevent duplicate execution.
 - Bind every decision to the exact action displayed.
@@ -138,7 +138,7 @@ For n8n, the workflow sends its decision data and resume URL to Podex, then wait
 ```text
 Next.js dashboard ───────┐
 Agent / n8n / MCP ──────┼──> Hono API ──> Live service APIs
-Podex device ────────────┘       |  |
+Podex Pod ───────────────┘       |  |
                                 |  └──> Cognee context
                                 |
                          OpenAI + Supabase
