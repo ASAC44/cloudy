@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools==80.9.0"]
+requires = ["setuptools==83.0.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -16,3 +16,6 @@ podex-pod = "podex_pod.app:main"
 
 [tool.setuptools.packages.find]
 include = ["podex_pod*"]
+
+[tool.setuptools.package-data]
+podex_pod = ["fonts/*"]

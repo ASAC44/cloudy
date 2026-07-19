@@ -15,7 +15,8 @@ import pygame
 from gpiozero import Button, Device
 from gpiozero.pins.mock import MockFactory
 
-from podex_pod.app import BACKGROUND, INK, PodApp, idle_pose, wrap
+from podex_pod.app import BACKGROUND, INK, PodApp, idle_pose, wrap, yawn_openness
+from podex_pod.audio import ButtonChord, Recorder
 from podex_pod.client import ApiError
 from podex_pod.storage import Storage
 from podex_pod.worker import PodWorker
@@ -34,18 +35,61 @@ REQUEST = {
     "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat(),
 }
 
+GITHUB_REQUEST = {
+    **REQUEST,
+    "title": "#482 · Add payment retries",
+    "source": "GitHub · PR merge",
+    "action_payload": {"kind": "ping_rule_action", "event_id": "event-1"},
+    "presentation": {
+        "kind": "github_pr_v1",
+        "context": "podex/api · feature/payment-retries → main",
+        "facts": [
+            ["AUTHOR", "vimzh"], ["FILES", "14"], ["DIFF", "+184/-39"], ["CHECKS", "12/12"],
+            ["REVIEWS", "2"], ["AREA", "api"], ["MERGE", "Squash"], ["EXPIRES", "18:45 UTC"],
+        ],
+        "summary": "Adds bounded payment retries and backoff, updates failure handling, preserves idempotency, and adds monitoring for exhausted attempts.",
+        "glance_details": [["SAFETY", "Exact reviewed SHA required"], ["ROLLBACK", "Revert merge commit"]],
+        "details": [["DECISION REQUESTED", "Merge the reviewed commit."], ["REVIEW EVIDENCE", "All required checks and reviews passed."]],
+        "ai_available": True,
+    },
+}
+
+EMAIL_REQUEST = {
+    **REQUEST,
+    "title": "Tomorrow's project review",
+    "source": "Gmail",
+    "action_payload": {"kind": "ping_rule_action", "event_id": "event-2"},
+    "presentation": {
+        "kind": "email_reply_v1",
+        "sender": "ava@northstar.studio",
+        "time": "09:42",
+        "subject": "Tomorrow's project review",
+        "summary": "Ava wants to move tomorrow's project review to 3:30 PM and needs a new calendar invite.",
+        "email": "Hi Vansh,\n\nCould we move tomorrow's project review to 3:30 PM?\n\nThanks,\nAva",
+        "response": "Absolutely — 3:30 PM works for me. I've moved the meeting and sent an updated invite.",
+    },
+}
+
 
 class FakeWorker:
     def __init__(self):
         self.events = queue.SimpleQueue()
         self.decisions = []
         self.offline = False
+        self.transcriptions = []
+        self.prompts = []
 
     def decide(self, request, outcome):
         self.decisions.append((request["id"], outcome))
 
     def set_offline(self, offline):
         self.offline = offline
+
+    def transcribe(self, path):
+        self.transcriptions.append(path)
+
+    def prompt(self, prompt, revision, replace_request=None):
+        self.prompts.append((prompt, revision, replace_request))
 
 
 class PodTests(unittest.TestCase):
@@ -73,9 +117,21 @@ class PodTests(unittest.TestCase):
         self.assertGreater(len(lines), 1)
         self.assertTrue(all(self.app.font.size(line)[0] <= 80 for line in lines))
 
+    def test_body_typography_is_shared_across_pod_screens(self):
+        self.assertIs(self.app.review_body, self.app.font)
+        self.assertIs(self.app.review_detail, self.app.font)
+        self.assertIs(self.app.review_label, self.app.small)
+
+    def test_glance_summary_truncates_after_six_lines(self):
+        lines = wrap(self.app.review_detail, "word " * 200, 580, max_lines=6)
+
+        self.assertEqual(len(lines), 6)
+        self.assertTrue(lines[-1].endswith("…"))
+        self.assertTrue(all(self.app.review_detail.size(line)[0] <= 580 for line in lines))
+
     def test_primary_states_render_at_device_resolution(self):
         self.assertEqual(pygame.display.get_window_size(), (640, 480))
-        for state in ("startup", "pairing", "idle", "request", "offline", "submitting", "approved", "rejected", "expired", "revoked", "error"):
+        for state in ("startup", "pairing", "idle", "target_unavailable", "request", "offline", "submitting", "approved", "rejected", "expired", "revoked", "error"):
             self.app.state = state
             self.app.pairing_code = "ABCD1234"
             self.app.request = REQUEST if state in ("request", "offline", "expired") else None
@@ -95,12 +151,98 @@ class PodTests(unittest.TestCase):
     def test_idle_pose_floats_breathes_and_blinks(self):
         resting = idle_pose(0)
         floating = idle_pose(1.25)
-        blinking = idle_pose(3.8)
+        blinking = idle_pose(2.9)
 
-        self.assertEqual(resting, (0, 184, False))
+        self.assertEqual(resting, (0, 248, False))
+        self.assertNotEqual(resting[:2], idle_pose(1 / 30)[:2])
         self.assertGreater(floating[0], resting[0])
         self.assertNotEqual(floating[1], resting[1])
         self.assertTrue(blinking[2])
+
+    def test_approve_while_idle_triggers_one_second_yawn(self):
+        self.app.state = "idle"
+        with patch("podex_pod.app.time.monotonic", return_value=100):
+            self.app.choose("approved")
+
+        self.assertEqual(self.worker.decisions, [])
+        self.assertEqual(yawn_openness(0), 0)
+        self.assertEqual(yawn_openness(0.5), 1)
+        self.assertEqual(yawn_openness(1), 0)
+
+    def test_github_demo_is_read_only(self):
+        with patch.dict(os.environ, {"PODEX_DEMO": "github-pr"}):
+            demo = PodApp(self.worker, self.storage, simulator=True)
+
+        demo.choose("approved")
+        self.assertEqual(demo.state, "request")
+        self.assertEqual(demo.request["source"], "GitHub · PR merge")
+        self.assertEqual(self.worker.decisions, [])
+        with patch("pygame.time.get_ticks", return_value=0):
+            demo.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(320, 430)))
+            demo.handle_event(pygame.event.Event(pygame.MOUSEBUTTONUP, pos=(320, 180)))
+        with patch("pygame.time.get_ticks", return_value=300):
+            demo.render()
+        self.assertEqual(demo.review_page, 1)
+        self.assertGreater(demo.detail_scroll_limit, 0)
+        demo.handle_event(pygame.event.Event(pygame.MOUSEWHEEL, y=-1))
+        self.assertEqual(demo.detail_scroll, 40)
+        demo.detail_scroll = 0
+        with patch("pygame.time.get_ticks", return_value=0):
+            demo.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(320, 240)))
+            demo.handle_event(pygame.event.Event(pygame.MOUSEBUTTONUP, pos=(320, 400)))
+        with patch("pygame.time.get_ticks", return_value=300):
+            demo.render()
+        self.assertEqual(demo.review_page, 0)
+
+    def test_production_github_presentation_renders_swipes_and_decides(self):
+        self.app.state = "request"
+        self.app.request = GITHUB_REQUEST
+        self.assertEqual(self.app.render().get_size(), (640, 480))
+        with patch("pygame.time.get_ticks", return_value=0):
+            self.app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(320, 430)))
+            self.app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONUP, pos=(320, 180)))
+        with patch("pygame.time.get_ticks", return_value=300):
+            self.app.render()
+        self.assertEqual(self.app.review_page, 1)
+        self.app.choose("approved")
+        self.assertEqual(self.worker.decisions[-1], (GITHUB_REQUEST["id"], "approved"))
+        self.assertEqual(self.app.state, "submitting")
+
+    def test_email_chat_demo_uses_local_approve_and_reject_flow(self):
+        with patch.dict(os.environ, {"PODEX_DEMO": "email-chat"}):
+            demo = PodApp(self.worker, self.storage, simulator=True)
+
+        self.assertEqual(demo.state, "email_chat")
+        self.assertEqual(demo.render().get_size(), (640, 480))
+        with patch("pygame.time.get_ticks", return_value=0):
+            demo.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(320, 430)))
+            demo.handle_event(pygame.event.Event(pygame.MOUSEBUTTONUP, pos=(320, 180)))
+        with patch("pygame.time.get_ticks", return_value=300):
+            demo.render()
+        self.assertEqual(demo.review_page, 1)
+        demo.choose("approved")
+        self.assertEqual(demo.state, "email_sent")
+        self.assertEqual(self.worker.decisions, [])
+        demo.choose("approved")
+        self.assertEqual(demo.state, "email_chat")
+        self.assertEqual(demo.review_page, 0)
+        demo.choose("rejected")
+        self.assertEqual(demo.state, "email_discarded")
+        self.assertEqual(demo.render().get_size(), (640, 480))
+
+    def test_production_email_presentation_renders_swipes_and_decides(self):
+        self.app.state = "request"
+        self.app.request = EMAIL_REQUEST
+        self.assertEqual(self.app.render().get_size(), (640, 480))
+        with patch("pygame.time.get_ticks", return_value=0):
+            self.app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(320, 430)))
+            self.app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONUP, pos=(320, 180)))
+        with patch("pygame.time.get_ticks", return_value=300):
+            self.app.render()
+        self.assertEqual(self.app.review_page, 1)
+        self.app.choose("approved")
+        self.assertEqual(self.worker.decisions[-1], (EMAIL_REQUEST["id"], "approved"))
+        self.assertEqual(self.app.state, "submitting")
 
     def test_offline_mode_blocks_decisions(self):
         self.app.state = "request"
@@ -130,12 +272,63 @@ class PodTests(unittest.TestCase):
         self.assertEqual(self.worker.decisions[-1][1], "rejected")
         button.close()
 
+    def test_button_chord_records_without_triggering_a_decision(self):
+        now = [10.0]
+        actions = []
+        recordings = []
+        chord = ButtonChord(actions.append, lambda: recordings.append("start"), lambda: recordings.append("stop"), clock=lambda: now[0])
+        chord.press("approve")
+        now[0] += 0.1
+        chord.press("reject")
+        chord.release("approve")
+        chord.release("reject")
+        self.assertEqual(actions, [])
+        self.assertEqual(recordings, ["start", "stop"])
+
+    def test_single_button_release_decides_after_chord_window(self):
+        actions = []
+        chord = ButtonChord(actions.append, lambda: None, lambda: None)
+        chord.press("reject")
+        chord.release("reject")
+        self.assertEqual(actions, ["rejected"])
+
+    def test_recorder_uses_required_pcm_format_and_duration(self):
+        process = type("Process", (), {"poll": lambda self: None, "terminate": lambda self: None, "wait": lambda self, timeout: None})()
+        with patch("podex_pod.audio.subprocess.Popen", return_value=process) as popen:
+            recorder = Recorder(Path(self.temp.name))
+            recorder.start()
+            recorder.stop()
+        arguments = popen.call_args.args[0]
+        self.assertEqual(arguments[1:9], ["-q", "-f", "S16_LE", "-r", "16000", "-c", "1", "-d"])
+        self.assertEqual(arguments[9], "30")
+
+    def test_confirmed_transcript_uses_active_target_revision(self):
+        self.app.codex = {"target": {"revision": 4}, "thread": {"status": "waiting"}}
+        self.app.transcript = "Make the retry smaller"
+        self.app.state = "transcript"
+        self.app.choose("approved")
+        self.assertEqual(self.worker.prompts, [("Make the retry smaller", 4, None)])
+        self.assertEqual(self.app.state, "queued")
+
+    def test_confirmed_voice_revision_replaces_the_exact_plan(self):
+        plan = {**REQUEST, "source": "Codex", "codex_payload": {"plan": "Original plan"}}
+        self.app.codex = {"target": {"revision": 5}, "thread": {"status": "waiting"}}
+        self.app.request = plan
+        self.app.state = "request"
+        self.app.voice_revision_request = plan
+        self.app.transcript = "Keep the API backwards compatible"
+        self.app.state = "transcript"
+        self.app.choose("approved")
+        self.assertEqual(self.worker.prompts, [("Keep the API backwards compatible", 5, plan)])
+
     def test_mouse_and_touch_input_normalize_and_scroll(self):
         self.assertEqual(self.app.logical_point((320, 238)), (320, 238))
         self.assertIsNone(self.app.logical_point((700, 500)))
         self.app.scroll = 100
         self.app.handle_event(pygame.event.Event(pygame.FINGERMOTION, dy=0.1))
         self.assertEqual(self.app.scroll, 52)
+        self.app.handle_event(pygame.event.Event(pygame.MOUSEWHEEL, y=-1))
+        self.assertEqual(self.app.scroll, 88)
 
     def test_revoked_credentials_and_cache_return_to_pairing(self):
         class RevokedClient:
@@ -180,6 +373,52 @@ class PodTests(unittest.TestCase):
         self.assertEqual(worker.events.get(timeout=1)["event"], "reconnecting")
         self.assertEqual(worker.events.get(timeout=1)["event"], "request")
 
+        worker.close()
+        worker.join(timeout=1)
+
+    def test_automatic_reconnect_reemits_the_cached_request(self):
+        class FlakyRequestClient:
+            def __init__(self):
+                self.calls = 0
+
+            def current_request(self, _token):
+                self.calls += 1
+                if self.calls == 2:
+                    raise ApiError(0, "Offline")
+                return {"request": REQUEST, "queue_size": 1}
+
+        self.storage.save_credentials("pod_token")
+        worker = PodWorker(FlakyRequestClient(), self.storage, poll_seconds=0.01)
+        worker.start()
+        self.assertEqual(worker.events.get(timeout=1)["event"], "request")
+        self.assertEqual(worker.events.get(timeout=1)["event"], "offline")
+        self.assertEqual(worker.events.get(timeout=1)["event"], "request")
+        worker.close()
+        worker.join(timeout=1)
+
+    def test_transient_decision_failure_retries_with_the_same_key(self):
+        class FlakyDecisionClient:
+            def __init__(self):
+                self.keys = []
+
+            def current_request(self, _token):
+                return {"request": REQUEST, "queue_size": 1}
+
+            def decide(self, _token, _request_id, _outcome, _payload_hash, idempotency_key):
+                self.keys.append(idempotency_key)
+                if len(self.keys) == 1:
+                    raise ApiError(0, "Offline")
+
+        self.storage.save_credentials("pod_token")
+        client = FlakyDecisionClient()
+        worker = PodWorker(client, self.storage, poll_seconds=0.01)
+        worker.start()
+        self.assertEqual(worker.events.get(timeout=1)["event"], "request")
+        worker.decide(REQUEST, "approved")
+        self.assertEqual(worker.events.get(timeout=1)["event"], "offline")
+        self.assertEqual(worker.events.get(timeout=1)["event"], "decided")
+        self.assertEqual(len(client.keys), 2)
+        self.assertEqual(client.keys[0], client.keys[1])
         worker.close()
         worker.join(timeout=1)
 
