@@ -1,10 +1,10 @@
 # Podex
 
-Podex is a pocket-sized human-in-the-loop device for approving, rejecting, or responding to actions proposed by AI agents and automated workflows without opening a phone or computer.
+Podex is a pocket-sized human-in-the-loop Pod for approving, rejecting, or responding to actions proposed by AI agents and automated workflows without opening a phone or computer.
 
 ## Core interaction
 
-An agent prepares an action and sends a decision request to Podex. The device shows the relevant context on its 2.8-inch screen. The user can:
+An agent prepares an action and sends a decision request to Podex. The Pod shows the relevant context on its 2.8-inch screen. The user can:
 
 - Press **Approve** to authorize the action.
 - Press **Reject** to stop the action.
@@ -12,7 +12,7 @@ An agent prepares an action and sends a decision request to Podex. The device sh
 
 The connected agent or workflow performs the action. Podex is the decision interface, not the system executing it.
 
-## Device
+## Pod hardware
 
 - Small cuboid keychain form
 - Raspberry Pi Zero 2 W

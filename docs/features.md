@@ -14,7 +14,7 @@ Podex receives pending actions from AI agents, n8n workflows, APIs, webhooks, an
 
 The user presses **Approve** to authorize the action or **Reject** to cancel it.
 
-## Text-first device interface
+## Text-first Pod interface
 
 - Show the action, source, summary, status, and queue position first.
 - Swipe up for supporting details and full generated text.
@@ -184,7 +184,7 @@ Send through Gmail only after approval
 
 The website manages:
 
-- Device pairing and revocation
+- Pod pairing and revocation
 - Connected services and OAuth permissions
 - Agents, workflows, and MCP servers
 - Actions that always require approval

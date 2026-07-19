@@ -1,0 +1,5 @@
+# Direct and transitive runtime/build constraints for reproducible Pod installs.
+colorzero==2.0
+gpiozero==2.0.1
+pygame-ce==2.5.7
+setuptools==80.9.0
