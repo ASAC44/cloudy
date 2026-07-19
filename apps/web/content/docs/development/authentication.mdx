@@ -1,4 +1,7 @@
-# Supabase Auth setup
+---
+title: Authentication setup
+description: Configure Supabase Auth, OAuth providers, callback URLs, and server credentials.
+---
 
 ## 1. Create the project
 
@@ -33,7 +36,8 @@ template customization. The application sends users back through
 before redirecting to `/home`.
 
 Without custom SMTP, Supabase's built-in sender only delivers to members of the
-project organization and is limited to two emails per hour. Add custom SMTP
+project organization and is currently limited to two emails per hour. It is a
+development-only, best-effort service; add [custom SMTP](https://supabase.com/docs/guides/auth/auth-smtp)
 before allowing public email sign-in.
 
 Open signup is intentional.
@@ -54,9 +58,10 @@ Supabase and must not be added to this repository or Railway.
 
 ## 4. Configure Railway
 
-Add the two `NEXT_PUBLIC_*` values and `PODEX_API_URL` to the Next.js service,
-and `SUPABASE_URL` plus `SUPABASE_SECRET_KEY` to the Hono service. Redeploy both
-services after changing them. Hono uses
+Add the two `NEXT_PUBLIC_*` values, `PODEX_API_URL`, and
+`PODEX_PUBLIC_API_URL` to the Next.js service. Add every required value from
+`apps/api/.env.example` to the Hono API service, leaving only unused provider
+OAuth values blank. Redeploy the affected services after changing them. Hono uses
 Railway's injected `PORT`; locally it falls back to `3001` while Next.js uses
 `3000`.
 

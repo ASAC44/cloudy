@@ -1,4 +1,7 @@
-# Develop the Pod without Raspberry Pi hardware
+---
+title: Develop the Pod locally
+description: Run and test the 640×480 Pod simulator without Raspberry Pi hardware.
+---
 
 The Pod application uses a 640×480 landscape pygame renderer on macOS and the
 Raspberry Pi. Development mode adds only a virtual enclosure, clickable
@@ -46,11 +49,17 @@ Simulator controls:
 - Drag inside the screen to scroll. The simulator renders the Pod screen at
   its native 640×480 resolution for a sharp preview.
 - Click the illustrated buttons or press `A` and `R` to decide.
+- Press `V` once to start voice recording and again to stop it. On hardware,
+  press both physical buttons within 250 ms and release either button to stop.
 - Press `O` to simulate a disconnection. Cached content remains readable, but
   decisions stay disabled until the connection returns.
+- Press the up and down arrow keys to move between a request summary and its
+  supporting facts.
 - Press Escape to close the simulator.
 
 Test Pings record only the decision. They never execute an external action.
+Voice transcription requires the official OpenAI provider to be configured in
+the dashboard and a selected [Codex bridge target](/docs/development/codex-bridge).
 
 ## Checks
 

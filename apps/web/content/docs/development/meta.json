@@ -1,0 +1,5 @@
+{
+  "title": "Development",
+  "defaultOpen": true,
+  "pages": ["authentication", "connections", "codex-bridge"]
+}

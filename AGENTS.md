@@ -10,6 +10,17 @@ Use concrete checkboxes with enough detail to execute and verify the task during
 final deployment. Do not add routine completed work, and mark an item complete
 only after its outcome has been verified.
 
+## Documentation
+
+Treat `apps/web/content/docs` as the canonical public documentation. Update the
+relevant MDX pages and navigation metadata in the same change whenever work
+affects user-visible behavior, setup commands, environment variables, public
+routes or APIs, integrations, architecture, deployment, hardware operation, or
+supported workflows. Keep shipped behavior separate from `Product vision`; do
+not present planned capabilities as implemented. When documentation paths or
+public routes move, update repository links too. Before completion, verify
+internal documentation links and run the web production build.
+
 ## Database Schema
 
 Use the `$database-schema-designer` skill for every database schema design,

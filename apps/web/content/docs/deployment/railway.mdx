@@ -1,0 +1,95 @@
+---
+title: Deploy on Railway
+description: Deploy the Podex web, API, and execution worker from the monorepo.
+---
+
+Podex uses three Railway services: `web`, `api`, and `worker`. The API serves
+authenticated requests while the worker owns scheduling, Telegram sessions,
+AI evaluation, approvals, and delivery. The Raspberry Pi Pod and local Codex
+bridge are not Railway services.
+
+## Create the services
+
+Connect the GitHub repository to one Railway project and create these services:
+
+| Service | Root directory | Config file | Start command |
+| --- | --- | --- | --- |
+| `web` | `/apps/web` | `/apps/web/railway.json` | From config: `pnpm start` |
+| `api` | `/apps/api` | `/apps/api/railway.json` | From config: `pnpm start` |
+| `worker` | `/apps/api` | `/apps/api/railway.worker.json` | From config: `pnpm start:worker` |
+
+Railway's config-file path does not inherit the root directory, so use the
+absolute config paths shown. Database leases support crash recovery and
+multiple worker replicas, but one worker is the simplest initial deployment.
+
+Generate public domains for `web` and `api`. The Pod, browser-visible
+automation examples, OAuth callbacks, and Codex bridge cannot reach a Railway
+private hostname.
+
+## Web variables
+
+```dotenv
+NEXT_PUBLIC_SUPABASE_URL=https://your-project-ref.supabase.co
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_your_key
+PODEX_API_URL=https://your-api-domain.example
+PODEX_PUBLIC_API_URL=https://your-api-domain.example
+```
+
+`PODEX_API_URL` is used by Next.js server actions. `PODEX_PUBLIC_API_URL` is
+shown in browser-rendered automation instructions. The `NEXT_PUBLIC_*` values
+are embedded during `next build`, so redeploy `web` after changing them.
+
+## API variables
+
+Set these on both `api` and `worker`:
+
+```dotenv
+SUPABASE_URL=https://your-project-ref.supabase.co
+SUPABASE_SECRET_KEY=sb_secret_your_server_only_key
+CONNECTION_ENCRYPTION_KEY=your-stable-32-byte-base64-key
+PODEX_PUBLIC_API_URL=https://your-api-domain.example
+PODEX_WEB_URL=https://your-web-domain.example
+GITHUB_CLIENT_ID=
+GITHUB_CLIENT_SECRET=
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+TELEGRAM_API_ID=
+TELEGRAM_API_HASH=
+PODEX_WORKER_ID=production-worker-1
+```
+
+Generate `CONNECTION_ENCRYPTION_KEY` once with `openssl rand -base64 32` and
+retain it across deploys. GitHub and Google values can remain blank until their
+OAuth providers are enabled. Set both Telegram values only when Telegram
+connections are enabled; GitHub-only deployments do not require them.
+
+`PODEX_WORKER_ID` should be stable and unique for each worker replica. Railway
+injects `PORT` into HTTP services; do not set it manually on `api`, and the
+worker does not expose an HTTP port.
+
+## Database and authentication
+
+Link the repository to the production Supabase project and apply every tracked
+migration before starting the new application version:
+
+```sh
+supabase link
+supabase db push
+```
+
+Set the Supabase Site URL and allowed redirects to the generated web domain as
+described in [Authentication setup](/docs/development/authentication). Provider
+OAuth callbacks use the public API domain.
+
+## Verify
+
+- Open the web domain, then `/docs`, and sign in to the dashboard.
+- Open the API root; it should return `{"name":"podex-api","status":"ok"}`.
+- Confirm the web and API `/` healthchecks pass and the worker remains running.
+- Activate a rule and confirm its activity log records polling and delivery.
+- Pair a Pod against the API's public HTTPS origin and complete a Test Ping.
+
+Railway references: [monorepos](https://docs.railway.com/deployments/monorepo),
+[config as code](https://docs.railway.com/config-as-code/reference),
+[start commands](https://docs.railway.com/deployments/start-command), and
+[healthchecks](https://docs.railway.com/deployments/healthchecks).

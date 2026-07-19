@@ -8,7 +8,8 @@ import { PodActionsMenu } from "@/components/dashboard/pod-actions-menu";
 import { ScreenLayoutBoard } from "@/components/dashboard/screen-layout-board";
 import { TestPingButton } from "@/components/dashboard/test-ping-button";
 import { Button } from "@/components/ui/button";
-import { apiFetch, type ApprovalRequest, type Pod } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import type { ApprovalRequest, Pod } from "@/types/api";
 import { relativeTime } from "@/lib/relative-time";
 import { createClient } from "@/lib/supabase/server";
 
@@ -21,13 +22,19 @@ export default async function HomePage({
   const supabase = await createClient();
   const { data } = await supabase.auth.getClaims();
   const claims = data?.claims;
-  const metadataName = claims?.user_metadata?.full_name;
+  const metadata = claims?.user_metadata;
+  const metadataName = metadata?.full_name;
   const displayName =
     typeof metadataName === "string"
       ? metadataName
       : typeof claims?.email === "string"
         ? claims.email
         : "there";
+  const userAvatarUrl = typeof metadata?.avatar_url === "string"
+    ? metadata.avatar_url
+    : typeof metadata?.picture === "string"
+      ? metadata.picture
+      : undefined;
 
   let pod: Pod | undefined;
   let pending: ApprovalRequest[] = [];
@@ -54,6 +61,8 @@ export default async function HomePage({
         {pod ? (
           <NewPingChat
             podName={pod.name}
+            userName={displayName}
+            userAvatarUrl={userAvatarUrl}
             initialOpen={Boolean(query.chat || query.edit)}
             initialSessionId={query.chat && query.chat !== "new" ? query.chat : undefined}
             editingRuleId={query.edit}

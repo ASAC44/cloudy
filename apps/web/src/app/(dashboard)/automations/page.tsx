@@ -1,5 +1,6 @@
 import { AutomationsManager } from "@/components/dashboard/automations-manager";
-import { apiFetch, type AutomationKey } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import type { AutomationKey } from "@/types/api";
 
 export default async function AutomationsPage() {
   let keys: AutomationKey[] = [];
@@ -23,7 +24,7 @@ export default async function AutomationsPage() {
           n8n · human in the loop
         </p>
         <h1 className="text-[clamp(2.5rem,6vw,4.5rem)] leading-none tracking-[-0.04em]">
-          Put a human checkpoint inside any workflow.
+          Approve your HITL nodes from Podex!
         </h1>
         <p className="mt-5 max-w-2xl text-base leading-7 text-muted-foreground">
           Send an action to your Pod, pause n8n, then continue from the exact

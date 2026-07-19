@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
-import type { ConnectionProvider } from "@/lib/api";
+import type { ConnectionProvider } from "@/types/api";
 
 import { ProviderLogo } from "./provider-logo";
 import type { ProviderDefinition } from "./providers";

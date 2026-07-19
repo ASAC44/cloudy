@@ -1,4 +1,7 @@
-# Deploy the Pod to Raspberry Pi Zero 2 W
+---
+title: Deploy to Raspberry Pi
+description: Provision, install, and verify the Pod runtime on a Raspberry Pi Zero 2 W.
+---
 
 ## Provision the Pi
 
@@ -8,7 +11,7 @@ hostname, a `podex` user, and public-key SSH access in Imager. After boot:
 ```sh
 sudo apt update
 sudo apt full-upgrade
-sudo apt install cage python3-venv python3-pip
+sudo apt install alsa-utils cage python3-venv python3-pip
 sudo usermod -a -G input,render,video,gpio podex
 sudo mkdir -p /opt/podex-pod /var/lib/podex-pod
 sudo chown -R podex:podex /opt/podex-pod /var/lib/podex-pod
@@ -66,8 +69,13 @@ Before treating the image as production-ready, verify:
 - 640×480 landscape output, color, brightness, rotation, and screen blanking.
 - Touch coordinates, swipe direction, and physical text/button legibility.
 - GPIO5 Approve and GPIO6 Reject wiring, pull-ups, debounce, and enclosure fit.
+- Microphone capture with `arecord`: mono, 16 kHz, 16-bit PCM WAV, including
+  the 30-second recording limit and permissions for the service user.
+- Both-button dictation start/stop, transcript review, rejection, and approved
+  delivery to the selected Codex target.
 - Boot-to-kiosk behavior and clean restart after power loss.
 - Wi-Fi loss/recovery and read-only cached request behavior.
 - Frame timing, memory, temperature, and power stability during a long run.
 
-Microphone and dictation validation are deferred until that feature is added.
+Voice requires the official OpenAI provider in dashboard settings. Validate it
+against the deployed API before sealing the hardware image.

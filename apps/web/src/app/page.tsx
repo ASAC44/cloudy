@@ -4,8 +4,13 @@ import Link from "next/link";
 import { MorphicNavbar } from "@/components/kokonutui/morphic-navbar";
 import { Hero } from "@/components/landing/hero";
 import { Button } from "@/components/ui/button";
+import { createClient } from "@/lib/supabase/server";
 
-export default function Home() {
+export default async function Home() {
+  const supabase = await createClient();
+  const { data } = await supabase.auth.getClaims();
+  const signedIn = Boolean(data?.claims);
+
   return (
     <div className="min-h-svh bg-background text-foreground">
       <header className="relative px-4 py-4 sm:px-6">
@@ -26,10 +31,10 @@ export default function Home() {
         <div className="absolute top-4 right-4 flex items-center gap-2 sm:top-1/2 sm:right-6 sm:-translate-y-1/2">
           <Button
             nativeButton={false}
-            render={<Link href="/login" />}
+            render={<Link href={signedIn ? "/home" : "/login"} />}
             size="lg"
           >
-            Login
+            {signedIn ? "Dashboard" : "Login"}
           </Button>
         </div>
       </header>

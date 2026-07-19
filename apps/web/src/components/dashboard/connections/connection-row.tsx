@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import type { Connection } from "@/lib/api";
+import type { Connection } from "@/types/api";
 import { cn } from "@/lib/utils";
 
 import { ProviderLogo } from "./provider-logo";

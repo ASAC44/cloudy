@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { humanizeRuleError, toggleValue } from "./rule-builder-chat-state";
+import { humanizeRuleError, toggleValue } from "./rule-builder-chat-state.ts";
 
 test("rule chat state keeps multi-select answers stable and explains recoverable errors", () => {
   assert.deepEqual(toggleValue([], "repo-a"), ["repo-a"]);

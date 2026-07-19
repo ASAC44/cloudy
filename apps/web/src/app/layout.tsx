@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import localFont from "next/font/local";
+import { RootProvider as FumadocsProvider } from "fumadocs-ui/provider/next";
 
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
@@ -54,8 +55,10 @@ export default function RootLayout({
           enableSystem={false}
           disableTransitionOnChange
         >
-          {children}
-          <Toaster />
+          <FumadocsProvider theme={{ enabled: false }}>
+            {children}
+            <Toaster />
+          </FumadocsProvider>
         </ThemeProvider>
       </body>
     </html>

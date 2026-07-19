@@ -1,0 +1,13 @@
+{
+  "pages": [
+    "index",
+    "getting-started",
+    "---Understand Podex---",
+    "product",
+    "---Build and operate---",
+    "development",
+    "pod",
+    "deployment",
+    "reference"
+  ]
+}
