@@ -4,7 +4,7 @@ import { Hono, type Context, type MiddlewareHandler } from 'hono'
 import { jwk } from 'hono/jwk'
 import type { JwtVariables } from 'hono/jwt'
 
-import type { NewRequest, Store } from './store.js'
+import type { NewRequest, RuntimeStore, Store, TelegramAuthSession } from './types/store.js'
 import { StoreError } from './store.js'
 import { ConnectionError, type ConnectionService, validatePublicEndpoint } from './connections.js'
 import { isAiProvider, testAiSettings, type AiTester } from './ai.js'
@@ -19,7 +19,9 @@ const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f
 const UUID_PATTERN = new RegExp(`^${UUID}$`, 'i')
 const POD_TOKEN = new RegExp(`^pod_(${UUID})\\.([A-Za-z0-9_-]{43})$`, 'i')
 const AUTOMATION_TOKEN = /^pdx_([a-f0-9]{12})\.([A-Za-z0-9_-]{32})$/
+const CODEX_TOKEN = new RegExp(`^cdb_(${UUID})\\.([A-Za-z0-9_-]{43})$`, 'i')
 const PAIRING_CODE = /^[0-9A-HJKMNP-TV-Z]{8}$/
+const MIN_CODEX_VERSION = [0, 144, 5] as const
 
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 const code = () => Array.from({ length: 8 }, () => CROCKFORD[randomInt(CROCKFORD.length)]).join('')
@@ -44,6 +46,36 @@ function optionalText(value: unknown, max: number) {
       : null
 }
 
+function publicTelegramSession(session: TelegramAuthSession) {
+  return {
+    id: session.id,
+    status: session.status,
+    connection_name: session.connection_name,
+    qr_expires_at: session.qr_expires_at,
+    password_hint: session.password_hint,
+    connection_id: session.connection_id,
+    last_error: session.last_error,
+    expires_at: session.expires_at,
+  }
+}
+
+function compatibleCodexVersion(value: string) {
+  const match = value.match(/(\d+)\.(\d+)\.(\d+)/)
+  if (!match) return false
+  const actual = match.slice(1).map(Number)
+  for (let index = 0; index < actual.length; index += 1) {
+    if (actual[index] !== MIN_CODEX_VERSION[index]) return actual[index] > MIN_CODEX_VERSION[index]
+  }
+  return true
+}
+
+function textList(value: unknown, maxItems: number, maxLength: number) {
+  if (value === undefined) return []
+  if (!Array.isArray(value) || value.length > maxItems) return null
+  const items = value.map((item) => text(item, maxLength))
+  return items.every((item): item is string => item !== null) ? items : null
+}
+
 function baseUrl(value: unknown) {
   const raw = text(value, 2048)
   if (!raw) return null
@@ -61,6 +93,11 @@ function errorResponse(c: AppContext, error: unknown) {
     const status = {
       rule_session_not_found: 404,
       rule_not_found: 404,
+      rule_review_required: 409,
+      invalid_rule_status: 400,
+      invalid_rule_definition: 400,
+      telegram_auth_in_progress: 409,
+      telegram_auth_conflict: 409,
       rule_session_expired: 410,
       rule_session_conflict: 409,
       rule_edit_conflict: 409,
@@ -79,6 +116,7 @@ function errorResponse(c: AppContext, error: unknown) {
       connection_not_found: 404,
       provider_not_configured: 503,
       endpoint_not_editable: 400,
+      auth_type_not_editable: 400,
       endpoint_required: 400,
       token_required: 400,
       invalid_endpoint: 400,
@@ -101,6 +139,7 @@ function errorResponse(c: AppContext, error: unknown) {
   const status = {
     pairing_rate_limited: 429,
     invalid_pairing_code: 400,
+    invalid_bridge_pairing_code: 400,
     active_pod_exists: 409,
     pod_not_authorized: 401,
     request_not_found: 404,
@@ -118,6 +157,9 @@ function errorResponse(c: AppContext, error: unknown) {
     rule_connection_unavailable: 409,
     rule_not_found: 404,
     automation_key_name_exists: 409,
+    codex_bridge_not_authorized: 401,
+    codex_target_not_found: 409,
+    codex_target_changed: 409,
   }[error.code] ?? 500
   return c.json({ error: error.code.replaceAll('_', ' ') }, status as 400)
 }
@@ -135,6 +177,31 @@ async function automationIdentity(c: AppContext, store: Store) {
   return store.authenticateAutomationKey(`pdx_${match[1]}`, hash(token))
 }
 
+async function codexIdentity(c: AppContext, store: Store) {
+  const match = bearer(c)?.match(CODEX_TOKEN)
+  if (!match) return null
+  return store.authenticateCodexBridge(match[1], hash(match[2]))
+}
+
+function validWav(value: Uint8Array) {
+  if (value.length < 44 || value.length > 2_000_000) return false
+  const view = new DataView(value.buffer, value.byteOffset, value.byteLength)
+  const label = (offset: number) => String.fromCharCode(...value.slice(offset, offset + 4))
+  if (label(0) !== 'RIFF' || label(8) !== 'WAVE' || view.getUint32(4, true) + 8 > value.length) return false
+  let validFormat = false
+  let audioBytes = 0
+  for (let offset = 12; offset + 8 <= value.length;) {
+    const size = view.getUint32(offset + 4, true)
+    const start = offset + 8
+    if (start + size > value.length) return false
+    if (label(offset) === 'fmt ' && size >= 16) {
+      validFormat = view.getUint16(start, true) === 1 && view.getUint16(start + 2, true) === 1 && view.getUint32(start + 4, true) === 16_000 && view.getUint32(start + 8, true) === 32_000 && view.getUint16(start + 12, true) === 2 && view.getUint16(start + 14, true) === 16
+    } else if (label(offset) === 'data') audioBytes += size
+    offset = start + size + (size % 2)
+  }
+  return validFormat && audioBytes > 0 && audioBytes / 32_000 <= 30
+}
+
 export function createApp(
   supabaseUrl: string,
   store: Store,
@@ -142,6 +209,8 @@ export function createApp(
   connectionService?: ConnectionService,
   aiTester: AiTester = testAiSettings,
   ruleBuilder?: RuleBuilderService,
+  openAiFetch: typeof fetch = fetch,
+  runtimeStore?: RuntimeStore,
 ) {
   const app = new Hono<{ Variables: Variables }>()
   const issuer = `${supabaseUrl.replace(/\/$/, '')}/auth/v1`
@@ -162,8 +231,11 @@ export function createApp(
     '/v1/connections/:id',
     '/v1/connections/:id/test',
     '/v1/connections/oauth/:provider/start',
+    '/v1/connections/telegram/user-auth',
+    '/v1/connections/telegram/user-auth/*',
   ]) app.use(route, userAuth)
   for (const route of ['/v1/rule-builder/*', '/v1/rules', '/v1/rules/*']) app.use(route, userAuth)
+  for (const route of ['/v1/codex', '/v1/codex/bridges/claim', '/v1/codex/bridges/:id', '/v1/codex/target', '/v1/codex/sessions']) app.use(route, userAuth)
 
   app.get('/v1/me', (c) => {
     const payload = c.get('jwtPayload')
@@ -334,13 +406,11 @@ export function createApp(
     const details = optionalText(body?.details, 8000)
     const affected = optionalText(body?.affected_context, 2000)
     const risk = body?.risk
-    const warnings = Array.isArray(body?.warnings)
-      ? body.warnings.map((item: unknown) => text(item, 300)).filter(Boolean)
-      : []
+    const warnings = textList(body?.warnings, 10, 300)
     const expiresIn = Number(body?.expires_in_minutes)
     if (
       !title || !source || !summary || details === null || affected === null ||
-      !['low', 'medium', 'high'].includes(risk) || warnings.length > 10 ||
+      !['low', 'medium', 'high'].includes(risk) || !warnings ||
       ![5, 15, 30, 60].includes(expiresIn)
     ) {
       return c.json({ error: 'Invalid test Ping' }, 400)
@@ -363,7 +433,7 @@ export function createApp(
       details,
       affected_context: affected,
       risk,
-      warnings: warnings as string[],
+      warnings,
       priority: risk === 'high' ? 2 : risk === 'medium' ? 1 : 0,
       action_payload: actionPayload,
       expires_at: new Date(Date.now() + expiresIn * 60_000).toISOString(),
@@ -443,15 +513,13 @@ export function createApp(
     const details = optionalText(body?.details, 8000)
     const affected = optionalText(body?.affected_context, 2000)
     const risk = body?.risk
-    const warnings = Array.isArray(body?.warnings)
-      ? body.warnings.map((item: unknown) => text(item, 300)).filter(Boolean)
-      : []
+    const warnings = textList(body?.warnings, 10, 300)
     const expiresIn = Number(body?.expires_in_minutes)
     const callbackUrl = text(body?.callback_url, 2048)
     const action = body?.action
     if (
       !externalId || !title || !source || !summary || details === null || affected === null ||
-      !['low', 'medium', 'high'].includes(risk) || warnings.length > 10 ||
+      !['low', 'medium', 'high'].includes(risk) || !warnings ||
       ![5, 15, 30, 60].includes(expiresIn) || !callbackUrl ||
       !action || typeof action !== 'object' || Array.isArray(action)
     ) return c.json({ error: 'Invalid automation approval' }, 400)
@@ -466,7 +534,7 @@ export function createApp(
         details,
         affected_context: affected,
         risk,
-        warnings: warnings as string[],
+        warnings,
         priority: risk === 'high' ? 2 : risk === 'medium' ? 1 : 0,
         action_payload: actionPayload,
         expires_at: new Date(Date.now() + expiresIn * 60_000).toISOString(),
@@ -608,6 +676,45 @@ export function createApp(
     }
   })
 
+  app.patch('/v1/rules/:id/status', async (c) => {
+    const ownerId = userId(c)
+    if (!ownerId) return c.json({ error: 'Unauthorized' }, 401)
+    if (!runtimeStore) return c.json({ error: 'Ping execution is not configured' }, 503)
+    const body = await c.req.json().catch(() => null)
+    if (!UUID_PATTERN.test(c.req.param('id'))
+      || !Number.isInteger(body?.expected_revision)
+      || body.expected_revision < 1
+      || !['active', 'paused'].includes(body?.status)) {
+      return c.json({ error: 'Invalid rule status change' }, 400)
+    }
+    try {
+      return c.json({ rule: await runtimeStore.updateRuleStatus(
+        ownerId,
+        c.req.param('id'),
+        body.expected_revision,
+        body.status,
+      ) })
+    } catch (error) {
+      return errorResponse(c, error)
+    }
+  })
+
+  app.get('/v1/rules/:id/activity', async (c) => {
+    const ownerId = userId(c)
+    if (!ownerId) return c.json({ error: 'Unauthorized' }, 401)
+    if (!runtimeStore) return c.json({ error: 'Ping execution is not configured' }, 503)
+    const cursor = c.req.query('cursor')
+    if (!UUID_PATTERN.test(c.req.param('id')) || (cursor && cursor.length > 500)) {
+      return c.json({ error: 'Invalid activity request' }, 400)
+    }
+    try {
+      const activity = await runtimeStore.listRuleActivity(ownerId, c.req.param('id'), cursor)
+      return activity ? c.json(activity) : c.json({ error: 'Rule not found' }, 404)
+    } catch (error) {
+      return errorResponse(c, error)
+    }
+  })
+
   app.post('/v1/connections', async (c) => {
     const ownerId = userId(c)
     if (!ownerId) return c.json({ error: 'Unauthorized' }, 401)
@@ -619,7 +726,7 @@ export function createApp(
     const token = body?.token === undefined ? undefined : text(body.token, 5000)
     const authType = body?.auth_type
     if (
-      !name || !['vercel', 'telegram', 'custom_mcp'].includes(provider) ||
+      !name || !['vercel', 'telegram', 'linear', 'stripe', 'custom_mcp'].includes(provider) ||
       (body?.endpoint_url !== undefined && !endpointUrl) ||
       (body?.token !== undefined && !token) ||
       (authType !== undefined && !['none', 'bearer'].includes(authType))
@@ -633,6 +740,73 @@ export function createApp(
         token: token ?? undefined,
       })
       return c.json({ connection }, 201)
+    } catch (error) {
+      return errorResponse(c, error)
+    }
+  })
+
+  app.post('/v1/connections/telegram/user-auth', async (c) => {
+    const ownerId = userId(c)
+    if (!ownerId) return c.json({ error: 'Unauthorized' }, 401)
+    if (!runtimeStore || !connectionService) return c.json({ error: 'Telegram connection is not configured' }, 503)
+    if (!connectionService.telegramUserAuthAvailable()) return errorResponse(c, new ConnectionError('provider_not_configured'))
+    const body = await c.req.json().catch(() => ({}))
+    const name = body?.name === undefined ? 'Telegram' : text(body.name, 80)
+    if (!name) return c.json({ error: 'Invalid Telegram connection name' }, 400)
+    try {
+      const session = await runtimeStore.createTelegramAuthSession(ownerId, name)
+      return c.json({ session: publicTelegramSession(session) }, 201)
+    } catch (error) {
+      return errorResponse(c, error)
+    }
+  })
+
+  app.get('/v1/connections/telegram/user-auth/:id', async (c) => {
+    const ownerId = userId(c)
+    if (!ownerId) return c.json({ error: 'Unauthorized' }, 401)
+    if (!runtimeStore || !connectionService) return c.json({ error: 'Telegram connection is not configured' }, 503)
+    if (!UUID_PATTERN.test(c.req.param('id'))) return c.json({ error: 'Invalid Telegram setup' }, 400)
+    try {
+      const session = await runtimeStore.getTelegramAuthSession(ownerId, c.req.param('id'))
+      if (!session) return c.json({ error: 'Telegram setup not found' }, 404)
+      let qrDataUrl: string | null = null
+      if (session.encrypted_qr_payload) {
+        qrDataUrl = connectionService.decryptPrivatePayload<{ dataUrl: string }>(session.encrypted_qr_payload).dataUrl
+      }
+      return c.json({ session: { ...publicTelegramSession(session), qr_data_url: qrDataUrl } })
+    } catch (error) {
+      return errorResponse(c, error)
+    }
+  })
+
+  app.post('/v1/connections/telegram/user-auth/:id/password', async (c) => {
+    const ownerId = userId(c)
+    if (!ownerId) return c.json({ error: 'Unauthorized' }, 401)
+    if (!runtimeStore || !connectionService) return c.json({ error: 'Telegram connection is not configured' }, 503)
+    const body = await c.req.json().catch(() => null)
+    const password = text(body?.password, 512)
+    if (!UUID_PATTERN.test(c.req.param('id')) || !password) return c.json({ error: 'A valid 2FA password is required' }, 400)
+    try {
+      const submitted = await runtimeStore.submitTelegramAuthPassword(
+        ownerId,
+        c.req.param('id'),
+        connectionService.encryptPrivatePayload({ password }),
+      )
+      return submitted ? c.json({ accepted: true }) : c.json({ error: 'Telegram setup is not waiting for 2FA' }, 409)
+    } catch (error) {
+      return errorResponse(c, error)
+    }
+  })
+
+  app.delete('/v1/connections/telegram/user-auth/:id', async (c) => {
+    const ownerId = userId(c)
+    if (!ownerId) return c.json({ error: 'Unauthorized' }, 401)
+    if (!runtimeStore) return c.json({ error: 'Telegram connection is not configured' }, 503)
+    if (!UUID_PATTERN.test(c.req.param('id'))) return c.json({ error: 'Invalid Telegram setup' }, 400)
+    try {
+      return await runtimeStore.cancelTelegramAuthSession(ownerId, c.req.param('id'))
+        ? c.body(null, 204)
+        : c.json({ error: 'Telegram setup not found' }, 404)
     } catch (error) {
       return errorResponse(c, error)
     }
@@ -735,8 +909,27 @@ export function createApp(
     try {
       const pod = await podIdentity(c, store)
       if (!pod) return c.json({ error: 'Unauthorized' }, 401)
-      const current = await store.currentRequest(pod.ownerId)
-      return c.json({ request: current.request, queue_size: current.queueSize })
+      const [current, codex] = await Promise.all([store.currentRequest(pod.ownerId), store.codexStatus(pod.ownerId)])
+      let request = current.request
+      if (request?.action_payload?.kind === 'codex_interaction' && connectionService) {
+        const encrypted = await store.codexInteractionPayload(pod.ownerId, request.id)
+        if (encrypted) {
+          const payload = connectionService.decryptCodexPayload(encrypted)
+          if (typeof payload === 'object' && payload && 'plan' in payload) request = { ...request, codex_payload: payload } as typeof request
+        }
+      }
+      if (request?.action_payload?.kind === 'ping_rule_action' && connectionService && runtimeStore) {
+        const eventId = request.action_payload.event_id
+        const presentation = typeof eventId === 'string'
+          ? await runtimeStore.pingEventPresentation(pod.ownerId, eventId)
+          : null
+        if (!presentation || presentation.actionHash !== request.payload_hash) throw new StoreError('payload_changed')
+        request = {
+          ...request,
+          presentation: connectionService.decryptPrivatePayload<Record<string, unknown>>(presentation.encryptedDraft),
+        } as typeof request
+      }
+      return c.json({ request, queue_size: current.queueSize, codex })
     } catch (error) {
       return errorResponse(c, error)
     }
@@ -764,6 +957,218 @@ export function createApp(
         idempotencyKey: body.idempotency_key,
       })
       return c.json({ decision })
+    } catch (error) {
+      return errorResponse(c, error)
+    }
+  })
+
+  app.post('/v1/codex/bridge/pairing-sessions', async (c) => {
+    try {
+      const bridgeId = randomUUID()
+      const secret = randomBytes(32).toString('base64url')
+      const pairingCode = code()
+      const session = await store.createCodexPairing({ bridgeId, codeHash: hash(pairingCode), tokenHash: hash(secret) })
+      return c.json({ session_id: session.id, pairing_code: pairingCode, bridge_token: `cdb_${bridgeId}.${secret}`, expires_at: session.expiresAt }, 201)
+    } catch (error) {
+      return errorResponse(c, error)
+    }
+  })
+
+  app.get('/v1/codex/bridge/pairing-sessions/:id', async (c) => {
+    const match = bearer(c)?.match(CODEX_TOKEN)
+    if (!match) return c.json({ error: 'Unauthorized' }, 401)
+    try {
+      const status = await store.getCodexPairingStatus(c.req.param('id'), match[1], hash(match[2]))
+      return status ? c.json({ status }) : c.json({ error: 'Pairing session not found' }, 404)
+    } catch (error) {
+      return errorResponse(c, error)
+    }
+  })
+
+  app.post('/v1/codex/bridges/claim', async (c) => {
+    const ownerId = userId(c)
+    if (!ownerId) return c.json({ error: 'Unauthorized' }, 401)
+    const body = await c.req.json().catch(() => null)
+    const pairingCode = text(body?.code, 8)?.toUpperCase()
+    const name = text(body?.name, 80)
+    if (!pairingCode || !PAIRING_CODE.test(pairingCode) || !name) return c.json({ error: 'An 8-character code and bridge name are required' }, 400)
+    try {
+      return c.json({ bridge: await store.claimCodexBridge(hash(pairingCode), ownerId, name) })
+    } catch (error) {
+      return errorResponse(c, error)
+    }
+  })
+
+  app.get('/v1/codex', async (c) => {
+    const ownerId = userId(c)
+    if (!ownerId) return c.json({ error: 'Unauthorized' }, 401)
+    try {
+      const data = await store.listCodex(ownerId)
+      const ai = await store.getAiSettings(ownerId)
+      return c.json({ ...data, voice_ready: ai?.provider === 'openai' && ai.base_url === 'https://api.openai.com/v1' })
+    } catch (error) {
+      return errorResponse(c, error)
+    }
+  })
+
+  app.delete('/v1/codex/bridges/:id', async (c) => {
+    const ownerId = userId(c)
+    if (!ownerId) return c.json({ error: 'Unauthorized' }, 401)
+    if (!UUID_PATTERN.test(c.req.param('id'))) return c.json({ error: 'Invalid bridge' }, 400)
+    try {
+      return await store.revokeCodexBridge(ownerId, c.req.param('id')) ? c.body(null, 204) : c.json({ error: 'Bridge not found' }, 404)
+    } catch (error) {
+      return errorResponse(c, error)
+    }
+  })
+
+  app.put('/v1/codex/target', async (c) => {
+    const ownerId = userId(c)
+    if (!ownerId) return c.json({ error: 'Unauthorized' }, 401)
+    const body = await c.req.json().catch(() => null)
+    const workspaceId = text(body?.workspace_id, 36)
+    const threadId = body?.thread_id === null ? null : text(body?.thread_id, 36)
+    const revision = body?.revision === null ? null : Number(body?.revision)
+    if (!workspaceId || !UUID_PATTERN.test(workspaceId) || (threadId !== null && (!threadId || !UUID_PATTERN.test(threadId))) || (revision !== null && (!Number.isInteger(revision) || revision < 1))) {
+      return c.json({ error: 'Invalid Codex target' }, 400)
+    }
+    try {
+      const target = await store.setCodexTarget(ownerId, workspaceId, threadId, revision)
+      return target ? c.json({ target }) : c.json({ error: 'Codex target changed or was not found' }, 409)
+    } catch (error) {
+      return errorResponse(c, error)
+    }
+  })
+
+  app.post('/v1/codex/sessions', async (c) => {
+    const ownerId = userId(c)
+    if (!ownerId) return c.json({ error: 'Unauthorized' }, 401)
+    const body = await c.req.json().catch(() => null)
+    if (!text(body?.workspace_id, 36) || !UUID_PATTERN.test(body.workspace_id)) return c.json({ error: 'Invalid workspace' }, 400)
+    try {
+      const command = await store.queueCodexCommand({ ownerId, workspaceId: body.workspace_id, threadId: null, kind: 'new_thread', payload: {}, idempotencyKey: randomUUID() })
+      return c.json({ command }, 202)
+    } catch (error) {
+      return errorResponse(c, error)
+    }
+  })
+
+  app.post('/v1/codex/bridge/sync', async (c) => {
+    const identity = await codexIdentity(c, store)
+    if (!identity) return c.json({ error: 'Unauthorized' }, 401)
+    const body = await c.req.json().catch(() => null)
+    const validWorkspaces = Array.isArray(body?.workspaces) && body.workspaces.length <= 100 && body.workspaces.every((workspace: unknown) => typeof workspace === 'object' && workspace && UUID_PATTERN.test((workspace as { localId?: string }).localId ?? '') && Boolean(text((workspace as { label?: string }).label, 120)))
+    const statuses = new Set(['idle', 'planning', 'waiting', 'implementing', 'testing', 'completed', 'error'])
+    const validThreads = Array.isArray(body?.threads) && body.threads.length <= 500 && body.threads.every((thread: unknown) => {
+      if (typeof thread !== 'object' || !thread) return false
+      const item = thread as Record<string, unknown>
+      return UUID_PATTERN.test(String(item.workspaceLocalId ?? '')) && Boolean(text(item.codexThreadId, 200)) && Boolean(text(item.title, 200)) && statuses.has(String(item.status)) && optionalText(item.milestone, 1000) !== null && optionalText(item.finalSummary, 2000) !== null && (item.error === null || optionalText(item.error, 500) !== null)
+    })
+    if (!text(body?.version, 80) || !text(body?.process_instance_id, 36) || !UUID_PATTERN.test(body.process_instance_id) || !validWorkspaces || !validThreads) return c.json({ error: 'Invalid bridge snapshot' }, 400)
+    try {
+      const compatible = compatibleCodexVersion(body.version)
+      const versionError = compatible ? optionalText(body.error, 500) : `Codex ${MIN_CODEX_VERSION.join('.')} or newer is required`
+      const snapshot = await store.syncCodexBridge({ bridgeId: identity.id, ownerId: identity.ownerId, version: body.version, processInstanceId: body.process_instance_id, error: versionError, workspaces: body.workspaces, threads: body.threads })
+      return c.json({ ok: true, compatible, ...snapshot })
+    } catch (error) {
+      return errorResponse(c, error)
+    }
+  })
+
+  app.post('/v1/codex/bridge/interactions', async (c) => {
+    const identity = await codexIdentity(c, store)
+    if (!identity) return c.json({ error: 'Unauthorized' }, 401)
+    if (!connectionService) return c.json({ error: 'Encryption is not configured' }, 503)
+    const body = await c.req.json().catch(() => null)
+    const kinds = ['command_approval', 'file_change_approval', 'permission_approval', 'plan_review'] as const
+    if (!UUID_PATTERN.test(body?.workspace_id ?? '') || (body?.thread_id !== null && !UUID_PATTERN.test(body?.thread_id ?? '')) || !UUID_PATTERN.test(body?.process_instance_id ?? '') || !text(body?.protocol_request_id, 200) || !kinds.includes(body?.kind) || !body?.payload || typeof body.payload !== 'object') return c.json({ error: 'Invalid Codex interaction' }, 400)
+    const serialized = JSON.stringify(body.payload)
+    if (serialized.length > 100_000) return c.json({ error: 'Codex interaction payload is too large' }, 413)
+    try {
+      const display = body.kind === 'plan_review'
+        ? { title: 'Approve Codex implementation plan', summary: text(body.payload.plan, 1000) || 'Codex prepared a plan for review.', risk: 'medium' as const }
+        : body.kind === 'command_approval'
+          ? { title: 'Allow Codex to run a command?', summary: 'Codex wants to run a repository command.', risk: 'medium' as const }
+          : body.kind === 'file_change_approval'
+            ? { title: 'Allow Codex to change files?', summary: 'Codex wants to update repository files.', risk: 'medium' as const }
+            : { title: 'Grant Codex additional permissions?', summary: 'Codex needs additional scoped permissions.', risk: 'high' as const }
+      const request = await store.createCodexInteraction({ ownerId: identity.ownerId, bridgeId: identity.id, workspaceId: body.workspace_id, threadId: body.thread_id, processInstanceId: body.process_instance_id, protocolRequestId: body.protocol_request_id, kind: body.kind, encryptedPayload: connectionService.encryptCodexPayload(body.payload), payloadHash: hash(serialized), ...display, expiresAt: new Date(Date.now() + 15 * 60_000).toISOString() })
+      return c.json({ request }, 202)
+    } catch (error) {
+      return errorResponse(c, error)
+    }
+  })
+
+  app.get('/v1/codex/bridge/commands', async (c) => {
+    const identity = await codexIdentity(c, store)
+    if (!identity) return c.json({ error: 'Unauthorized' }, 401)
+    const processInstanceId = c.req.header('X-Podex-Bridge-Instance')
+    if (!processInstanceId || !UUID_PATTERN.test(processInstanceId)) return c.json({ error: 'Invalid bridge instance' }, 400)
+    try {
+      return c.json({ command: await store.claimCodexCommand(identity.id, processInstanceId) })
+    } catch (error) {
+      return errorResponse(c, error)
+    }
+  })
+
+  app.post('/v1/codex/bridge/commands/:id/ack', async (c) => {
+    const identity = await codexIdentity(c, store)
+    if (!identity) return c.json({ error: 'Unauthorized' }, 401)
+    const processInstanceId = c.req.header('X-Podex-Bridge-Instance')
+    const body = await c.req.json().catch(() => null)
+    if (!processInstanceId || !UUID_PATTERN.test(processInstanceId) || !UUID_PATTERN.test(c.req.param('id')) || typeof body?.ok !== 'boolean') return c.json({ error: 'Invalid acknowledgement' }, 400)
+    try {
+      return await store.acknowledgeCodexCommand(identity.id, processInstanceId, c.req.param('id'), { ok: body.ok, error: optionalText(body.error, 500) || undefined }) ? c.json({ ok: true }) : c.json({ error: 'Command not found' }, 404)
+    } catch (error) {
+      return errorResponse(c, error)
+    }
+  })
+
+  app.post('/v1/pod/codex/prompts', async (c) => {
+    const pod = await podIdentity(c, store)
+    if (!pod) return c.json({ error: 'Unauthorized' }, 401)
+    const body = await c.req.json().catch(() => null)
+    const prompt = text(body?.prompt, 2000)
+    const idempotencyKey = text(body?.idempotency_key, 36)
+    if (!prompt || !idempotencyKey || !UUID_PATTERN.test(idempotencyKey) || !Number.isInteger(body?.target_revision) || body.target_revision < 1) return c.json({ error: 'Invalid Codex prompt' }, 400)
+    try {
+      const requestId = body?.replace_request_id
+      const payloadHash = body?.replace_payload_hash
+      const decisionKey = body?.decision_idempotency_key
+      if (requestId !== undefined || payloadHash !== undefined || decisionKey !== undefined) {
+        if (!UUID_PATTERN.test(requestId ?? '') || !text(payloadHash, 64) || payloadHash.length !== 64 || !UUID_PATTERN.test(decisionKey ?? '')) return c.json({ error: 'Invalid plan revision' }, 400)
+        const command = await store.reviseCodexPlan({ ownerId: pod.ownerId, podId: pod.id, requestId, payloadHash, decisionIdempotencyKey: decisionKey, promptIdempotencyKey: idempotencyKey, targetRevision: body.target_revision, prompt })
+        return c.json({ command }, 202)
+      }
+      const status = await store.codexStatus(pod.ownerId)
+      if (!status.target) return c.json({ error: 'Codex target changed' }, 409)
+      const command = await store.queueCodexCommand({ ownerId: pod.ownerId, workspaceId: status.target.workspace_id, threadId: status.target.thread_id, kind: 'prompt', payload: { prompt }, idempotencyKey, targetRevision: body.target_revision })
+      return c.json({ command }, 202)
+    } catch (error) {
+      return errorResponse(c, error)
+    }
+  })
+
+  app.post('/v1/pod/codex/transcriptions', async (c) => {
+    const pod = await podIdentity(c, store)
+    if (!pod) return c.json({ error: 'Unauthorized' }, 401)
+    if (!connectionService) return c.json({ error: 'Encryption is not configured' }, 503)
+    try {
+      const settings = await store.getAiSettings(pod.ownerId)
+      if (!settings || settings.provider !== 'openai' || settings.base_url !== 'https://api.openai.com/v1') return c.json({ error: 'Configure the official OpenAI provider to use voice' }, 409)
+      const form = await c.req.formData()
+      const audio = form.get('audio')
+      if (!(audio instanceof File)) return c.json({ error: 'A WAV recording is required' }, 400)
+      const bytes = new Uint8Array(await audio.arrayBuffer())
+      if (!validWav(bytes)) return c.json({ error: 'Recording must be mono 16 kHz 16-bit WAV under 30 seconds' }, 400)
+      const upstream = new FormData()
+      upstream.set('model', 'gpt-4o-mini-transcribe')
+      upstream.set('file', new File([bytes], 'podex.wav', { type: 'audio/wav' }))
+      const response = await openAiFetch('https://api.openai.com/v1/audio/transcriptions', { method: 'POST', headers: { Authorization: `Bearer ${connectionService.decryptApiKey(settings.encrypted_api_key)}` }, body: upstream, signal: AbortSignal.timeout(30_000) })
+      if (!response.ok) return c.json({ error: 'Voice transcription failed' }, 502)
+      const result = await response.json() as { text?: unknown }
+      const transcript = text(result.text, 2000)
+      return transcript ? c.json({ transcript }) : c.json({ error: 'No speech was detected' }, 422)
     } catch (error) {
       return errorResponse(c, error)
     }

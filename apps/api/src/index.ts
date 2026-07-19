@@ -1,7 +1,6 @@
 import { serve } from '@hono/node-server'
 
 import { createApp } from './app.js'
-import { drainCallbacks } from './callbacks.js'
 import { ConnectionService } from './connections.js'
 import { RuleBuilderService } from './rule-builder.js'
 import { SupabaseStore } from './supabase-store.js'
@@ -27,24 +26,10 @@ const connections = new ConnectionService(store, {
   githubClientSecret: process.env.GITHUB_CLIENT_SECRET,
   googleClientId: process.env.GOOGLE_CLIENT_ID,
   googleClientSecret: process.env.GOOGLE_CLIENT_SECRET,
+  telegramApiId: process.env.TELEGRAM_API_ID ? Number(process.env.TELEGRAM_API_ID) : undefined,
+  telegramApiHash: process.env.TELEGRAM_API_HASH,
 })
 const ruleBuilder = new RuleBuilderService(store, connections)
-const app = createApp(supabaseUrl, store, undefined, connections, undefined, ruleBuilder)
-
-let draining = false
-const drain = async () => {
-  if (draining) return
-  draining = true
-  try {
-    await drainCallbacks(store, connections)
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : 'Callback delivery failed')
-  } finally {
-    draining = false
-  }
-}
-
-void drain()
-setInterval(() => void drain(), 5_000).unref()
+const app = createApp(supabaseUrl, store, undefined, connections, undefined, ruleBuilder, undefined, store)
 
 serve({ fetch: app.fetch, port: Number(process.env.PORT) || 3001 })

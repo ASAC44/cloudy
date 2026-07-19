@@ -1,4 +1,7 @@
 allowBuilds:
+  bufferutil: false
+  es5-ext: false
   esbuild: true
+  utf-8-validate: false
 minimumReleaseAgeExclude:
   - hono@4.12.31

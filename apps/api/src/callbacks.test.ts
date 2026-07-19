@@ -3,7 +3,7 @@ import test from 'node:test'
 
 import { drainCallbacks } from './callbacks.js'
 import type { ConnectionService } from './connections.js'
-import type { CallbackDelivery, Store } from './store.js'
+import type { CallbackDelivery, Store } from './types/store.js'
 
 const delivery: CallbackDelivery = {
   id: '00000000-0000-4000-8000-000000000050',
@@ -30,9 +30,11 @@ test('callback delivery posts the terminal outcome and marks it delivered', asyn
     decryptCallbackUrl: () => 'https://1.1.1.1/resume',
   } as unknown as ConnectionService
   let payload = ''
+  let dnsPinned = false
 
   await drainCallbacks(store, connections, async (_input, init) => {
     payload = String(init?.body)
+    dnsPinned = Reflect.has(init ?? {}, 'dispatcher')
     return new Response(null, { status: 204 })
   })
 
@@ -42,6 +44,7 @@ test('callback delivery posts the terminal outcome and marks it delivered', asyn
     status: 'approved',
     decided_at: delivery.decidedAt,
   })
+  assert.equal(dnsPinned, true)
 })
 
 test('callback delivery rejects private destinations and schedules a retry without exposing the URL', async () => {
