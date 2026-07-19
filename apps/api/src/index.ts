@@ -17,7 +17,11 @@ if (!connectionEncryptionKey) throw new Error('CONNECTION_ENCRYPTION_KEY is requ
 if (!publicApiUrl) throw new Error('PODEX_PUBLIC_API_URL is required')
 if (!webUrl) throw new Error('PODEX_WEB_URL is required')
 
-const store = new SupabaseStore(supabaseUrl, supabaseSecretKey)
+const store = new SupabaseStore(
+  supabaseUrl,
+  supabaseSecretKey,
+  process.env.PODEX_LOCAL_LAYOUT_DB,
+)
 const connections = new ConnectionService(store, {
   encryptionKey: connectionEncryptionKey,
   publicApiUrl,

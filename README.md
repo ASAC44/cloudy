@@ -20,7 +20,7 @@ hosted Supabase development project as described in the
 
 ```sh
 ./scripts/setup.sh
-./scripts/dev.sh
+./start.sh
 ```
 
 Run all local checks with:

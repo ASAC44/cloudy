@@ -1,5 +1,17 @@
 # Final Deployment TODO
 
+## Complete local verification
+
+- [ ] Stop the active `next dev` process, run `cd apps/web && npm run build`, and verify `/home` displays the safe GitHub permission message in the production build before restarting the demo.
+
+## Activate Pod screen layout sync
+
+- [ ] Apply `supabase/migrations/20260720010000_pod_screen_layout.sql` before deploying the matching API, web, and Pod builds; verify existing Pods receive the default layout and retain pairing.
+- [ ] If `apps/api/.state/podex.sqlite` contains customized local layouts, record them before applying the migration, re-save them from the dashboard afterward, and verify the revision starts from the persisted Supabase value.
+- [ ] Preserve the current local Pod `e86a829d-37f8-487e-ae43-7fb1c7ba70ea` revision-3 legacy layout before its first directional save, then verify it starts from the GitHub-left, Gmail-right, Codex-down default without losing pairing.
+- [ ] Attach and reorder apps across Swipe left, Swipe right, and Swipe down in staging; verify autosave survives reload, then confirm the paired Pod applies each layout within one polling interval and rejects a stale revision without overwriting newer changes.
+- [ ] Run `supabase/rollback/20260720010000_pod_screen_layout.sql` on a disposable database and verify the previous API build can still list, poll, and revoke Pods.
+
 ## Activate Linear and Stripe MCP connections
 
 - [ ] Apply `supabase/migrations/20260720000000_linear_stripe_connections.sql` on staging before deploying the matching API build; verify existing provider connections remain readable.
@@ -8,7 +20,7 @@
 
 ## Activate Gmail reply approvals
 
-- [ ] Add the minimum Gmail send/reply OAuth scope and action capability, emit a hash-bound `email_reply_v1` presentation containing the full original email and exact response, then verify approve sends once while reject, expiry, payload changes, and retries send nothing.
+- [ ] Reconnect one disposable Gmail demo account with the new `gmail.send` scope, then verify a hash-bound `email_reply_v1` approval sends the exact reply once while reject, expiry, payload changes, and ambiguous delivery send nothing.
 
 ## Deploy Codex bridge schema safely
 

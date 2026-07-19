@@ -50,6 +50,7 @@ class PodWorker(threading.Thread):
         token = saved_credentials.get("token") if saved_credentials else None
         last_request_id: str | None = None
         last_codex = repr({})
+        last_screen_layout = repr(None)
 
         while not self.stop_event.is_set():
             if self.offline.is_set():
@@ -113,6 +114,12 @@ class PodWorker(threading.Thread):
                     continue
 
                 current = self.client.current_request(token)
+                screen_layout = current.get("screen_layout")
+                screen_items = current.get("screen_items", [])
+                serialized_layout = repr((screen_layout, screen_items))
+                if screen_layout and serialized_layout != last_screen_layout:
+                    self.emit("screen_layout", screen_layout=screen_layout, screen_items=screen_items)
+                    last_screen_layout = serialized_layout
                 codex = current.get("codex") or {}
                 serialized_codex = repr(codex)
                 if serialized_codex != last_codex:

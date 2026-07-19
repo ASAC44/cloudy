@@ -396,8 +396,9 @@ function validateReply(
   const cadenceSeconds = capability?.delivery === 'event'
     ? 60
     : Math.max(60, Math.min(86_400, integer(isRecord(candidate.cadence) ? candidate.cadence.seconds : undefined) ?? 60))
-  const expiry = [5, 15, 30, 60].includes(Number(isRecord(candidate.approval) ? candidate.approval.expires_in_minutes : 15))
-    ? Number((candidate.approval as Record<string, unknown>).expires_in_minutes) as 5 | 15 | 30 | 60
+  const requestedExpiry = Number(isRecord(candidate.approval) ? candidate.approval.expires_in_minutes : 15)
+  const expiry = [5, 15, 30, 60].includes(requestedExpiry)
+    ? requestedExpiry as 5 | 15 | 30 | 60
     : 15
   const definition = capability ? {
     schema_version: 2,

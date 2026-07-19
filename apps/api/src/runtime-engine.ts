@@ -212,7 +212,8 @@ export class RuntimeEngine {
         summary: decision.summary,
         ai_available: true,
       } : null
-      const presentation = githubPresentation ?? {
+      const gmailPresentation = action.kind === 'capability' && action.capability_id?.includes(':rest:gmail.send_reply') ? gmailReviewPresentation(source, context, action.arguments, decision) : null
+      const presentation = githubPresentation ?? gmailPresentation ?? {
         sender: firstText(source, ['sender_name', 'sender', 'from', 'author']) ?? rule.source.account_label ?? rule.source.name,
         excerpt: firstText(source, ['text', 'message', 'caption', 'summary'])?.slice(0, 600) ?? 'A new event matched this Ping.',
         proposed_reply: decision.draft,
@@ -590,6 +591,10 @@ function actionFailure(error: unknown, rule: RuntimeRule): { retryable?: boolean
   if (rule.source.provider === 'telegram'
     || rule.action_capability_id?.includes(':rest:telegram.send_text')
     || rule.action_capability_name === 'Send Telegram reply') return { retryable: true }
+  if (rule.action_capability_id?.includes(':rest:gmail.send_reply') || rule.action_capability_name === 'Reply in Gmail') {
+    if (error instanceof ConnectionError && ['capability_changed', 'capability_not_safe', 'invalid_capability_input', 'payload_changed', 'authentication_failed'].includes(error.code)) return {}
+    return { ambiguous: true }
+  }
   if (error instanceof ConnectionError) {
     if (['capability_changed', 'capability_not_safe', 'invalid_capability_input', 'payload_changed'].includes(error.code)) return {}
     return { retryable: true }
@@ -614,6 +619,22 @@ function isBinding(value: unknown): value is JsonPointerBinding {
 function firstText(value: Record<string, unknown>, fields: string[]) {
   for (const field of fields) if (typeof value[field] === 'string' && value[field]) return value[field] as string
   return null
+}
+
+export function gmailReviewPresentation(source: Record<string, unknown>, context: unknown[], action: Record<string, unknown>, decision: EventDecisionV1) {
+  const thread = context.find((value) => value && typeof value === 'object' && Array.isArray((value as Record<string, unknown>).messages)) as Record<string, unknown> | undefined
+  const messages = Array.isArray(thread?.messages) ? thread.messages as Array<Record<string, unknown>> : []
+  const latest = messages.at(-1) ?? source
+  const headers = latest.headers && typeof latest.headers === 'object' ? latest.headers as Record<string, unknown> : {}
+  return {
+    kind: 'email_reply_v1',
+    sender: String(headers.from ?? firstText(source, ['sender', 'from']) ?? 'Unknown sender'),
+    time: String(headers.date ?? ''),
+    subject: String(headers.subject ?? 'Email needs you'),
+    summary: decision.summary,
+    email: String(latest.body ?? latest.snippet ?? 'The original email body is unavailable.'),
+    response: String(action.message ?? decision.draft ?? ''),
+  }
 }
 
 function bounded(value: unknown, maxBytes: number) {

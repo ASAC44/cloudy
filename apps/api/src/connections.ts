@@ -188,7 +188,7 @@ export class ConnectionService {
     if (provider === 'github') {
       url.searchParams.set('scope', 'read:user repo')
     } else {
-      url.searchParams.set('scope', 'openid email https://www.googleapis.com/auth/gmail.readonly')
+      url.searchParams.set('scope', 'openid email https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send')
       url.searchParams.set('access_type', 'offline')
       url.searchParams.set('prompt', 'consent')
     }
@@ -334,9 +334,10 @@ export class ConnectionService {
     if (capability.name === 'gmail.get_thread') {
       const current = await this.refreshGoogleCredentials(credentials)
       const threadId = requiredString(input, 'thread_id')
-      return await this.json(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(threadId)}?format=metadata`, {
+      const thread = await this.json(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(threadId)}?format=full`, {
         headers: providerHeaders(requiredCredential(current, 'accessToken')),
       })
+      return normalizeGmailThread(thread)
     }
     if (capability.name === 'vercel.list_projects') {
       const url = new URL('https://api.vercel.com/v9/projects')
@@ -365,14 +366,16 @@ export class ConnectionService {
     runtime?: { telegramRandomId?: string },
   ) {
     if (!capability.runtime_safe || !capability.roles.includes(role)) throw new ConnectionError('capability_not_safe')
-    const latest = (await this.discoverConnectionCapabilities(ownerId, capability.connection_id))
+    const connection = await this.store.getConnection(ownerId, capability.connection_id)
+    if (!connection || connection.status !== 'connected') throw new ConnectionError('capability_not_found')
+    const latest = (connection.provider === 'github' && capability.name.startsWith('github.')
+      ? githubCapabilities(connection)
+      : await this.discoverConnectionCapabilities(ownerId, capability.connection_id))
       .find(({ id }) => id === capability.id)
     if (!latest || latest.schema_hash !== capability.schema_hash || !latest.runtime_safe || !latest.roles.includes(role)) {
       throw new ConnectionError('capability_changed')
     }
     if (!validInput(latest.input_schema, input)) throw new ConnectionError('invalid_capability_input')
-    const connection = await this.store.getConnection(ownerId, latest.connection_id)
-    if (!connection || connection.status !== 'connected') throw new ConnectionError('capability_not_found')
     if (connection.provider === 'github' && latest.name.startsWith('github.')) {
       const client = this.githubClient(connection)
       if (role === 'source' && latest.name === 'github.ready_pull_requests') {
@@ -382,6 +385,20 @@ export class ConnectionService {
         return await client.merge(input as unknown as GithubMergeAction)
       }
       throw new ConnectionError('capability_not_found')
+    }
+    if (connection.provider === 'gmail' && connection.protocol === 'rest' && role === 'action' && latest.name === 'gmail.send_reply') {
+      const credentials = this.decrypt(connection.encrypted_payload)
+      const current = await this.refreshGoogleCredentials(credentials)
+      if (JSON.stringify(current) !== JSON.stringify(credentials)) await this.store.updateConnectionSecret(connection.id, this.encrypt(current))
+      const token = requiredCredential(current, 'accessToken')
+      const threadId = requiredString(input, 'thread_id')
+      const message = requiredString(input, 'message')
+      const thread = await this.json(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(threadId)}?format=metadata`, { headers: providerHeaders(token) })
+      const raw = gmailReplyRaw(threadId, message, thread)
+      return await this.json('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+        method: 'POST', headers: { ...providerHeaders(token), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ threadId, raw: Buffer.from(raw).toString('base64url') }),
+      })
     }
     if (connection.provider === 'telegram' && connection.protocol === 'rest') {
       const credentials = this.decrypt(connection.encrypted_payload)
@@ -634,6 +651,7 @@ export class ConnectionService {
       accessToken: String(response.access_token),
       refreshToken: String(response.refresh_token),
       expiresAt: Date.now() + Number(response.expires_in ?? 3600) * 1000,
+      scope: String(response.scope ?? ''),
     }
   }
 
@@ -782,7 +800,15 @@ function restCapabilities(connection: Connection, credentials: Credentials): Cap
     delivery: 'poll' as const,
     input_schema: { type: 'object', properties: { thread_id: { type: 'string' } }, required: ['thread_id'], additionalProperties: false },
     output_schema: { type: 'object' },
-  }] : connection.provider === 'vercel' ? [{
+  }, ...(String(credentials.scope ?? '').includes('https://www.googleapis.com/auth/gmail.send') ? [{
+    name: 'gmail.send_reply',
+    title: 'Reply in Gmail',
+    description: 'Send the exact approved response in the source Gmail thread.',
+    roles: ['action'] as CapabilityRole[],
+    delivery: 'poll' as const,
+    input_schema: { type: 'object', properties: { thread_id: { type: 'string' }, message: { type: 'string', minLength: 1, maxLength: 4096 } }, required: ['thread_id', 'message'], additionalProperties: false },
+    output_schema: { type: 'object' },
+  }] : [])] : connection.provider === 'vercel' ? [{
     name: 'vercel.list_projects',
     title: 'List Vercel projects',
     description: 'List projects visible to the connected Vercel account.',
@@ -874,6 +900,54 @@ function requiredString(input: Record<string, unknown>, key: string) {
   return value
 }
 
+function normalizeGmailThread(thread: Record<string, unknown>) {
+  const messages = Array.isArray(thread.messages) ? thread.messages as Array<Record<string, unknown>> : []
+  return {
+    id: thread.id,
+    messages: messages.map((message) => {
+      const payload = message.payload && typeof message.payload === 'object' ? message.payload as Record<string, unknown> : {}
+      const headers = Array.isArray(payload.headers) ? payload.headers as Array<Record<string, unknown>> : []
+      return {
+        id: message.id,
+        thread_id: message.threadId,
+        snippet: clip(String(message.snippet ?? ''), 1_000),
+        headers: Object.fromEntries(headers.map((header) => [String(header.name ?? '').toLowerCase(), clip(String(header.value ?? ''), 1_000)])),
+        body: clip(gmailBody(payload), 12_000),
+      }
+    }),
+  }
+}
+
+function gmailBody(payload: Record<string, unknown>): string {
+  const mimeType = String(payload.mimeType ?? '')
+  const body = payload.body && typeof payload.body === 'object' ? payload.body as Record<string, unknown> : {}
+  if ((mimeType === 'text/plain' || !mimeType) && typeof body.data === 'string') {
+    try { return Buffer.from(body.data, 'base64url').toString('utf8') } catch { return '' }
+  }
+  const parts = Array.isArray(payload.parts) ? payload.parts as Array<Record<string, unknown>> : []
+  return parts.map(gmailBody).filter(Boolean).join('\n\n')
+}
+
+export function gmailReplyRaw(threadId: string, message: string, thread: Record<string, unknown>) {
+  const messages = Array.isArray(thread.messages) ? thread.messages as Array<Record<string, unknown>> : []
+  const latestMessage = messages.at(-1)
+  const payload = latestMessage?.payload && typeof latestMessage.payload === 'object' ? latestMessage.payload as Record<string, unknown> : {}
+  const headers = Array.isArray(payload.headers) ? payload.headers as Array<Record<string, unknown>> : []
+  const header = (name: string) => String(headers.find((value) => String(value.name).toLowerCase() === name.toLowerCase())?.value ?? '').replace(/[\r\n]+/g, ' ').trim()
+  const recipient = header('From')
+  const originalSubject = header('Subject')
+  const inReplyTo = header('Message-ID')
+  if (!recipient || !inReplyTo) throw new ConnectionError('capability_changed', 'The Gmail thread no longer has reply headers.')
+  const subject = /^re:/i.test(originalSubject) ? originalSubject : `Re: ${originalSubject || 'Your message'}`
+  const messageId = `<podex-${createHash('sha256').update(`${threadId}:${message}`).digest('hex').slice(0, 32)}@podex.local>`
+  return [
+    `To: ${recipient}`, `Subject: ${subject}`, `Message-ID: ${messageId}`,
+    `In-Reply-To: ${inReplyTo}`, `References: ${[header('References'), inReplyTo].filter(Boolean).join(' ')}`,
+    'MIME-Version: 1.0', 'Content-Type: text/plain; charset=UTF-8',
+    'Content-Transfer-Encoding: 8bit', '', message,
+  ].join('\r\n')
+}
+
 function validInput(schema: Record<string, unknown>, input: Record<string, unknown>) {
   const required = Array.isArray(schema.required) ? schema.required.filter((key): key is string => typeof key === 'string') : []
   if (required.some((key) => !(key in input))) return false
@@ -929,6 +1003,7 @@ const publicLookup: LookupFunction = (hostname, options, callback) => {
     if (!addresses.length || addresses.some(({ address }) => isPrivateAddress(address))) {
       return callback(Object.assign(new Error('private_endpoint'), { code: 'EACCES' }), '', 0)
     }
+    if (options.all) return (callback as unknown as (error: null, addresses: Array<{ address: string, family: number }>) => void)(null, addresses)
     const selected = addresses[0]
     callback(null, selected.address, selected.family)
   })

@@ -1,24 +1,24 @@
 "use client";
 
-import { type DragEvent, type ReactNode, useState } from "react";
+import { type DragEvent, useRef, useState } from "react";
 import {
-  Bell,
-  CalendarDays,
+  Bot,
+  Box,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  CircleDot,
   GitPullRequest,
   GripVertical,
   Mail,
-  MessageSquare,
   MoreHorizontal,
-  NotebookText,
-  Rocket,
-  Workflow,
+  Send,
+  Server,
   type LucideIcon,
 } from "lucide-react";
 
+import { savePodScreenLayout } from "@/app/(dashboard)/actions";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -26,269 +26,208 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
+import type { CodexOverview, Connection, ScreenDirection, ScreenLayout } from "@/types/api";
 
-type LaneId = 0 | 1 | 2 | 3;
-type Layout = Record<LaneId, string[]>;
-
-type Feed = {
+type AppItem = {
+  id: string;
   name: string;
   detail: string;
+  status: "ready" | "disconnected" | "attention";
   icon: LucideIcon;
 };
 
-const feeds: Record<string, Feed> = {
-  calendar: { name: "Calendar", detail: "Upcoming events", icon: CalendarDays },
-  notion: { name: "Notion", detail: "New tasks", icon: NotebookText },
-  gmail: { name: "Gmail", detail: "Needs a reply", icon: Mail },
-  important: { name: "Important", detail: "General alerts", icon: Bell },
-  github: { name: "GitHub", detail: "Pull requests", icon: GitPullRequest },
-  deployments: { name: "Deployments", detail: "Release actions", icon: Rocket },
-  slack: { name: "Slack", detail: "Mentions and messages", icon: MessageSquare },
-  n8n: { name: "n8n", detail: "Workflow approvals", icon: Workflow },
-};
+const directions: Array<{ id: ScreenDirection; label: string; hint: string; icon: LucideIcon }> = [
+  { id: "left", label: "Swipe left", hint: "Move your finger left from Home", icon: ChevronLeft },
+  { id: "right", label: "Swipe right", hint: "Move your finger right from Home", icon: ChevronRight },
+  { id: "down", label: "Swipe down", hint: "Move your finger down from Home", icon: ChevronDown },
+];
 
-const initialLayout: Layout = {
-  0: ["slack", "n8n"],
-  1: ["calendar", "notion"],
-  2: ["gmail", "important"],
-  3: ["github", "deployments"],
-};
+const appDefinitions: Array<{ provider: Connection["provider"] | "codex"; name: string; icon: LucideIcon }> = [
+  { provider: "github", name: "GitHub", icon: GitPullRequest },
+  { provider: "gmail", name: "Gmail", icon: Mail },
+  { provider: "codex", name: "Codex", icon: Bot },
+  { provider: "vercel", name: "Vercel", icon: Box },
+  { provider: "telegram", name: "Telegram", icon: Send },
+  { provider: "linear", name: "Linear", icon: CircleDot },
+  { provider: "stripe", name: "Stripe", icon: Server },
+];
 
-const screenLabels: Record<LaneId, string> = {
-  0: "Unassigned",
-  1: "Screen 1",
-  2: "Screen 2",
-  3: "Screen 3",
-};
-
-const screens = [1, 2, 3] as const;
-
-export function ScreenLayoutBoard() {
-  // ponytail: screen layout remains a local prototype until Pod settings are persisted.
+export function ScreenLayoutBoard({
+  podId,
+  initialLayout,
+  initialRevision,
+  connections,
+  codex,
+}: {
+  podId: string;
+  initialLayout: ScreenLayout;
+  initialRevision: number;
+  connections: Connection[];
+  codex: CodexOverview;
+}) {
   const [layout, setLayout] = useState(initialLayout);
+  const [syncStatus, setSyncStatus] = useState<"saved" | "saving" | "error">("saved");
+  const layoutRef = useRef(initialLayout);
+  const savedLayoutRef = useRef(initialLayout);
+  const revisionRef = useRef(initialRevision);
+  const pendingRef = useRef<ScreenLayout | null>(null);
+  const savingRef = useRef(false);
+  const items = buildItems(connections, codex);
+  const assigned = new Set(Object.values(layout).flat());
 
-  function moveFeed(feedId: string, targetLane: LaneId, beforeId?: string) {
-    setLayout((current) => {
-      const next: Layout = {
-        0: current[0].filter((id) => id !== feedId),
-        1: current[1].filter((id) => id !== feedId),
-        2: current[2].filter((id) => id !== feedId),
-        3: current[3].filter((id) => id !== feedId),
-      };
-      const targetIndex = beforeId ? next[targetLane].indexOf(beforeId) : -1;
-
-      next[targetLane].splice(
-        targetIndex === -1 ? next[targetLane].length : targetIndex,
-        0,
-        feedId,
-      );
-
-      return next;
-    });
+  async function persist(next: ScreenLayout) {
+    pendingRef.current = next;
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setSyncStatus("saving");
+    while (pendingRef.current) {
+      const target = pendingRef.current;
+      pendingRef.current = null;
+      const result = await savePodScreenLayout(podId, target, revisionRef.current);
+      if (result.error || result.revision === undefined) {
+        pendingRef.current = null;
+        layoutRef.current = savedLayoutRef.current;
+        setLayout(savedLayoutRef.current);
+        setSyncStatus("error");
+        savingRef.current = false;
+        return;
+      }
+      savedLayoutRef.current = target;
+      revisionRef.current = result.revision;
+    }
+    setSyncStatus("saved");
+    savingRef.current = false;
   }
 
-  function handleDrop(event: DragEvent, lane: LaneId, beforeId?: string) {
+  function move(itemId: string, target?: ScreenDirection, beforeId?: string) {
+    const current = layoutRef.current;
+    const next: ScreenLayout = {
+      left: current.left.filter((id) => id !== itemId),
+      right: current.right.filter((id) => id !== itemId),
+      down: current.down.filter((id) => id !== itemId),
+    };
+    if (target && next[target].length < 6) {
+      const index = beforeId ? next[target].indexOf(beforeId) : -1;
+      next[target].splice(index < 0 ? next[target].length : index, 0, itemId);
+    }
+    layoutRef.current = next;
+    setLayout(next);
+    void persist(next);
+  }
+
+  function drop(event: DragEvent, target: ScreenDirection, beforeId?: string) {
     event.preventDefault();
     event.stopPropagation();
-    const feedId = event.dataTransfer.getData("text/plain");
-
-    if (feeds[feedId]) moveFeed(feedId, lane, beforeId);
+    const itemId = event.dataTransfer.getData("text/plain");
+    if (items[itemId]) move(itemId, target, beforeId);
   }
 
   return (
-    <>
-      <section aria-labelledby="screen-layout-title">
-        <div className="mb-4">
-          <div>
-            <h2 id="screen-layout-title" className="text-heading-sm">
-              Screen layout
-            </h2>
-            <p className="mt-1 text-muted-foreground">
-              Drag feeds between screens or use their move menu.
-            </p>
-          </div>
-        </div>
-
+    <section aria-labelledby="keychain-title" className="border-y border-border py-8">
+      <div className="mb-8 flex items-start justify-between gap-6">
         <div>
-          <div className="grid gap-3 md:grid-cols-3">
-            {screens.map((screen) => (
-              <ScreenLane
-                key={screen}
-                screen={screen}
-                feedIds={layout[screen]}
-                moveFeed={moveFeed}
-                onDrop={handleDrop}
-              />
-            ))}
-          </div>
-
-          <div
-            className="mt-3 rounded-2xl border border-border/60 bg-card/45 px-4 py-4 shadow-sm shadow-foreground/5 sm:px-5"
-            onDragOver={(event) => event.preventDefault()}
-            onDrop={(event) => handleDrop(event, 0)}
-          >
-            <div className="mb-3 flex items-center justify-between gap-4">
-              <div>
-                <h3 className="font-sans text-sm font-medium">
-                  Unassigned feeds
-                </h3>
-                <p className="text-caption text-muted-foreground">
-                  Connected, but not shown on the Pod.
-                </p>
-              </div>
-              <span className="text-caption text-muted-foreground">
-                {layout[0].length}
-              </span>
-            </div>
-            <div className="grid gap-1 sm:grid-cols-2 sm:gap-x-6">
-              {layout[0].map((feedId) => (
-                <FeedRow
-                  key={feedId}
-                  feedId={feedId}
-                  lane={0}
-                  moveFeed={moveFeed}
-                  onDrop={handleDrop}
-                />
-              ))}
-            </div>
-          </div>
+          <p className="mb-2 font-mono text-caption tracking-[0.16em] text-muted-foreground uppercase">AI keychain</p>
+          <h2 id="keychain-title" className="text-heading-sm">Choose what each gesture opens</h2>
+          <p className="mt-2 max-w-2xl text-muted-foreground">Attach connected apps and MCPs, then drag to set their order on the Pod.</p>
         </div>
-      </section>
-
-    </>
-  );
-}
-
-function ScreenLane({
-  screen,
-  feedIds,
-  moveFeed,
-  onDrop,
-}: {
-  screen: 1 | 2 | 3;
-  feedIds: string[];
-  moveFeed: (feedId: string, targetLane: LaneId, beforeId?: string) => void;
-  onDrop: (event: DragEvent, lane: LaneId, beforeId?: string) => void;
-}) {
-  const direction: Record<1 | 2 | 3, ReactNode> = {
-    1: (
-      <>
-        <ChevronLeft aria-hidden="true" /> Left swipe
-      </>
-    ),
-    2: "Default screen",
-    3: (
-      <>
-        Right swipe <ChevronRight aria-hidden="true" />
-      </>
-    ),
-  };
-
-  return (
-    <Card
-      data-screen={screen}
-      className={cn(
-        "min-h-72 gap-0 border-border/70 bg-card/75 px-4 py-5 shadow-sm shadow-foreground/5 md:px-5",
-        screen === 2 && "border-clay/25 bg-secondary/45",
-      )}
-      onDragOver={(event) => event.preventDefault()}
-      onDrop={(event) => onDrop(event, screen)}
-    >
-      <div className="mb-5 flex items-start justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-2">
-            <h3 className="font-sans text-sm font-medium">Screen {screen}</h3>
-            {screen === 2 ? (
-              <span className="rounded-md bg-foreground px-1.5 py-0.5 text-[0.625rem] font-medium text-background">
-                Home
-              </span>
-            ) : null}
-          </div>
-          <p className="mt-1 flex items-center gap-0.5 text-caption text-muted-foreground [&_svg]:size-3">
-            {direction[screen]}
-          </p>
-        </div>
-        <span className="text-caption text-muted-foreground">
-          {feedIds.length}
+        <span className={cn("shrink-0 text-caption", syncStatus === "error" ? "text-destructive" : "text-muted-foreground")} aria-live="polite">
+          {syncStatus === "saving" ? "Syncing…" : syncStatus === "error" ? "Sync failed · reverted" : "Synced to Pod"}
         </span>
       </div>
 
-      <div className="space-y-1">
-        {feedIds.map((feedId) => (
-          <FeedRow
-            key={feedId}
-            feedId={feedId}
-            lane={screen}
-            moveFeed={moveFeed}
-            onDrop={onDrop}
-          />
-        ))}
+      <div className="divide-y divide-border border-y border-border">
+        {directions.map((direction) => {
+          const DirectionIcon = direction.icon;
+          return (
+            <div
+              key={direction.id}
+              className="grid min-h-56 gap-6 py-7 lg:grid-cols-[15rem_1fr]"
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={(event) => drop(event, direction.id)}
+            >
+              <div>
+                <div className="flex items-center gap-2 text-lg font-medium"><DirectionIcon className="size-5" />{direction.label}</div>
+                <p className="mt-2 text-sm text-muted-foreground">{direction.hint}</p>
+                <p className="mt-5 font-mono text-caption text-muted-foreground">{layout[direction.id].length}/6 attached</p>
+              </div>
+              <div className="self-center">
+                {layout[direction.id].length ? layout[direction.id].map((itemId) => (
+                  <AppRow key={itemId} item={items[itemId] ?? missingItem(itemId)} direction={direction.id} move={move} drop={drop} />
+                )) : (
+                  <p className="py-8 text-sm text-muted-foreground">Nothing attached. Drag an app here or use its move menu.</p>
+                )}
+              </div>
+            </div>
+          );
+        })}
       </div>
-    </Card>
+
+      <div className="pt-8">
+        <h3 className="text-lg font-medium">Available apps and MCPs</h3>
+        <p className="mt-1 text-sm text-muted-foreground">Official apps combine connected accounts. Each Custom MCP stays separate.</p>
+        <div className="mt-5 grid gap-x-8 sm:grid-cols-2">
+          {Object.values(items).map((item) => (
+            <AppRow key={item.id} item={item} move={move} disabled={assigned.has(item.id)} />
+          ))}
+        </div>
+      </div>
+    </section>
   );
 }
 
-function FeedRow({
-  feedId,
-  lane,
-  moveFeed,
-  onDrop,
-}: {
-  feedId: string;
-  lane: LaneId;
-  moveFeed: (feedId: string, targetLane: LaneId, beforeId?: string) => void;
-  onDrop: (event: DragEvent, lane: LaneId, beforeId?: string) => void;
+function AppRow({ item, direction, move, drop, disabled }: {
+  item: AppItem;
+  direction?: ScreenDirection;
+  move: (itemId: string, target?: ScreenDirection, beforeId?: string) => void;
+  drop?: (event: DragEvent, target: ScreenDirection, beforeId?: string) => void;
+  disabled?: boolean;
 }) {
-  const feed = feeds[feedId];
-  const Icon = feed.icon;
-
+  const Icon = item.icon;
   return (
     <div
-      draggable
-      className="group flex cursor-grab items-center gap-3 rounded-xl px-2 py-3 transition-colors hover:bg-background/70 active:cursor-grabbing"
-      onDragStart={(event) => {
-        event.dataTransfer.effectAllowed = "move";
-        event.dataTransfer.setData("text/plain", feedId);
-      }}
-      onDragOver={(event) => event.preventDefault()}
-      onDrop={(event) => onDrop(event, lane, feedId)}
+      draggable={!disabled}
+      className={cn("group flex min-h-16 items-center gap-3 border-b border-border/70 py-3", disabled && "opacity-50")}
+      onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", item.id); }}
+      onDragOver={(event) => direction && event.preventDefault()}
+      onDrop={(event) => direction && drop?.(event, direction, item.id)}
     >
-      <GripVertical
-        className="size-4 shrink-0 text-mist group-hover:text-graphite dark:group-hover:text-muted-foreground"
-        aria-hidden="true"
-      />
-      <Icon className="size-4 shrink-0 text-graphite dark:text-muted-foreground" aria-hidden="true" />
+      <GripVertical className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+      <Icon className="size-5 shrink-0" aria-hidden="true" />
       <div className="min-w-0 flex-1">
-        <div className="truncate font-medium">{feed.name}</div>
-        <div className="truncate text-caption text-muted-foreground">
-          {feed.detail}
-        </div>
+        <div className="flex items-center gap-2"><span className="truncate font-medium">{item.name}</span><StatusDot status={item.status} /></div>
+        <p className="truncate text-caption text-muted-foreground">{item.detail}</p>
       </div>
       <DropdownMenu>
-        <DropdownMenuTrigger
-          render={
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              aria-label={`Move ${feed.name}`}
-            />
-          }
-        >
-          <MoreHorizontal aria-hidden="true" />
-        </DropdownMenuTrigger>
+        <DropdownMenuTrigger render={<Button variant="ghost" size="icon-xs" aria-label={`Move ${item.name}`} />}><MoreHorizontal /></DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-44">
-          {([1, 2, 3, 0] as const).map((target) => (
-            <DropdownMenuItem
-              key={target}
-              disabled={target === lane}
-              onClick={() => moveFeed(feedId, target)}
-            >
-              {screenLabels[target]}
-              {target === 2 ? " (Home)" : ""}
-            </DropdownMenuItem>
-          ))}
+          {directions.map(({ id, label }) => <DropdownMenuItem key={id} disabled={id === direction} onClick={() => move(item.id, id)}>{label}</DropdownMenuItem>)}
+          {direction ? <DropdownMenuItem onClick={() => move(item.id)}>Remove from Pod</DropdownMenuItem> : null}
         </DropdownMenuContent>
       </DropdownMenu>
     </div>
   );
+}
+
+function StatusDot({ status }: { status: AppItem["status"] }) {
+  return <span className={cn("size-1.5 rounded-full", status === "ready" ? "bg-clay" : status === "attention" ? "bg-destructive" : "bg-muted-foreground/45")} aria-label={status} />;
+}
+
+function buildItems(connections: Connection[], codex: CodexOverview): Record<string, AppItem> {
+  const items = Object.fromEntries(appDefinitions.map(({ provider, name, icon }) => {
+    if (provider === "codex") {
+      const online = codex.bridges.filter((bridge) => bridge.online).length;
+      return [`app:${provider}`, { id: `app:${provider}`, name, icon, status: online && codex.target ? "ready" : codex.bridges.length ? "attention" : "disconnected", detail: online ? `${online} bridge online${codex.target ? " · target selected" : " · choose a target"}` : "Pair a local bridge" } satisfies AppItem];
+    }
+    const accounts = connections.filter((connection) => connection.provider === provider);
+    const ready = accounts.filter((connection) => connection.status === "connected").length;
+    return [`app:${provider}`, { id: `app:${provider}`, name, icon, status: ready ? "ready" : accounts.length ? "attention" : "disconnected", detail: ready ? `${ready} connected account${ready === 1 ? "" : "s"}` : accounts.length ? "Connection needs attention" : "Not connected" } satisfies AppItem];
+  }));
+  for (const connection of connections.filter(({ provider }) => provider === "custom_mcp")) {
+    items[`connection:${connection.id}`] = { id: `connection:${connection.id}`, name: connection.name, icon: Server, status: connection.status === "connected" ? "ready" : connection.status === "failed" ? "attention" : "disconnected", detail: connection.account_label ?? connection.last_error ?? "Custom MCP" };
+  }
+  return items;
+}
+
+function missingItem(id: string): AppItem {
+  return { id, name: "Unavailable MCP", icon: Server, status: "attention", detail: "Remove this attachment and reconnect it." };
 }

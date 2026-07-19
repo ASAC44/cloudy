@@ -38,8 +38,10 @@ Do not edit the hosted schema manually after adopting migrations.
 ## Run
 
 ```sh
-./scripts/dev.sh
+./start.sh
 ```
+
+The root script also starts the dedicated rule worker, so active Pings are polled while the simulator is running.
 
 The virtual Pod displays an eight-character code. Sign in to the dashboard,
 enter that code, and create a **New Ping**. The Pod polls every two seconds.
@@ -53,6 +55,8 @@ Simulator controls:
   press both physical buttons within 250 ms and release either button to stop.
 - Press `O` to simulate a disconnection. Cached content remains readable, but
   decisions stay disabled until the connection returns.
+- From Home, swipe or press left, right, or down to open that configurable
+  keychain surface; use the inverse direction to return Home.
 - Press the up and down arrow keys to move between a request summary and its
   supporting facts.
 - Press Escape to close the simulator.

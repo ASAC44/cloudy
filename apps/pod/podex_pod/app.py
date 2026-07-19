@@ -120,7 +120,11 @@ EMAIL_CHAT_DEMO = {
     ),
 }
 
-
+DEFAULT_SCREEN_LAYOUT = {
+    "left": ["app:github"],
+    "right": ["app:gmail"],
+    "down": ["app:codex"],
+}
 def idle_pose(elapsed_seconds: float) -> tuple[float, float, bool]:
     """Return the idle mascot's vertical offset, size, and blink state."""
     float_offset = 7 * math.sin(elapsed_seconds * math.tau / 5)
@@ -248,6 +252,9 @@ class PodApp:
         self.yawn_started: float | None = None
         self.buttons: list[Any] = []
         self.codex: dict[str, Any] = {}
+        self.screen_layout = DEFAULT_SCREEN_LAYOUT
+        self.screen_items: dict[str, dict[str, Any]] = {}
+        self.screen = "home"
         self.transcript = ""
         self.voice_revision_request: dict[str, Any] | None = None
         self.recorder = Recorder(storage.root)
@@ -275,6 +282,46 @@ class PodApp:
 
     def _circle(self, color: pygame.Color, center: tuple[float, float], radius: float) -> None:
         pygame.draw.circle(self.surface, color, self._point(*center), round(radius * self.render_scale))
+
+    def _feed_icon(self, feed_id: str, x: int, y: int) -> None:
+        color = MUTED
+        width = self.render_scale
+        rect = lambda left, top, wide, high: self._rect(x + left, y + top, wide, high)
+        point = lambda left, top: self._point(x + left, y + top)
+        line = lambda start, end: pygame.draw.line(self.surface, color, point(*start), point(*end), width)
+
+        if feed_id == "calendar":
+            pygame.draw.rect(self.surface, color, rect(1, 3, 16, 14), width, border_radius=2 * width)
+            line((1, 7), (17, 7)); line((5, 1), (5, 5)); line((13, 1), (13, 5))
+            for column, row in ((5, 10), (9, 10), (13, 10), (5, 14), (9, 14), (13, 14)):
+                self._circle(color, (x + column, y + row), 0.8)
+        elif feed_id == "notion":
+            pygame.draw.rect(self.surface, color, rect(3, 1, 13, 16), width, border_radius=2 * width)
+            line((1, 5), (5, 5)); line((1, 9), (5, 9)); line((1, 13), (5, 13))
+            line((7, 6), (12, 6)); line((7, 10), (12, 10)); line((7, 14), (11, 14))
+        elif feed_id == "gmail":
+            pygame.draw.rect(self.surface, color, rect(1, 3, 16, 12), width, border_radius=2 * width)
+            line((2, 5), (9, 10)); line((16, 5), (9, 10))
+        elif feed_id == "important":
+            pygame.draw.arc(self.surface, color, rect(3, 2, 12, 13), math.pi, math.tau, width)
+            line((3, 8), (3, 13)); line((15, 8), (15, 13)); line((3, 13), (15, 13))
+            self._circle(color, (x + 9, y + 16), 1)
+        elif feed_id == "github":
+            line((4, 3), (4, 15)); line((14, 3), (14, 8)); line((4, 9), (14, 9))
+            for center in ((4, 3), (4, 15), (14, 3), (14, 9)):
+                self._circle(color, (x + center[0], y + center[1]), 2)
+        elif feed_id == "deployments":
+            pygame.draw.polygon(self.surface, color, [point(5, 12), point(8, 4), point(15, 1), point(12, 8)], width)
+            self._circle(color, (x + 11, y + 5), 1.5)
+            line((6, 12), (3, 15)); line((8, 14), (5, 17)); line((11, 10), (15, 9))
+        elif feed_id == "slack":
+            pygame.draw.rect(self.surface, color, rect(2, 3, 15, 11), width, border_radius=3 * width)
+            line((6, 14), (5, 17)); line((5, 17), (10, 14))
+            line((6, 7), (13, 7)); line((6, 10), (11, 10))
+        else:
+            line((3, 5), (9, 9)); line((9, 9), (15, 4)); line((9, 9), (15, 15))
+            for center in ((3, 5), (9, 9), (15, 4), (15, 15)):
+                self._circle(color, (x + center[0], y + center[1]), 2)
 
     def start_gpio(self) -> None:
         if self.simulator:
@@ -314,7 +361,7 @@ class PodApp:
                 self.state = "queued"
             else:
                 self.transcript = ""
-                self.state = "request" if self.voice_revision_request else self._codex_state()
+                self.state = "request" if self.voice_revision_request else "idle"
                 self.voice_revision_request = None
             return
         if self.state == "idle" and outcome == "approved":
@@ -366,7 +413,7 @@ class PodApp:
                 self.pairing_code = event["pairing_code"]
                 self.state = "pairing"
             elif kind in ("paired", "idle"):
-                self.state = self._codex_state()
+                self.state = "idle"
                 self.request = None
             elif kind == "request":
                 self.request = event["request"]
@@ -379,11 +426,13 @@ class PodApp:
                 self.state = "request"
             elif kind == "decided":
                 self.state = event["outcome"]
+                self.screen = "home"
                 self.result_until = time.monotonic() + 1.3
             elif kind == "codex":
                 self.codex = event["codex"]
-                if self.state in ("idle", "codex", "target_unavailable"):
-                    self.state = self._codex_state()
+            elif kind == "screen_layout":
+                self.screen_layout = event["screen_layout"]
+                self.screen_items = {item["id"]: item for item in event.get("screen_items", [])}
             elif kind == "transcript":
                 self.transcript = event["transcript"]
                 self.wrap_cache.clear()
@@ -409,11 +458,6 @@ class PodApp:
         image = selected.render(value, True, color)
         self._blit(image, x, y)
         return y + round(selected.get_linesize() / self.render_scale)
-
-    def _codex_state(self) -> str:
-        if self.codex.get("thread"):
-            return "codex"
-        return "target_unavailable" if self.codex.get("target") else "idle"
 
     def _wrapped(
         self,
@@ -450,7 +494,7 @@ class PodApp:
             self.surface.blit(code_image, code_image.get_rect(center=self._point(480, 190)))
             self._wrapped("Expires after 10 minutes.", 386, 245, 200, self.small, MUTED)
         elif self.state == "idle":
-            self._render_idle()
+            self._render_screen_layout()
         elif self.state == "email_chat":
             self._render_email_chat()
         elif self.state in ("email_sent", "email_discarded"):
@@ -577,7 +621,37 @@ class PodApp:
         self.surface.blit(self.idle_stage, self.idle_stage.get_rect(center=self._point(320, 202)))
 
         label = self.idle_font.render("All caught up", True, INK)
-        self.surface.blit(label, label.get_rect(center=self._point(320, 438)))
+        self.surface.blit(label, label.get_rect(center=self._point(320, 420)))
+        hint = self.small.render("Swipe left, right, or down", True, MUTED)
+        self.surface.blit(hint, hint.get_rect(center=self._point(320, 460)))
+
+    def _render_screen_layout(self) -> None:
+        if self.screen == "home":
+            self._render_idle()
+            return
+        item_ids = self.screen_layout.get(self.screen, [])
+        labels = {"left": "Swipe left", "right": "Swipe right", "down": "Swipe down"}
+        inverse = {"left": "Swipe right for Home", "right": "Swipe left for Home", "down": "Swipe up for Home"}
+        self._status(labels[self.screen], GREEN)
+        self._text("Your keychain", 28, 72, self.review_title)
+        count = self.small.render(str(len(item_ids)), True, MUTED)
+        self.surface.blit(count, count.get_rect(topright=self._point(610, 78)))
+        if not item_ids:
+            self._text("Nothing attached", 30, 180, self.heading)
+            self._wrapped("Attach an app or MCP from the Podex dashboard.", 32, 238, 560, self.font, MUTED)
+        else:
+            y = 122
+            for item_id in item_ids[:6]:
+                item = self.screen_items.get(item_id, {})
+                provider = str(item.get("provider") or item_id.removeprefix("app:"))
+                name = str(item.get("name") or provider.replace("_", " ").title())
+                detail = str(item.get("detail") or "Setup required")
+                self._feed_icon(provider, 32, y + 1)
+                self._text(name, 64, y, self.font)
+                self._wrapped(detail, 300, y, 300, self.small, MUTED, 1)
+                self._line(DIVIDER, (28, y + 30), (612, y + 30))
+                y += 40
+        self._text(inverse[self.screen], 30, 448, self.small, MUTED)
 
     def _render_codex(self) -> None:
         thread = self.codex.get("thread") or {}
@@ -810,8 +884,19 @@ class PodApp:
         if self.swipe_start:
             delta_x = point[0] - self.swipe_start[0]
             delta_y = point[1] - self.swipe_start[1]
+            horizontal = abs(delta_x) >= 60 and abs(delta_x) > abs(delta_y)
             vertical = abs(delta_y) >= 60 and abs(delta_y) > abs(delta_x)
-            if vertical and self.review_page == 0 and self.swipe_start[1] >= 360 and delta_y < 0:
+            if self.state == "idle" and horizontal:
+                if self.screen == "home":
+                    self.screen = "right" if delta_x > 0 else "left"
+                elif self.screen == "left" and delta_x > 0 or self.screen == "right" and delta_x < 0:
+                    self.screen = "home"
+            elif self.state == "idle" and vertical:
+                if self.screen == "home" and delta_y > 0:
+                    self.screen = "down"
+                elif self.screen == "down" and delta_y < 0:
+                    self.screen = "home"
+            elif vertical and self.review_page == 0 and self.swipe_start[1] >= 360 and delta_y < 0:
                 self._show_review_page(1)
             elif vertical and self.review_page == 1 and self.detail_scroll == 0 and delta_y > 0:
                 self._show_review_page(0)
@@ -833,15 +918,23 @@ class PodApp:
                 else:
                     self.start_recording()
             elif event.key == pygame.K_DOWN:
-                if self.review_page == 0:
+                if self.state == "idle" and self.screen == "home":
+                    self.screen = "down"
+                elif self.review_page == 0:
                     self._show_review_page(1)
                 else:
                     self._scroll_detail_by(60)
             elif event.key == pygame.K_UP:
-                if self.detail_scroll:
+                if self.state == "idle" and self.screen == "down":
+                    self.screen = "home"
+                elif self.detail_scroll:
                     self._scroll_detail_by(-60)
                 else:
                     self._show_review_page(0)
+            elif event.key == pygame.K_LEFT and self.state == "idle":
+                self.screen = "home" if self.screen == "right" else "left" if self.screen == "home" else self.screen
+            elif event.key == pygame.K_RIGHT and self.state == "idle":
+                self.screen = "home" if self.screen == "left" else "right" if self.screen == "home" else self.screen
         presentation = (self.request or {}).get("presentation") or {}
         review_request = self.state == "email_chat" or bool(
             self.state == "request" and self.request
@@ -851,9 +944,9 @@ class PodApp:
             point = self.logical_point(event.pos)
             if point is not None:
                 self.dragging = True
-                self.swipe_start = point if review_request else None
+                self.swipe_start = point if review_request or self.state == "idle" else None
         if event.type == pygame.MOUSEBUTTONUP:
-            if review_request and hasattr(event, "pos"):
+            if (review_request or self.state == "idle") and hasattr(event, "pos"):
                 point = self.logical_point(event.pos)
                 if point is not None:
                     self._finish_swipe(point)
@@ -861,7 +954,7 @@ class PodApp:
         if event.type == pygame.MOUSEMOTION and self.dragging:
             if review_request and self.review_page == 1 and not self.review_transition:
                 self._scroll_detail_by(-event.rel[1])
-            elif not review_request:
+            elif not review_request and self.state != "idle":
                 self._scroll_by(-event.rel[1])
         if event.type == pygame.MOUSEWHEEL:
             if review_request and event.y:
@@ -871,15 +964,15 @@ class PodApp:
                     self._scroll_detail_by(-event.y * 40)
             elif not review_request:
                 self._scroll_by(-event.y * 36)
-        if event.type == pygame.FINGERDOWN and review_request:
+        if event.type == pygame.FINGERDOWN and (review_request or self.state == "idle"):
             self.swipe_start = (round(event.x * 640), round(event.y * 480))
-        if event.type == pygame.FINGERUP and review_request:
+        if event.type == pygame.FINGERUP and (review_request or self.state == "idle"):
             self._finish_swipe((round(event.x * 640), round(event.y * 480)))
         if event.type == pygame.FINGERMOTION:
             amount = -round(event.dy * LOGICAL_SIZE[1])
             if review_request and self.review_page == 1 and not self.review_transition:
                 self._scroll_detail_by(amount)
-            elif not review_request:
+            elif not review_request and self.state != "idle":
                 self._scroll_by(amount)
         return True
 

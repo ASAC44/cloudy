@@ -89,7 +89,9 @@ https://<your-api-domain>/v1/connections/oauth/gmail/callback
 Create a GitHub OAuth App with the first callback, then set
 `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`. In Google Cloud, enable the
 Gmail API, add the second callback to the web OAuth client, configure consent
-for `gmail.readonly`, and set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
+for `gmail.readonly` and `gmail.send`, and set `GOOGLE_CLIENT_ID` and
+`GOOGLE_CLIENT_SECRET`. Existing read-only Gmail connections must be
+reconnected before reply actions become available.
 
 Set `PODEX_PUBLIC_API_URL` to the public API origin, `PODEX_WEB_URL` to the
 dashboard origin, and `CONNECTION_ENCRYPTION_KEY` to a stable 32-byte base64

@@ -357,6 +357,64 @@ class PodTests(unittest.TestCase):
         self.assertEqual(self.app.state, "request")
         self.assertEqual(self.app.queue_size, 2)
 
+        layout = {"left": ["app:github"], "right": ["app:gmail"], "down": ["app:codex"]}
+        self.worker.events.put({"event": "screen_layout", "screen_layout": layout, "screen_items": []})
+        self.app.apply_worker_events()
+        self.assertEqual(self.app.screen_layout, layout)
+
+    def test_idle_screen_layout_renders_and_swipes_between_screens(self):
+        self.app.state = "idle"
+        self.assertEqual(self.app.screen, "home")
+        self.assertEqual(self.app.render().get_size(), (640, 480))
+
+        self.app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(500, 240)))
+        self.app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONUP, pos=(200, 240)))
+        self.assertEqual(self.app.screen, "left")
+        self.app.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RIGHT))
+        self.assertEqual(self.app.screen, "home")
+        self.app.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_DOWN))
+        self.assertEqual(self.app.screen, "down")
+        self.app.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_UP))
+        self.assertEqual(self.app.screen, "home")
+
+    def test_idle_touchscreen_taps_navigate_and_decisions_return_home(self):
+        self.app.state = "idle"
+        self.app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(500, 240)))
+        self.app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONUP, pos=(500, 240)))
+        self.assertEqual(self.app.screen, "home")
+
+        self.app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(100, 240)))
+        self.app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONUP, pos=(100, 240)))
+        self.assertEqual(self.app.screen, "home")
+
+        self.app.screen = "down"
+        self.worker.events.put({"event": "decided", "outcome": "approved"})
+        self.app.apply_worker_events()
+        self.assertEqual(self.app.screen, "home")
+
+    def test_every_feed_symbol_has_a_distinct_pod_render(self):
+        renders = set()
+        for feed_id in ("calendar", "notion", "gmail", "important", "github", "deployments", "slack", "n8n"):
+            self.app.surface.fill(BACKGROUND)
+            self.app._feed_icon(feed_id, 0, 0)
+            renders.add(pygame.image.tobytes(self.app.surface.subsurface((0, 0, 20, 20)), "RGB"))
+
+        self.assertEqual(len(renders), 8)
+
+    def test_worker_emits_changed_screen_layout_from_the_poll_response(self):
+        layout = {"left": ["app:github"], "right": ["app:gmail"], "down": ["app:codex"]}
+
+        class LayoutClient:
+            def current_request(self, _token):
+                return {"request": None, "queue_size": 0, "codex": {}, "screen_layout": layout}
+
+        self.storage.save_credentials("pod_token")
+        worker = PodWorker(LayoutClient(), self.storage, poll_seconds=0.01)
+        worker.start()
+        self.assertEqual(worker.events.get(timeout=1), {"event": "screen_layout", "screen_layout": layout, "screen_items": []})
+        worker.close()
+        worker.join(timeout=1)
+
     def test_reconnecting_reemits_the_cached_request(self):
         class RequestClient:
             def current_request(self, _token):

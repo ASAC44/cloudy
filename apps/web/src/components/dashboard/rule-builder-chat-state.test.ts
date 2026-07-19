@@ -8,4 +8,5 @@ test("rule chat state keeps multi-select answers stable and explains recoverable
   assert.deepEqual(toggleValue(["repo-a", "repo-b"], "repo-a"), ["repo-b"]);
   assert.match(humanizeRuleError("ai settings required"), /AI settings/);
   assert.match(humanizeRuleError("rule session expired"), /seven days/);
+  assert.match(humanizeRuleError("github permission"), /merge permission/);
 });

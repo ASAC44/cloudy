@@ -13,6 +13,7 @@ import type {
   RuleBuilderSession,
   TelegramAuthSession,
   CodexTarget,
+  ScreenLayout,
 } from "@/types/api";
 import type { ActionState, ConnectionInput } from "@/types/actions";
 
@@ -76,6 +77,22 @@ export async function revokePod(formData: FormData) {
   await apiFetch(`/v1/pods/${id}`, { method: "DELETE" });
   revalidatePath("/home");
   revalidatePath("/logs");
+}
+
+export async function savePodScreenLayout(
+  podId: string,
+  layout: ScreenLayout,
+  revision: number,
+): Promise<{ revision?: number; error?: string }> {
+  try {
+    const result = await apiFetch<{ screen_layout_revision: number }>(
+      `/v1/pods/${podId}/screen-layout`,
+      { method: "PUT", body: JSON.stringify({ layout, revision }) },
+    );
+    return { revision: result.screen_layout_revision };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Screen layout could not be saved" };
+  }
 }
 
 export async function claimCodexBridge(_previous: ActionState, formData: FormData): Promise<ActionState> {

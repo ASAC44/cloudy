@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { RuntimeEngine, pointerValue, resolveArguments } from './runtime-engine.js'
+import { gmailReviewPresentation, RuntimeEngine, pointerValue, resolveArguments } from './runtime-engine.js'
 import type { RuntimeRule, RuntimeStore, Store } from './types/store.js'
 
 const rule = (): RuntimeRule => ({
@@ -128,4 +128,17 @@ test('Stripe writes do not execute before an approved action is claimable', asyn
 
   assert.equal(await engine.dispatchOnce(), false)
   assert.equal(called, false)
+})
+
+test('Gmail approvals expose the complete reviewed email and exact reply', () => {
+  const presentation = gmailReviewPresentation(
+    { threadId: 'thread-1' },
+    [{ messages: [{ headers: { from: 'ava@example.com', subject: 'Review', date: 'Today' }, body: 'Complete original email.' }] }],
+    { thread_id: 'thread-1', message: 'Exact approved reply.' },
+    { match: true, title: 'Reply', summary: 'A reply is ready.', risk: 'low', warnings: [], draft: 'Exact approved reply.' },
+  )
+  assert.deepEqual(presentation, {
+    kind: 'email_reply_v1', sender: 'ava@example.com', time: 'Today', subject: 'Review', summary: 'A reply is ready.',
+    email: 'Complete original email.', response: 'Exact approved reply.',
+  })
 })

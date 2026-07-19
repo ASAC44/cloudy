@@ -9,7 +9,7 @@ import { ScreenLayoutBoard } from "@/components/dashboard/screen-layout-board";
 import { TestPingButton } from "@/components/dashboard/test-ping-button";
 import { Button } from "@/components/ui/button";
 import { apiFetch } from "@/lib/api";
-import type { ApprovalRequest, Pod } from "@/types/api";
+import type { ApprovalRequest, CodexOverview, Connection, Pod } from "@/types/api";
 import { relativeTime } from "@/lib/relative-time";
 import { createClient } from "@/lib/supabase/server";
 
@@ -38,13 +38,19 @@ export default async function HomePage({
 
   let pod: Pod | undefined;
   let pending: ApprovalRequest[] = [];
+  let connections: Connection[] = [];
+  let codex: CodexOverview = { bridges: [], workspaces: [], threads: [], target: null, voice_ready: false };
   let apiError = "";
-  const [podsResult, requestsResult] = await Promise.allSettled([
+  const [podsResult, requestsResult, connectionsResult, codexResult] = await Promise.allSettled([
     apiFetch<{ pods: Pod[] }>("/v1/pods"),
     apiFetch<{ requests: ApprovalRequest[] }>("/v1/requests?status=pending"),
+    apiFetch<{ connections: Connection[] }>("/v1/connections"),
+    apiFetch<CodexOverview>("/v1/codex"),
   ]);
   if (podsResult.status === "fulfilled") pod = podsResult.value.pods[0];
   if (requestsResult.status === "fulfilled") pending = requestsResult.value.requests;
+  if (connectionsResult.status === "fulfilled") connections = connectionsResult.value.connections;
+  if (codexResult.status === "fulfilled") codex = codexResult.value;
   const coreError = podsResult.status === "rejected"
     ? podsResult.reason
     : requestsResult.status === "rejected"
@@ -101,9 +107,17 @@ export default async function HomePage({
         </div>
       ) : null}
 
-      <div className="mt-10">
-        <ScreenLayoutBoard />
-      </div>
+      {pod ? (
+        <div className="mt-10">
+          <ScreenLayoutBoard
+            podId={pod.id}
+            initialLayout={pod.screen_layout}
+            initialRevision={pod.screen_layout_revision}
+            connections={connections}
+            codex={codex}
+          />
+        </div>
+      ) : null}
 
       <PendingPingsTable pings={pending} />
     </div>

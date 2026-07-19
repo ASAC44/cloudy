@@ -14,6 +14,7 @@ import {
   type PingRule,
   type PingRuleSummary,
   type Pod,
+  type ScreenLayout,
   type RuleBuilderSession,
   type RuleDraft,
   type RuleActivity,
@@ -30,6 +31,7 @@ import {
   type Store,
 } from './types/store.js'
 import { StoreError } from './store.js'
+import { LocalPodLayoutStore } from './local-pod-layout.js'
 
 function fail(error: { code?: string; message: string } | null): never {
   if (error?.code === '23503' && error.message.includes('ping_rules')) {
@@ -42,7 +44,7 @@ function fail(error: { code?: string; message: string } | null): never {
     throw new StoreError('automation_key_name_exists', error.message)
   }
   if (error?.code === '23505') throw new StoreError('active_pod_exists', error.message)
-  const code = error?.message.match(/(pairing_rate_limited|invalid_pairing_code|invalid_bridge_pairing_code|active_pod_exists|pod_not_authorized|request_not_found|request_already_resolved|request_expired|payload_changed|idempotency_conflict|codex_bridge_not_authorized|codex_target_not_found|codex_target_changed|rule_session_not_found|rule_session_expired|rule_session_conflict|rule_pod_unavailable|rule_connection_unavailable|rule_not_found|rule_edit_conflict|rule_review_required|invalid_rule_status|invalid_rule_definition|ping_event_conflict|invalid_ping_approval|telegram_auth_in_progress|telegram_auth_conflict)/)?.[1]
+  const code = error?.message.match(/(pairing_rate_limited|invalid_pairing_code|invalid_bridge_pairing_code|active_pod_exists|pod_not_authorized|pod_not_found|pod_layout_conflict|invalid_pod_layout|request_not_found|request_already_resolved|request_expired|payload_changed|idempotency_conflict|codex_bridge_not_authorized|codex_target_not_found|codex_target_changed|rule_session_not_found|rule_session_expired|rule_session_conflict|rule_pod_unavailable|rule_connection_unavailable|rule_not_found|rule_edit_conflict|rule_review_required|invalid_rule_status|invalid_rule_definition|ping_event_conflict|invalid_ping_approval|telegram_auth_in_progress|telegram_auth_conflict)/)?.[1]
   throw new StoreError(code ?? 'database_error', error?.message)
 }
 
@@ -52,13 +54,19 @@ function equalHash(left: string, right: string) {
   return a.length === b.length && timingSafeEqual(a, b)
 }
 
+function missingPodLayoutSchema(error: { code?: string; message: string } | null) {
+  return error?.code === '42703' || error?.code === '42883' || error?.code === 'PGRST202'
+}
+
 export class SupabaseStore implements Store, RuntimeStore {
   private readonly db: SupabaseClient
+  private readonly localPodLayouts?: LocalPodLayoutStore
 
-  constructor(url: string, secretKey: string) {
+  constructor(url: string, secretKey: string, localPodLayoutPath?: string) {
     this.db = createClient(url, secretKey, {
       auth: { persistSession: false, autoRefreshToken: false },
     })
+    if (localPodLayoutPath) this.localPodLayouts = new LocalPodLayoutStore(localPodLayoutPath)
   }
 
   async createPairingSession(input: {
@@ -109,16 +117,32 @@ export class SupabaseStore implements Store, RuntimeStore {
       p_name: name,
     })
     if (error || !data) fail(error)
-    return (Array.isArray(data) ? data[0] : data) as Pod
+    const pod = (Array.isArray(data) ? data[0] : data) as Pod
+    if (pod.screen_layout) return pod
+    const local = this.localPodLayouts?.get(pod.id)
+    if (!local) throw new StoreError('database_migration_required')
+    return { ...pod, screen_layout: local.layout, screen_layout_revision: local.revision }
   }
 
   async authenticatePod(podId: string, tokenHash: string) {
-    const { data, error } = await this.db
+    const response = await this.db
       .from('pods')
-      .select('id, owner_id, last_seen_at, token_hash')
+      .select('id, owner_id, last_seen_at, token_hash, screen_layout')
       .eq('id', podId)
       .is('revoked_at', null)
       .maybeSingle()
+    let data = response.data as { id: string; owner_id: string; last_seen_at: string | null; token_hash: string; screen_layout?: ScreenLayout } | null
+    let error = response.error
+    if (missingPodLayoutSchema(error) && this.localPodLayouts) {
+      const legacy = await this.db
+        .from('pods')
+        .select('id, owner_id, last_seen_at, token_hash')
+        .eq('id', podId)
+        .is('revoked_at', null)
+        .maybeSingle()
+      data = legacy.data
+      error = legacy.error
+    }
     if (error) fail(error)
     if (!data || !equalHash(data.token_hash, tokenHash)) return null
 
@@ -127,21 +151,60 @@ export class SupabaseStore implements Store, RuntimeStore {
       const { error: seenError } = await this.db.from('pods').update({ last_seen_at: new Date().toISOString() }).eq('id', podId)
       if (seenError) fail(seenError)
     }
-    return { id: data.id, ownerId: data.owner_id }
+    const screenLayout = data.screen_layout ?? this.localPodLayouts!.get(data.id).layout
+    return { id: data.id, ownerId: data.owner_id, screenLayout }
   }
 
   async listPods(ownerId: string): Promise<Pod[]> {
-    const { data, error } = await this.db
+    const response = await this.db
       .from('pods')
-      .select('id, name, paired_at, last_seen_at, revoked_at')
+      .select('id, name, paired_at, last_seen_at, revoked_at, screen_layout, screen_layout_revision')
       .eq('owner_id', ownerId)
       .is('revoked_at', null)
+    type PodRow = Omit<Pod, 'screen_layout' | 'screen_layout_revision' | 'online'> & Partial<Pick<Pod, 'screen_layout' | 'screen_layout_revision'>>
+    let data = response.data as PodRow[] | null
+    let error = response.error
+    if (missingPodLayoutSchema(error) && this.localPodLayouts) {
+      const legacy = await this.db
+        .from('pods')
+        .select('id, name, paired_at, last_seen_at, revoked_at')
+        .eq('owner_id', ownerId)
+        .is('revoked_at', null)
+      data = legacy.data
+      error = legacy.error
+    }
     if (error) fail(error)
     const onlineAfter = Date.now() - 45_000
-    return data.map((pod) => ({
-      ...pod,
-      online: Boolean(pod.last_seen_at && new Date(pod.last_seen_at).getTime() >= onlineAfter),
-    })) as Pod[]
+    return (data ?? []).map((pod) => {
+      const local = pod.screen_layout ? null : this.localPodLayouts!.get(pod.id)
+      return {
+        ...pod,
+        screen_layout: pod.screen_layout ?? local!.layout,
+        screen_layout_revision: pod.screen_layout_revision ?? local!.revision,
+        online: Boolean(pod.last_seen_at && new Date(pod.last_seen_at).getTime() >= onlineAfter),
+      }
+    })
+  }
+
+  async updatePodScreenLayout(ownerId: string, podId: string, expectedRevision: number, layout: ScreenLayout): Promise<Pod> {
+    const { data, error } = await this.db.rpc('update_pod_screen_layout', {
+      p_owner_id: ownerId,
+      p_pod_id: podId,
+      p_expected_revision: expectedRevision,
+      p_layout: layout,
+    })
+    if (missingPodLayoutSchema(error) && this.localPodLayouts) {
+      const { data: pod, error: podError } = await this.db.from('pods')
+        .select('id, name, paired_at, last_seen_at, revoked_at')
+        .eq('id', podId).eq('owner_id', ownerId).is('revoked_at', null).maybeSingle()
+      if (podError) fail(podError)
+      if (!pod) throw new StoreError('pod_not_found')
+      // ponytail: local development fallback cannot transact with hosted Pod ownership; production requires the Supabase migration.
+      const saved = this.localPodLayouts.update(podId, expectedRevision, layout)
+      return { ...pod, screen_layout: saved.layout, screen_layout_revision: saved.revision } as Pod
+    }
+    if (error || !data) fail(error)
+    return (Array.isArray(data) ? data[0] : data) as Pod
   }
 
   async revokePod(ownerId: string, podId: string): Promise<boolean> {
@@ -458,14 +521,17 @@ export class SupabaseStore implements Store, RuntimeStore {
   }
 
   async deleteConnection(ownerId: string, connectionId: string) {
-    const { data, error } = await this.db
-      .from('connections')
-      .delete()
-      .eq('id', connectionId)
-      .eq('owner_id', ownerId)
-      .select('id')
+    const { data, error } = await this.db.rpc('delete_connection_with_layout_cleanup', {
+      p_owner_id: ownerId,
+      p_connection_id: connectionId,
+    })
+    if (missingPodLayoutSchema(error)) {
+      const legacy = await this.db.from('connections').delete().eq('id', connectionId).eq('owner_id', ownerId).select('id')
+      if (legacy.error) fail(legacy.error)
+      return Boolean(legacy.data?.length)
+    }
     if (error) fail(error)
-    return Boolean(data?.length)
+    return Boolean(data)
   }
 
   async createOAuthState(stateHash: string, state: OAuthState, expiresAt: string) {
@@ -1104,7 +1170,7 @@ export class SupabaseStore implements Store, RuntimeStore {
   async getRuntimeRule(ownerId: string, ruleId: string) {
     const { data, error } = await this.db
       .from('ping_rules')
-      .select('*, ping_rule_context_bindings(connection_id, capability_id, capability_name, capability_schema_hash, arguments, position), ping_rule_runtime_states(cursor, baseline_completed, next_run_at, consecutive_failures, schema_drift)')
+      .select('*, ping_rule_context_bindings(connection_id, capability_id, capability_name, capability_schema_hash, arguments, position), ping_rule_runtime_states!ping_rule_runtime_states_owner_id_rule_id_fkey(cursor, baseline_completed, next_run_at, consecutive_failures, schema_drift)')
       .eq('owner_id', ownerId)
       .eq('id', ruleId)
       .eq('schema_version', 2)

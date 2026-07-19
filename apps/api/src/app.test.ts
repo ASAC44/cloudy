@@ -7,6 +7,7 @@ import type { MiddlewareHandler } from 'hono'
 import { createApp } from './app.js'
 import { createAiModel, type AiTester } from './ai.js'
 import { ConnectionService } from './connections.js'
+import { GithubApiError } from './github-pr.js'
 import { RuleBuilderService, RuleBuilderError } from './rule-builder.js'
 import type {
   AutomationKey,
@@ -66,6 +67,8 @@ class FakeStore implements Store {
     paired_at: new Date().toISOString(),
     last_seen_at: null,
     revoked_at: null,
+    screen_layout: { left: ['app:github'], right: ['app:gmail'], down: ['app:codex'] },
+    screen_layout_revision: 0,
   }
 
   async createPairingSession(input: { podId: string; tokenHash: string }) {
@@ -84,10 +87,17 @@ class FakeStore implements Store {
   }
   async authenticatePod(podId: string, tokenHash: string) {
     return !this.revoked && podId === this.pod.id && tokenHash === this.pairingTokenHash
-      ? { id: podId, ownerId: 'user-1' }
+      ? { id: podId, ownerId: 'user-1', screenLayout: this.pod.screen_layout }
       : null
   }
   async listPods() { return [this.pod] }
+  async updatePodScreenLayout(_ownerId: string, podId: string, expectedRevision: number, layout: Pod['screen_layout']) {
+    if (podId !== this.pod.id) throw new StoreError('pod_not_found')
+    if (expectedRevision !== this.pod.screen_layout_revision) throw new StoreError('pod_layout_conflict')
+    this.pod.screen_layout = layout
+    this.pod.screen_layout_revision += 1
+    return this.pod
+  }
   async revokePod(_ownerId: string, podId: string) {
     this.revoked = podId === this.pod.id
     return this.revoked
@@ -424,6 +434,16 @@ test('rule builder requires the configured user model before creating a persiste
   )
 })
 
+test('rule builder returns safe GitHub permission errors', async () => {
+  const ruleBuilder = { turn: async () => { throw new GithubApiError('permission') } } as unknown as RuleBuilderService
+  const response = await app(new FakeStore(), fetch, {}, async () => undefined, ruleBuilder).app.request(
+    `/v1/rule-builder/sessions/${randomTestId(72)}/turns`,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ revision: 1, message: 'owner/repository' }) },
+  )
+  assert.equal(response.status, 403)
+  assert.deepEqual(await response.json(), { error: 'github permission' })
+})
+
 test('automation keys are revealed once, listed safely, and revoked', async () => {
   const { app: api } = app()
   const created = await api.request('/v1/automation-keys', {
@@ -737,6 +757,29 @@ test('claim rejects a second active Pod', async () => {
   assert.equal(response.status, 409)
 })
 
+test('screen layouts persist once and reject invalid or stale writes', async () => {
+  const setup = app()
+  const layout = { left: ['app:github', 'app:vercel'], right: ['app:gmail'], down: ['app:codex'] }
+  const saved = await setup.app.request(`/v1/pods/${setup.store.pod.id}/screen-layout`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ layout, revision: 0 }),
+  })
+  assert.equal(saved.status, 200)
+  assert.equal((await saved.json()).screen_layout_revision, 1)
+  assert.deepEqual(setup.store.pod.screen_layout, layout)
+
+  const stale = await setup.app.request(`/v1/pods/${setup.store.pod.id}/screen-layout`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ layout, revision: 0 }),
+  })
+  assert.equal(stale.status, 409)
+
+  const invalid = await setup.app.request(`/v1/pods/${setup.store.pod.id}/screen-layout`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ layout: { ...layout, left: ['app:github', 'app:gmail'] }, revision: 1 }),
+  })
+  assert.equal(invalid.status, 400)
+})
+
 test('test Ping validation rejects incomplete input', async () => {
   const response = await app().app.request('/v1/requests', {
     method: 'POST',
@@ -792,7 +835,11 @@ test('Pod polls and resolves the exact current request', async () => {
     headers: { Authorization: `Bearer ${token}` },
   })
   assert.equal(current.status, 200)
-  assert.equal((await current.json()).queue_size, 1)
+  const currentBody = await current.json()
+  assert.equal(currentBody.queue_size, 1)
+  assert.deepEqual(currentBody.screen_layout, {
+    left: ['app:github'], right: ['app:gmail'], down: ['app:codex'],
+  })
 
   const decision = await api.request(`/v1/pod/requests/${request.id}/decision`, {
     method: 'POST',
@@ -1099,10 +1146,14 @@ test('OAuth start stores one-use state and returns a provider authorization URL'
 })
 
 test('GitHub OAuth callback exchanges credentials and verifies the official API', async () => {
+  let mcpCalls = 0
   const fetcher: typeof fetch = async (input, init) => {
     const url = String(input)
     if (url.includes('/login/oauth/access_token')) return Response.json({ access_token: 'github-token' })
     if (url === 'https://api.github.com/user') return Response.json({ login: 'octocat' })
+    if (url.startsWith('https://api.github.com/repos/octocat/repo/pulls?')) return Response.json([])
+    if (url === 'https://api.github.com/repos/octocat/repo') return Response.json({ permissions: { push: true } })
+    mcpCalls += 1
     const request = JSON.parse(String(init?.body))
     if (request.method === 'notifications/initialized') return new Response(null, { status: 202 })
     const result = request.method === 'initialize'
@@ -1110,7 +1161,7 @@ test('GitHub OAuth callback exchanges credentials and verifies the official API'
       : { tools: [] }
     return Response.json({ jsonrpc: '2.0', id: request.id, result })
   }
-  const { app: api } = app(new FakeStore(), fetcher, {
+  const { app: api, connections: service } = app(new FakeStore(), fetcher, {
     githubClientId: 'client-id', githubClientSecret: 'client-secret',
   })
   const start = await api.request('/v1/connections/oauth/github/start', {
@@ -1123,6 +1174,11 @@ test('GitHub OAuth callback exchanges credentials and verifies the official API'
   const connections = (await (await api.request('/v1/connections')).json()).connections
   assert.equal(connections[0].account_label, 'octocat')
   assert.equal(connections[0].status, 'connected')
+  const source = (await service.discoverConnectionCapabilities('user-1', connections[0].id))
+    .find(({ name }) => name === 'github.ready_pull_requests')!
+  mcpCalls = 0
+  await service.callRuntimeCapability('user-1', source, { repositories: ['octocat/repo'] }, 'source')
+  assert.equal(mcpCalls, 0)
 })
 
 test('Gmail OAuth refreshes an expired token before reading the profile', async () => {
@@ -1131,7 +1187,7 @@ test('Gmail OAuth refreshes an expired token before reading the profile', async 
     const url = String(input)
     calls.push(url)
     if (url === 'https://oauth2.googleapis.com/token' && calls.length === 1) {
-      return Response.json({ access_token: 'expired-token', refresh_token: 'refresh-token', expires_in: 0 })
+      return Response.json({ access_token: 'expired-token', refresh_token: 'refresh-token', expires_in: 0, scope: 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send' })
     }
     if (url === 'https://oauth2.googleapis.com/token') return Response.json({ access_token: 'fresh-token', expires_in: 3600 })
     if (url.includes('/gmail/v1/users/me/profile')) return Response.json({ emailAddress: 'owner@example.com' })
@@ -1143,7 +1199,9 @@ test('Gmail OAuth refreshes an expired token before reading the profile', async 
   const start = await api.request('/v1/connections/oauth/gmail/start', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Inbox' }),
   })
-  const state = new URL((await start.json()).authorization_url).searchParams.get('state')!
+  const authorizationUrl = (await start.json()).authorization_url
+  assert.match(authorizationUrl, /gmail.send/)
+  const state = new URL(authorizationUrl).searchParams.get('state')!
   const callback = await api.request(`/v1/connections/oauth/gmail/callback?state=${encodeURIComponent(state)}&code=code`)
   assert.equal(callback.status, 302)
   assert.deepEqual(calls, [

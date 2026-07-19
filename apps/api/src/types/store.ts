@@ -9,7 +9,20 @@ export type Pod = {
   paired_at: string
   last_seen_at: string | null
   revoked_at: string | null
+  screen_layout: ScreenLayout
+  screen_layout_revision: number
   online?: boolean
+}
+
+export type ScreenDirection = 'left' | 'right' | 'down'
+export type ScreenLayout = Record<ScreenDirection, string[]>
+
+export type ScreenItem = {
+  id: string
+  name: string
+  provider: ConnectionProvider | 'codex'
+  status: 'ready' | 'disconnected' | 'attention'
+  detail: string
 }
 
 export type ApprovalRequest = {
@@ -397,8 +410,9 @@ export interface Store {
     tokenHash: string,
   ): Promise<PairingStatus | null>
   claimPairing(codeHash: string, ownerId: string, name: string): Promise<Pod>
-  authenticatePod(podId: string, tokenHash: string): Promise<{ id: string; ownerId: string } | null>
+  authenticatePod(podId: string, tokenHash: string): Promise<{ id: string; ownerId: string; screenLayout: ScreenLayout } | null>
   listPods(ownerId: string): Promise<Pod[]>
+  updatePodScreenLayout(ownerId: string, podId: string, expectedRevision: number, layout: ScreenLayout): Promise<Pod>
   revokePod(ownerId: string, podId: string): Promise<boolean>
   createRequest(ownerId: string, request: NewRequest, payloadHash: string): Promise<ApprovalRequest>
   listRequests(ownerId: string, status?: string): Promise<ApprovalRequest[]>

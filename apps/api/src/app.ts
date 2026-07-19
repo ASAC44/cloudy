@@ -4,9 +4,10 @@ import { Hono, type Context, type MiddlewareHandler } from 'hono'
 import { jwk } from 'hono/jwk'
 import type { JwtVariables } from 'hono/jwt'
 
-import type { NewRequest, RuntimeStore, Store, TelegramAuthSession } from './types/store.js'
+import type { Connection, NewRequest, RuntimeStore, ScreenItem, Store, TelegramAuthSession } from './types/store.js'
 import { StoreError } from './store.js'
 import { ConnectionError, type ConnectionService, validatePublicEndpoint } from './connections.js'
+import { GithubApiError } from './github-pr.js'
 import { isAiProvider, testAiSettings, type AiTester } from './ai.js'
 import { RuleBuilderError, type RuleBuilderService } from './rule-builder.js'
 
@@ -76,6 +77,43 @@ function textList(value: unknown, maxItems: number, maxLength: number) {
   return items.every((item): item is string => item !== null) ? items : null
 }
 
+const SCREEN_DIRECTIONS = ['left', 'right', 'down'] as const
+const SCREEN_APPS = ['github', 'gmail', 'codex', 'vercel', 'telegram', 'linear', 'stripe']
+
+function validScreenLayout(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const layout = value as Record<string, unknown>
+  if (Object.keys(layout).sort().join(',') !== 'down,left,right') return false
+  if (!SCREEN_DIRECTIONS.every((direction) => Array.isArray(layout[direction]) && (layout[direction] as unknown[]).length <= 6)) return false
+  const ids = SCREEN_DIRECTIONS.flatMap((direction) => layout[direction] as unknown[])
+  return ids.every((id) => typeof id === 'string' && (
+    SCREEN_APPS.includes(id.replace(/^app:/, '')) || /^connection:[0-9a-f-]{36}$/.test(id)
+  )) && new Set(ids).size === ids.length
+}
+
+function keychainItems(connections: Connection[], codex: Awaited<ReturnType<Store['listCodex']>>): ScreenItem[] {
+  const definitions: Array<[Connection['provider'] | 'codex', string]> = [
+    ['github', 'GitHub'], ['gmail', 'Gmail'], ['codex', 'Codex'], ['vercel', 'Vercel'],
+    ['telegram', 'Telegram'], ['linear', 'Linear'], ['stripe', 'Stripe'],
+  ]
+  const items = definitions.map(([provider, name]): ScreenItem => {
+    if (provider === 'codex') {
+      const online = codex.bridges.filter((bridge) => bridge.online).length
+      return { id: 'app:codex', name, provider, status: online && codex.target ? 'ready' : codex.bridges.length ? 'attention' : 'disconnected', detail: online ? `${online} bridge online${codex.target ? ' · target selected' : ' · choose a target'}` : 'Pair a local bridge' }
+    }
+    const accounts = connections.filter((connection) => connection.provider === provider)
+    const ready = accounts.filter((connection) => connection.status === 'connected').length
+    return { id: `app:${provider}`, name, provider, status: ready ? 'ready' : accounts.length ? 'attention' : 'disconnected', detail: ready ? `${ready} connected account${ready === 1 ? '' : 's'}` : accounts.length ? 'Connection needs attention' : 'Not connected' }
+  })
+  return [...items, ...connections.filter(({ provider }) => provider === 'custom_mcp').map((connection): ScreenItem => ({
+    id: `connection:${connection.id}`,
+    name: connection.name,
+    provider: 'custom_mcp',
+    status: connection.status === 'connected' ? 'ready' : connection.status === 'failed' ? 'attention' : 'disconnected',
+    detail: connection.account_label ?? connection.last_error ?? 'Custom MCP',
+  }))]
+}
+
 function baseUrl(value: unknown) {
   const raw = text(value, 2048)
   if (!raw) return null
@@ -131,6 +169,10 @@ function errorResponse(c: AppContext, error: unknown) {
     }[error.code] ?? 500
     return c.json({ error: error.code.replaceAll('_', ' ') }, status as 400)
   }
+  if (error instanceof GithubApiError) {
+    const status = { authentication: 409, permission: 403, rate_limit: 429, not_found: 404, conflict: 409, unavailable: 503, ambiguous: 502 }[error.code]
+    return c.json({ error: `github ${error.code.replaceAll('_', ' ')}` }, status as 400)
+  }
   if (!(error instanceof StoreError)) {
     console.error(error instanceof Error ? error.message : 'Unknown API error')
     return c.json({ error: 'Internal server error' }, 500)
@@ -160,6 +202,9 @@ function errorResponse(c: AppContext, error: unknown) {
     codex_bridge_not_authorized: 401,
     codex_target_not_found: 409,
     codex_target_changed: 409,
+    pod_not_found: 404,
+    pod_layout_conflict: 409,
+    invalid_pod_layout: 400,
   }[error.code] ?? 500
   return c.json({ error: error.code.replaceAll('_', ' ') }, status as 400)
 }
@@ -379,6 +424,21 @@ export function createApp(
     if (!ownerId) return c.json({ error: 'Unauthorized' }, 401)
     try {
       return c.json({ pods: await store.listPods(ownerId) })
+    } catch (error) {
+      return errorResponse(c, error)
+    }
+  })
+
+  app.put('/v1/pods/:id/screen-layout', async (c) => {
+    const ownerId = userId(c)
+    if (!ownerId) return c.json({ error: 'Unauthorized' }, 401)
+    const body = await c.req.json().catch(() => null)
+    if (!UUID_PATTERN.test(c.req.param('id')) || !Number.isSafeInteger(body?.revision) || body.revision < 0 || !validScreenLayout(body?.layout)) {
+      return c.json({ error: 'Invalid Pod screen layout' }, 400)
+    }
+    try {
+      const pod = await store.updatePodScreenLayout(ownerId, c.req.param('id'), body.revision, body.layout)
+      return c.json({ screen_layout: pod.screen_layout, screen_layout_revision: pod.screen_layout_revision })
     } catch (error) {
       return errorResponse(c, error)
     }
@@ -909,7 +969,9 @@ export function createApp(
     try {
       const pod = await podIdentity(c, store)
       if (!pod) return c.json({ error: 'Unauthorized' }, 401)
-      const [current, codex] = await Promise.all([store.currentRequest(pod.ownerId), store.codexStatus(pod.ownerId)])
+      const [current, codex, connections, codexOverview] = await Promise.all([
+        store.currentRequest(pod.ownerId), store.codexStatus(pod.ownerId), store.listConnections(pod.ownerId), store.listCodex(pod.ownerId),
+      ])
       let request = current.request
       if (request?.action_payload?.kind === 'codex_interaction' && connectionService) {
         const encrypted = await store.codexInteractionPayload(pod.ownerId, request.id)
@@ -929,7 +991,13 @@ export function createApp(
           presentation: connectionService.decryptPrivatePayload<Record<string, unknown>>(presentation.encryptedDraft),
         } as typeof request
       }
-      return c.json({ request, queue_size: current.queueSize, codex })
+      return c.json({
+        request,
+        queue_size: current.queueSize,
+        codex,
+        screen_layout: pod.screenLayout,
+        screen_items: keychainItems(connections, codexOverview),
+      })
     } catch (error) {
       return errorResponse(c, error)
     }

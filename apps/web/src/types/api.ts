@@ -1,8 +1,21 @@
+export type ScreenDirection = "left" | "right" | "down";
+export type ScreenLayout = Record<ScreenDirection, string[]>;
+
+export type ScreenItem = {
+  id: string;
+  name: string;
+  provider: ConnectionProvider | "codex";
+  status: "ready" | "disconnected" | "attention";
+  detail: string;
+};
+
 export type Pod = {
   id: string;
   name: string;
   paired_at: string;
   last_seen_at: string | null;
+  screen_layout: ScreenLayout;
+  screen_layout_revision: number;
   online?: boolean;
 };
 

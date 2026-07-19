@@ -16,6 +16,11 @@ integration ideas belong in [Product vision](/docs/product/vision).
 | Codex bridge | Local Node.js process | Local `codex app-server` session, selected workspace access, and approval exchange |
 | Data store | Supabase Postgres and Auth | Canonical users, credentials, Pods, requests, decisions, integrations, rules, Codex state, and audit records |
 
+Local development can temporarily persist Pod screen layouts in SQLite when
+the matching Supabase migration has not been applied. This compatibility path
+is enabled only by the development launcher; production keeps Postgres as the
+sole authoritative store and fails closed on schema mismatch.
+
 The web and API are separate processes. The Hono process runs a guarded,
 non-overlapping background drain loop; database leases recover abandoned work
 after restarts and coordinate multiple API replicas.
@@ -27,10 +32,16 @@ Approve and Reject buttons, a microphone, Wi-Fi, and no speaker. Raspberry Pi
 OS Lite launches pygame under Cage as a systemd service.
 
 The Pod polls the API every two seconds using a revocable Pod-scoped bearer
-token. It stores that token and the active request in its state directory with
-mode `0600`; Supabase, OAuth, AI, and integration credentials never reach the
-device. If the network drops, the cached request remains readable but decisions
-stay disabled until the API is reachable.
+token. Each response includes the saved AI-keychain layout; the dashboard
+autosaves drag-and-drop changes, and the Pod applies them on its next poll.
+The animated mascot is Home. A left, right, or downward finger swipe opens the
+matching configurable surface, and the inverse gesture returns Home. Each
+surface can hold up to six ordered official apps or individual Custom MCP
+connections. Feed order, labels, connection health, and provider symbols mirror
+the dashboard while approval and Codex states take display priority. The Pod stores its token and active request in its state
+directory with mode `0600`; Supabase, OAuth, AI, and integration credentials
+never reach the device. If the network drops, the cached request remains
+readable but decisions stay disabled until the API is reachable.
 
 The microphone is captured with ALSA `arecord` as mono 16 kHz, 16-bit PCM WAV,
 limited to 30 seconds. Holding both buttons records; releasing either stops.
@@ -63,6 +74,9 @@ Stripe, and a custom remote MCP endpoint. GitHub and Gmail use OAuth; Vercel,
 Linear, and Stripe accept encrypted bearer credentials; Telegram supports bot
 or user authorization; and custom MCP connections support configured
 authentication. Linear and Stripe use fixed official Streamable HTTP endpoints.
+Gmail requests `gmail.readonly` plus `gmail.send`; reply delivery is exposed only
+as an exact, hash-bound action after the user approves the complete email and
+response on the Pod.
 
 The rule builder uses the chosen AI provider to turn a conversation into a
 reviewable rule definition. Supported providers are OpenAI, Anthropic,

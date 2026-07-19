@@ -60,6 +60,25 @@ test('Linear and Stripe provider migration is atomic and rollback preserves conn
   assert.match(rollback, /commit;\s*$/)
 })
 
+test('Pod screen layouts are constrained, revisioned, and rollback-safe', async () => {
+  const migration = await readFile(new URL('supabase/migrations/20260720010000_pod_screen_layout.sql', root), 'utf8')
+  const rollback = await readFile(new URL('supabase/rollback/20260720010000_pod_screen_layout.sql', root), 'utf8')
+
+  assert.match(migration, /^begin;/)
+  assert.match(migration, /constraint pods_valid_screen_layout check/)
+  assert.match(migration, /where id = p_pod_id and owner_id = p_owner_id and revoked_at is null[\s\S]*for update/)
+  assert.match(migration, /pod_layout_conflict/)
+  assert.match(migration, /screen_layout_revision = screen_layout_revision \+ 1/)
+  assert.match(migration, /array\['left', 'right', 'down'\]/)
+  assert.match(migration, /connection\.owner_id = p_owner_id[\s\S]*connection\.provider = 'custom_mcp'/)
+  assert.match(migration, /function public\.delete_connection_with_layout_cleanup\([\s\S]*delete from public\.connections[\s\S]*update public\.pods/)
+  assert.match(migration, /commit;\s*$/)
+  assert.match(rollback, /^begin;/)
+  assert.match(rollback, /drop column if exists screen_layout/)
+  assert.match(rollback, /drop function if exists public\.delete_connection_with_layout_cleanup/)
+  assert.match(rollback, /commit;\s*$/)
+})
+
 test('rule builder can request first-class Linear and Stripe connections', async () => {
   const source = await readFile(new URL('apps/api/src/rule-builder.ts', root), 'utf8')
   assert.match(source, /enum: \['github', 'gmail', 'vercel', 'telegram', 'linear', 'stripe', 'custom_mcp', 'other'\]/)
