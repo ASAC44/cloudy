@@ -1,4 +1,5 @@
 import queue
+import os
 import threading
 import time
 import uuid
@@ -32,7 +33,13 @@ class PodWorker(threading.Thread):
             self.emit("reconnecting")
 
     def decide(self, request: dict[str, Any], outcome: str) -> None:
-        self.commands.put({"request": request, "outcome": outcome})
+        self.commands.put({"request": request, "outcome": outcome, "idempotency_key": str(uuid.uuid4())})
+
+    def transcribe(self, path: str) -> None:
+        self.commands.put({"transcribe": path})
+
+    def prompt(self, prompt: str, target_revision: int, replace_request: dict[str, Any] | None = None) -> None:
+        self.commands.put({"prompt": prompt, "target_revision": target_revision, "replace_request": replace_request, "idempotency_key": str(uuid.uuid4()), "decision_idempotency_key": str(uuid.uuid4()) if replace_request else None})
 
     def close(self) -> None:
         self.stop_event.set()
@@ -42,11 +49,13 @@ class PodWorker(threading.Thread):
         saved_credentials = self.storage.credentials()
         token = saved_credentials.get("token") if saved_credentials else None
         last_request_id: str | None = None
+        last_codex = repr({})
 
         while not self.stop_event.is_set():
             if self.offline.is_set():
                 self.stop_event.wait(0.2)
                 continue
+            command: dict[str, Any] | None = None
             try:
                 if not token:
                     if pairing is None:
@@ -69,6 +78,24 @@ class PodWorker(threading.Thread):
                     command = None
                 if command and command.get("refresh"):
                     last_request_id = None
+                elif command and command.get("transcribe"):
+                    path = command["transcribe"]
+                    try:
+                        result = self.client.transcribe(token, path)
+                        self.emit("transcript", transcript=result["transcript"])
+                    finally:
+                        try:
+                            os.unlink(path)
+                        except FileNotFoundError:
+                            pass
+                    continue
+                elif command and command.get("prompt"):
+                    self.client.prompt(token, command["prompt"], command["target_revision"], command["idempotency_key"], command.get("replace_request"), command.get("decision_idempotency_key"))
+                    if command.get("replace_request"):
+                        self.storage.clear_request()
+                        last_request_id = None
+                    self.emit("prompt_queued")
+                    continue
                 elif command:
                     request = command["request"]
                     outcome = command["outcome"]
@@ -77,7 +104,7 @@ class PodWorker(threading.Thread):
                         request["id"],
                         outcome,
                         request["payload_hash"],
-                        str(uuid.uuid4()),
+                        command["idempotency_key"],
                     )
                     self.storage.clear_request()
                     last_request_id = None
@@ -86,6 +113,11 @@ class PodWorker(threading.Thread):
                     continue
 
                 current = self.client.current_request(token)
+                codex = current.get("codex") or {}
+                serialized_codex = repr(codex)
+                if serialized_codex != last_codex:
+                    self.emit("codex", codex=codex)
+                    last_codex = serialized_codex
                 request = current.get("request")
                 if request:
                     self.storage.save_request(request)
@@ -102,6 +134,9 @@ class PodWorker(threading.Thread):
                 self.stop_event.wait(self.poll_seconds)
             except ApiError as error:
                 if error.status == 0:
+                    last_request_id = None
+                    if command and not command.get("refresh") and not command.get("transcribe"):
+                        self.commands.put(command)
                     self.emit("offline")
                     self.stop_event.wait(self.poll_seconds)
                 elif error.status == 401 and token:
@@ -115,5 +150,7 @@ class PodWorker(threading.Thread):
                 elif error.status == 404 and pairing:
                     pairing = None
                 else:
+                    if error.status >= 500 and command and not command.get("refresh") and not command.get("transcribe"):
+                        self.commands.put(command)
                     self.emit("error", message=str(error))
                     self.stop_event.wait(self.poll_seconds)

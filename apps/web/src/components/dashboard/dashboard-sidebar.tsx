@@ -3,13 +3,14 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ChevronsUpDown, LogOut } from "lucide-react";
+import { BookOpenText, ChevronsUpDown, LogOut } from "lucide-react";
 
 import { signOut } from "@/app/(dashboard)/actions";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -36,10 +37,11 @@ const navigation = [
   { label: "Configure", href: "/configure" },
   { label: "Connections", href: "/connections" },
   { label: "Automations", href: "/automations" },
+  { label: "Codex", href: "/codex" },
   { label: "Settings", href: "/settings" },
 ];
 
-type SidebarUser = { name: string; email: string };
+type SidebarUser = { name: string; email: string; avatarUrl?: string };
 
 export function DashboardSidebar({ user }: { user: SidebarUser }) {
   const pathname = usePathname();
@@ -87,6 +89,15 @@ export function DashboardSidebar({ user }: { user: SidebarUser }) {
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               ))}
+              <SidebarMenuItem className="mt-3 border-t border-sidebar-border pt-3">
+                <SidebarMenuButton
+                  className="bg-clay/10 text-clay hover:bg-clay/15 hover:text-clay"
+                  render={<Link href="/docs" />}
+                >
+                  <BookOpenText aria-hidden="true" />
+                  <span>Docs</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -103,7 +114,7 @@ export function DashboardSidebar({ user }: { user: SidebarUser }) {
             }
           >
             <Avatar>
-              <AvatarImage src="/podex-mascot.png" alt="" />
+              {user.avatarUrl ? <AvatarImage src={user.avatarUrl} alt="" referrerPolicy="no-referrer" /> : null}
               <AvatarFallback>{initials}</AvatarFallback>
             </Avatar>
             <span className="min-w-0 flex-1">
@@ -113,14 +124,17 @@ export function DashboardSidebar({ user }: { user: SidebarUser }) {
             <ChevronsUpDown className="size-4 text-muted-foreground" aria-hidden="true" />
           </DropdownMenuTrigger>
           <DropdownMenuContent side="top" align="start" sideOffset={8}>
-            <DropdownMenuLabel className="grid gap-0.5 px-2 py-1.5">
-              <span className="truncate text-sm text-foreground">{user.name}</span>
-              <span className="truncate font-normal">{user.email}</span>
-            </DropdownMenuLabel>
+            <DropdownMenuGroup>
+              <DropdownMenuLabel className="grid gap-0.5 px-2 py-1.5">
+                <span className="truncate text-sm text-foreground">{user.name}</span>
+                <span className="truncate font-normal">{user.email}</span>
+              </DropdownMenuLabel>
+            </DropdownMenuGroup>
             <DropdownMenuSeparator />
             <form action={signOut}>
               <DropdownMenuItem
                 variant="destructive"
+                nativeButton
                 render={<button type="submit" className="w-full" />}
               >
                 <LogOut aria-hidden="true" />

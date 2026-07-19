@@ -8,12 +8,15 @@ import { revalidatePath } from "next/cache";
 import type {
   AutomationKey,
   Connection,
-  ConnectionProvider,
   PingRule,
+  RuleActivity,
   RuleBuilderSession,
-} from "@/lib/api";
+  TelegramAuthSession,
+  CodexTarget,
+} from "@/types/api";
+import type { ActionState, ConnectionInput } from "@/types/actions";
 
-export type ActionState = { error?: string; success?: string };
+export type { ActionState, ConnectionInput } from "@/types/actions";
 
 function value(formData: FormData, name: string) {
   return String(formData.get(name) ?? "").trim();
@@ -75,6 +78,46 @@ export async function revokePod(formData: FormData) {
   revalidatePath("/logs");
 }
 
+export async function claimCodexBridge(_previous: ActionState, formData: FormData): Promise<ActionState> {
+  try {
+    await apiFetch("/v1/codex/bridges/claim", { method: "POST", body: JSON.stringify({ code: value(formData, "code").toUpperCase(), name: value(formData, "name") }) });
+    revalidatePath("/codex");
+    return { success: "Codex bridge connected." };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Bridge pairing failed" };
+  }
+}
+
+export async function revokeCodexBridge(id: string) {
+  try {
+    await apiFetch(`/v1/codex/bridges/${id}`, { method: "DELETE" });
+    revalidatePath("/codex");
+    return {};
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Bridge could not be revoked" };
+  }
+}
+
+export async function selectCodexTarget(input: { workspaceId: string; threadId: string | null; revision: number | null }): Promise<{ target?: CodexTarget; error?: string }> {
+  try {
+    const result = await apiFetch<{ target: CodexTarget }>("/v1/codex/target", { method: "PUT", body: JSON.stringify({ workspace_id: input.workspaceId, thread_id: input.threadId, revision: input.revision }) });
+    revalidatePath("/codex");
+    return result;
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Target could not be changed" };
+  }
+}
+
+export async function createCodexSession(workspaceId: string) {
+  try {
+    await apiFetch("/v1/codex/sessions", { method: "POST", body: JSON.stringify({ workspace_id: workspaceId }) });
+    revalidatePath("/codex");
+    return {};
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Session could not be created" };
+  }
+}
+
 export async function saveAiSettings(
   _previous: ActionState,
   formData: FormData,
@@ -110,14 +153,6 @@ export async function signOut() {
   await supabase.auth.signOut();
   redirect("/");
 }
-
-export type ConnectionInput = {
-  provider: ConnectionProvider;
-  name: string;
-  endpoint_url?: string;
-  auth_type?: "none" | "bearer";
-  token?: string;
-};
 
 type ConnectionResult = { connection?: Connection; error?: string };
 
@@ -283,6 +318,71 @@ export async function deletePingRule(ruleId: string): Promise<{ error?: string }
   try {
     await apiFetch(`/v1/rules/${ruleId}`, { method: "DELETE" });
     revalidatePath("/configure");
+    return {};
+  } catch (error) {
+    return ruleError(error);
+  }
+}
+
+export async function updatePingRuleStatus(
+  ruleId: string,
+  expectedRevision: number,
+  status: "active" | "paused",
+): Promise<{ rule?: PingRule; error?: string }> {
+  try {
+    const result = await apiFetch<{ rule: PingRule }>(`/v1/rules/${ruleId}/status`, {
+      method: "PATCH",
+      body: JSON.stringify({ expected_revision: expectedRevision, status }),
+    });
+    revalidatePath("/configure");
+    revalidatePath("/home");
+    return result;
+  } catch (error) {
+    return ruleError(error);
+  }
+}
+
+export async function getPingRuleActivity(ruleId: string, cursor?: string): Promise<{ activity?: RuleActivity; error?: string }> {
+  try {
+    return { activity: await apiFetch<RuleActivity>(`/v1/rules/${ruleId}/activity${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`) };
+  } catch (error) {
+    return ruleError(error);
+  }
+}
+
+export async function beginTelegramUserAuth(name: string): Promise<{ session?: TelegramAuthSession; error?: string }> {
+  try {
+    return await apiFetch<{ session: TelegramAuthSession }>("/v1/connections/telegram/user-auth", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    });
+  } catch (error) {
+    return ruleError(error);
+  }
+}
+
+export async function getTelegramUserAuth(id: string): Promise<{ session?: TelegramAuthSession; error?: string }> {
+  try {
+    return await apiFetch<{ session: TelegramAuthSession }>(`/v1/connections/telegram/user-auth/${id}`);
+  } catch (error) {
+    return ruleError(error);
+  }
+}
+
+export async function submitTelegramUserPassword(id: string, password: string): Promise<{ accepted?: boolean; error?: string }> {
+  try {
+    return await apiFetch<{ accepted: boolean }>(`/v1/connections/telegram/user-auth/${id}/password`, {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    });
+  } catch (error) {
+    return ruleError(error);
+  }
+}
+
+export async function cancelTelegramUserAuth(id: string): Promise<{ error?: string }> {
+  try {
+    await apiFetch(`/v1/connections/telegram/user-auth/${id}`, { method: "DELETE" });
     return {};
   } catch (error) {
     return ruleError(error);

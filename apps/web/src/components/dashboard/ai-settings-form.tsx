@@ -13,7 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { AiSettings } from "@/lib/api";
+import type { AiSettings } from "@/types/api";
 
 const providers = {
   openai: {

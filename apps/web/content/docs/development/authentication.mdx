@@ -1,0 +1,96 @@
+---
+title: Authentication setup
+description: Configure Supabase Auth, OAuth providers, callback URLs, and server credentials.
+---
+
+## 1. Create the project
+
+Create a hosted Supabase project and keep its default asymmetric JWT signing
+key. From the project's **Connect** dialog, copy the project URL and
+publishable key.
+
+Create local `.env` files from the examples:
+
+- `apps/web/.env.local`: set `NEXT_PUBLIC_SUPABASE_URL` and
+  `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`.
+- `apps/api/.env`: set `SUPABASE_URL` and the server-only
+  `SUPABASE_SECRET_KEY`, a random base64 `CONNECTION_ENCRYPTION_KEY`,
+  `PODEX_PUBLIC_API_URL`, and `PODEX_WEB_URL`. Generate the encryption key with
+  `openssl rand -base64 32`; it protects stored provider credentials and must
+  never be exposed to the dashboard or Pod.
+
+## 2. Configure URLs and email
+
+Apply the tracked database migration to the hosted development project with
+`supabase db push` before starting the API.
+
+In **Authentication → URL Configuration**:
+
+- Set the Site URL to the production Next.js domain.
+- Allow `http://localhost:3000/**` for local development.
+- Allow `https://<your-next-domain>/**` for production.
+
+Email sign-in uses Supabase's default magic-link template and does not require
+template customization. The application sends users back through
+`/auth/callback`, which exchanges the PKCE auth code for the cookie session
+before redirecting to `/home`.
+
+Without custom SMTP, Supabase's built-in sender only delivers to members of the
+project organization and is currently limited to two emails per hour. It is a
+development-only, best-effort service; add [custom SMTP](https://supabase.com/docs/guides/auth/auth-smtp)
+before allowing public email sign-in.
+
+Open signup is intentional.
+
+## 3. Configure Google
+
+Create a Google OAuth web client. Add the local and production Next.js origins
+to **Authorized JavaScript origins**. Add this Supabase-owned endpoint to
+**Authorized redirect URIs**:
+
+```text
+https://<your-project-ref>.supabase.co/auth/v1/callback
+```
+
+Copy the Google client ID and secret into **Supabase → Authentication →
+Providers → Google**, then enable the provider. The Google secret stays in
+Supabase and must not be added to this repository or Railway.
+
+## 4. Configure Railway
+
+Add the two `NEXT_PUBLIC_*` values, `PODEX_API_URL`, and
+`PODEX_PUBLIC_API_URL` to the Next.js service. Add every required value from
+`apps/api/.env.example` to the Hono API service, leaving only unused provider
+OAuth values blank. Redeploy the affected services after changing them. Hono uses
+Railway's injected `PORT`; locally it falls back to `3001` while Next.js uses
+`3000`.
+
+Authenticated API calls use the Supabase access token:
+
+```http
+GET /v1/me
+Authorization: Bearer <supabase-access-token>
+```
+
+The API validates the signature through Supabase's public JWKS endpoint, plus
+the token expiry, issuer, and `authenticated` audience. Never log access or
+refresh tokens.
+
+## 5. Configure provider OAuth
+
+The Connections page uses separate OAuth applications for GitHub and Gmail.
+Both callbacks terminate at the public Hono API:
+
+```text
+https://<your-api-domain>/v1/connections/oauth/github/callback
+https://<your-api-domain>/v1/connections/oauth/gmail/callback
+```
+
+Create a GitHub OAuth App with the first callback, then set
+`GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`. In Google Cloud, enable the
+Gmail API, add the second callback to the web OAuth client, configure consent
+for `gmail.readonly`, and set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
+
+Set `PODEX_PUBLIC_API_URL` to the public API origin, `PODEX_WEB_URL` to the
+dashboard origin, and `CONNECTION_ENCRYPTION_KEY` to a stable 32-byte base64
+value. Changing that encryption key makes saved credentials unreadable.

@@ -1,5 +1,5 @@
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import type { Connection } from "@/lib/api";
+import type { Connection } from "@/types/api";
 
 export function DisconnectConnectionDialog({
   connection,

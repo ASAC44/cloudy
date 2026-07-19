@@ -1,6 +1,6 @@
 import type { ConnectionService } from './connections.js'
-import { validatePublicEndpoint } from './connections.js'
-import type { Store } from './store.js'
+import { publicEndpointFetch, validatePublicEndpoint } from './connections.js'
+import type { Store } from './types/store.js'
 
 export async function drainCallbacks(
   store: Store,
@@ -15,7 +15,7 @@ export async function drainCallbacks(
     try {
       const callbackUrl = connections.decryptCallbackUrl(delivery.encryptedUrl)
       await validatePublicEndpoint(callbackUrl)
-      const response = await fetcher(callbackUrl, {
+      const response = await publicEndpointFetch(fetcher, callbackUrl, {
         method: 'POST',
         redirect: 'manual',
         signal: AbortSignal.timeout(10_000),

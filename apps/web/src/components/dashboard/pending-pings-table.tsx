@@ -1,6 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import type { ApprovalRequest } from "@/lib/api";
+import type { ApprovalRequest } from "@/types/api";
 import { relativeTime } from "@/lib/relative-time";
 
 export function PendingPingsTable({ pings }: { pings: ApprovalRequest[] }) {

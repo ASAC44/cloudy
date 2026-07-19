@@ -18,6 +18,7 @@ const DEFAULT_NAV_ITEMS: Record<string, NavItem> = {
   "/": { name: "Home" },
   "#use-cases": { name: "Use cases" },
   "#features": { name: "Features" },
+  "/docs": { name: "Docs" },
   "https://github.com/ASAC44/podex": { name: "GitHub" },
 };
 

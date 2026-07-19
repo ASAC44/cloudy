@@ -1,0 +1,135 @@
+---
+title: Architecture and technology
+description: The shipped hardware, services, data flows, and security boundaries that make up Podex.
+---
+
+This page describes the current implementation. Future context, memory, and
+integration ideas belong in [Product vision](/docs/product/vision).
+
+## Runtime components
+
+| Component | Runtime | Responsibility |
+| --- | --- | --- |
+| Web | Next.js 16, React 19, Tailwind CSS 4 | Public site, Fumadocs pages, Supabase login, and authenticated dashboard |
+| API | Hono on Node.js | Authenticated HTTP endpoints, Pod and bridge protocols, OAuth callbacks, AI settings, rule polling and evaluation, approved delivery, and atomic approval transitions |
+| Pod | Python 3.13, pygame-ce, gpiozero | Pairing, request display, physical decisions, cached active request, audio capture, and polling |
+| Codex bridge | Local Node.js process | Local `codex app-server` session, selected workspace access, and approval exchange |
+| Data store | Supabase Postgres and Auth | Canonical users, credentials, Pods, requests, decisions, integrations, rules, Codex state, and audit records |
+
+The web and API are separate processes. The Hono process runs a guarded,
+non-overlapping background drain loop; database leases recover abandoned work
+after restarts and coordinate multiple API replicas.
+
+## Pod runtime
+
+The hardware target is a Raspberry Pi Zero 2 W with a 640×480 touchscreen,
+Approve and Reject buttons, a microphone, Wi-Fi, and no speaker. Raspberry Pi
+OS Lite launches pygame under Cage as a systemd service.
+
+The Pod polls the API every two seconds using a revocable Pod-scoped bearer
+token. It stores that token and the active request in its state directory with
+mode `0600`; Supabase, OAuth, AI, and integration credentials never reach the
+device. If the network drops, the cached request remains readable but decisions
+stay disabled until the API is reachable.
+
+The microphone is captured with ALSA `arecord` as mono 16 kHz, 16-bit PCM WAV,
+limited to 30 seconds. Holding both buttons records; releasing either stops.
+The transcript is displayed and requires a separate approval before it becomes
+a Codex prompt.
+
+## Web and API boundary
+
+Browser authentication terminates at Supabase Auth. Next.js server actions
+forward the user's Supabase access token to Hono; the API validates signature,
+expiry, issuer, and audience before using the user identity. Dashboard pages do
+not receive the Supabase secret key or decrypted provider credentials.
+
+The public API also has separate authentication boundaries:
+
+- Pod pairing creates a one-time code and a scoped Pod token.
+- Automation clients use revocable automation keys.
+- Codex bridges use a separately paired, revocable bridge token.
+- OAuth callbacks validate short-lived, one-time state before saving encrypted
+  credentials.
+
+`CONNECTION_ENCRYPTION_KEY` encrypts provider, AI, Codex-interaction, and rule
+payload secrets before storage. Retain the same key across deployments;
+changing it makes existing encrypted values unreadable.
+
+## Connections and dynamic rules
+
+The shipped connection providers are GitHub, Gmail, Vercel, Telegram, Linear,
+Stripe, and a custom remote MCP endpoint. GitHub and Gmail use OAuth; Vercel,
+Linear, and Stripe accept encrypted bearer credentials; Telegram supports bot
+or user authorization; and custom MCP connections support configured
+authentication. Linear and Stripe use fixed official Streamable HTTP endpoints.
+
+The rule builder uses the chosen AI provider to turn a conversation into a
+reviewable rule definition. Supported providers are OpenAI, Anthropic,
+Cerebras, OpenRouter, and an OpenAI-compatible custom endpoint. Model names are
+user-configured; Podex does not assume a default text model.
+
+After activation, the API runtime polls or listens to the source connection,
+deduplicates events in Postgres, evaluates the saved rule, and creates an exact
+approval request. An approved request is delivered through the configured
+action connection or workflow callback. Database constraints, transactions,
+payload hashes, and idempotency keys prevent stale or duplicate decisions and
+deliveries.
+
+## Codex and voice flow
+
+The bridge runs beside local repositories and talks to `codex app-server` over
+local standard input and output. Local paths and Codex credentials remain on
+that computer; Podex stores only opaque workspace identifiers, display labels,
+thread state, and encrypted approval payloads.
+
+1. The Pod records audio and uploads the WAV file over HTTPS.
+2. The API decrypts the user's official OpenAI API key and transcribes with
+   `gpt-4o-mini-transcribe`.
+3. The user approves the displayed transcript.
+4. The bridge starts or resumes the selected Codex thread in a read-only
+   planning sandbox.
+5. Codex returns a plan to the Pod as an approval request.
+6. After approval, the bridge verifies the repository has not changed and
+   starts implementation with workspace write access.
+7. Command, file-change, and permission requests continue through the same
+   exact-payload approval path.
+
+Other configured AI providers can power the rule builder, but voice currently
+requires the official OpenAI endpoint because the transcription route calls
+OpenAI's audio API directly.
+
+## Decision guarantees
+
+- A request can leave `pending` only once.
+- Decisions include the displayed payload hash and an idempotency key.
+- Expired, revoked, changed, or already-resolved requests fail closed.
+- Approved provider actions and callbacks use durable delivery identities.
+- Test Pings record a decision but deliberately execute no external action.
+- Sensitive credentials stay encrypted server-side and are never returned by
+  read endpoints.
+
+## Deployment topology
+
+```text
+Browser ───────────────> Next.js web/docs ────────┐
+                                                  v
+Automation client ───────────────────────────> Hono API <────> Supabase
+Pod ─────────────────────────────────────────────> ^              ^
+Codex bridge <──── local stdio ────> Codex CLI ───┘              |
+                                                                 |
+Telegram / integrations <──────── Hono runtime ──────────────────┘
+```
+
+Railway hosts the web and API processes. The Raspberry Pi and Codex
+bridge run outside Railway and therefore require the API's public HTTPS origin.
+See [Railway deployment](/docs/deployment/railway) for process commands and
+variables.
+
+## References
+
+- [OpenAI GPT-4o mini Transcribe](https://developers.openai.com/api/docs/models/gpt-4o-mini-transcribe)
+- [pygame-ce events](https://pyga.me/docs/ref/event.html)
+- [Hono on Node.js](https://hono.dev/docs/getting-started/nodejs)
+- [Supabase Auth](https://supabase.com/docs/guides/auth)
+- [Model Context Protocol](https://modelcontextprotocol.io/docs/getting-started/intro)

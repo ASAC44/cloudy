@@ -1,6 +1,7 @@
 import { AiSettingsForm } from "@/components/dashboard/ai-settings-form";
 import { ThemeToggle } from "@/components/theme-toggle";
-import { apiFetch, type AiSettings } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import type { AiSettings } from "@/types/api";
 
 export default async function SettingsPage() {
   let settings: AiSettings | null = null;

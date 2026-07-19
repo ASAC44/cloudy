@@ -5,7 +5,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
-import type { Connection, ConnectionProvider } from "@/lib/api";
+import type { Connection, ConnectionProvider } from "@/types/api";
 
 import { getProvider } from "./providers";
 
@@ -28,7 +28,14 @@ export function ConnectionFormDialog({
 }) {
   const definition = getProvider(provider);
   const oauth = provider === "github" || provider === "gmail";
-  const asksForToken = provider === "vercel" || provider === "telegram" || (provider === "custom_mcp" && authType === "bearer");
+  const asksForToken = provider === "vercel" || provider === "telegram" || provider === "linear" || provider === "stripe" || (provider === "custom_mcp" && authType === "bearer");
+  const tokenLabel = provider === "telegram"
+    ? "Bot token"
+    : provider === "linear"
+      ? "Linear API key"
+      : provider === "stripe"
+        ? "Stripe restricted API key"
+        : "Access token";
 
   return (
     <Dialog open={Boolean(provider)} onOpenChange={(open) => { if (!open) onClose(); }}>
@@ -61,8 +68,9 @@ export function ConnectionFormDialog({
             ) : null}
             {asksForToken ? (
               <div className="grid gap-2">
-                <Label htmlFor="connection-token">{provider === "telegram" ? "Bot token" : "Access token"}</Label>
+                <Label htmlFor="connection-token">{tokenLabel}</Label>
                 <Input id="connection-token" name="token" type="password" autoComplete="off" required={!editing || (provider === "custom_mcp" && editing.auth_type !== "bearer")} maxLength={5000} placeholder={editing ? "Leave blank to keep the saved token" : "Paste token"} />
+                {provider === "stripe" ? <p className="text-caption text-muted-foreground">Use a restricted sandbox key with only the permissions this Ping needs. Avoid unrestricted and live keys while testing.</p> : null}
               </div>
             ) : null}
           </div>

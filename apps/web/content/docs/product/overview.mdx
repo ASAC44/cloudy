@@ -1,0 +1,68 @@
+---
+title: How Podex works
+description: The core human-in-the-loop interaction, hardware, and product principle.
+---
+
+Podex is a pocket-sized human-in-the-loop Pod for approving, rejecting, or responding to actions proposed by AI agents and automated workflows without opening a phone or computer.
+
+## Core interaction
+
+An agent prepares an action and sends a decision request to Podex. The Pod shows the relevant context on its 2.8-inch screen. The user can:
+
+- Press **Approve** to authorize the action.
+- Press **Reject** to stop the action.
+- Hold both buttons to dictate a response or instruction through the microphone.
+
+After approval, either the connected agent resumes or Podex's guarded API runtime delivers the exact configured provider action or workflow callback. Podex remains the authorization boundary: model output alone never permits execution.
+
+## Pod hardware
+
+- Small cuboid keychain form
+- Raspberry Pi Zero 2 W
+- 2.8-inch screen
+- Approve and Reject buttons
+- Microphone for dictation
+- No speaker
+- Wireless network connection
+
+## Decision details
+
+Each request shows enough information to make a safe decision, including:
+
+- The proposed action
+- The requesting agent or workflow
+- A concise summary and supporting details
+- The people, services, or data affected
+- Risk, warnings, and expiration time when relevant
+
+## Shipped integrations
+
+The current release accepts approval requests through automation keys and supports GitHub, Gmail, Vercel, Telegram, Linear, Stripe, and trusted remote MCP connections. A local Codex bridge can turn dictated Pod tasks into read-only plans and route implementation approvals back to the device.
+
+Broader n8n, Discord, WhatsApp, Notion, Slack, and universal MCP workflows are
+part of the clearly labeled [Product vision](/docs/product/vision), not the
+current compatibility list.
+
+Example actions include:
+
+- Approving and merging a pull request
+- Reviewing and sending a drafted email reply
+- Adding a detected event to Notion
+- Authorizing a deployment or workflow step
+- Rejecting an unwanted or risky action
+
+## Personalized communication direction
+
+The goal is not “write a good email.” It is: **predict what this specific user would have written to this specific person.**
+
+The product direction combines live information with remembered context. Live sources would provide the current email thread, calendar availability, pull request status, and other changing facts. Learned context would provide the user's writing style, relationships, projects, commitments, and previously approved or corrected responses.
+
+This is planned behavior; the current release does not ship a memory engine or learned writing profiles. See [Product vision](/docs/product/vision) for the intended boundaries.
+
+## Dashboard
+
+The web dashboard pairs Pods and Codex bridges, manages connections and AI settings, builds dynamic Ping rules, issues automation keys, and shows decisions and rule activity.
+
+## Product principle
+
+Agents do the work. Podex keeps the user in control at the moment a decision matters.

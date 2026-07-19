@@ -1,5 +1,5 @@
 import { Badge } from "@/components/ui/badge";
-import type { Connection } from "@/lib/api";
+import type { Connection } from "@/types/api";
 
 import { ConnectionRow } from "./connection-row";
 

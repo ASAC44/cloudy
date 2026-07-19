@@ -10,7 +10,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { apiFetch, type ApprovalRequest } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import type { ApprovalRequest } from "@/types/api";
 
 export default async function LogsPage() {
   let decisions: ApprovalRequest[] = [];

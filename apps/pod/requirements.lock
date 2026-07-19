@@ -2,4 +2,4 @@
 colorzero==2.0
 gpiozero==2.0.1
 pygame-ce==2.5.7
-setuptools==80.9.0
+setuptools==83.0.0

@@ -3,9 +3,9 @@
 import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Pencil, Plus, Trash2 } from "lucide-react";
+import { Activity, CircleAlert, Pause, Pencil, Play, Plus, Trash2 } from "lucide-react";
 
-import { deletePingRule } from "@/app/(dashboard)/actions";
+import { deletePingRule, getPingRuleActivity, updatePingRuleStatus } from "@/app/(dashboard)/actions";
 import { ProviderLogo } from "@/components/dashboard/connections/provider-logo";
 import {
   AlertDialog,
@@ -18,7 +18,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import type { PingRuleSummary } from "@/lib/api";
+import type { PingRuleSummary, RuleActivity } from "@/types/api";
 
 const dateTime = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 
@@ -26,6 +26,8 @@ export function PingRuleDefinitions({ initialRules }: { initialRules: PingRuleSu
   const [rules, setRules] = useState(initialRules);
   const [removing, setRemoving] = useState<PingRuleSummary | null>(null);
   const [error, setError] = useState("");
+  const [activity, setActivity] = useState<{ ruleId: string; value: RuleActivity } | null>(null);
+  const [activityLoading, setActivityLoading] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const router = useRouter();
 
@@ -45,12 +47,36 @@ export function PingRuleDefinitions({ initialRules }: { initialRules: PingRuleSu
     });
   }
 
+  function changeStatus(rule: PingRuleSummary) {
+    const status = rule.status === "active" ? "paused" : "active";
+    setError("");
+    startTransition(async () => {
+      const result = await updatePingRuleStatus(rule.id, rule.revision, status);
+      if (!result.rule) return setError(result.error ?? "The Ping status could not be changed.");
+      setRules((current) => current.map((item) => item.id === rule.id
+        ? { ...item, status: result.rule!.status, revision: result.rule!.revision, activated_at: result.rule!.activated_at }
+        : item));
+      router.refresh();
+    });
+  }
+
+  function showActivity(rule: PingRuleSummary) {
+    if (activity?.ruleId === rule.id) return setActivity(null);
+    setActivityLoading(rule.id);
+    startTransition(async () => {
+      const result = await getPingRuleActivity(rule.id);
+      setActivityLoading(null);
+      if (!result.activity) return setError(result.error ?? "Activity could not be loaded.");
+      setActivity({ ruleId: rule.id, value: result.activity });
+    });
+  }
+
   return (
     <section className="grid gap-8 border-b border-border py-10 md:grid-cols-[minmax(0,0.7fr)_minmax(22rem,1.3fr)] md:gap-16" aria-labelledby="ping-definitions-title">
       <div>
         <h2 id="ping-definitions-title" className="font-sans text-lg font-medium">Ping definitions</h2>
         <p className="mt-2 max-w-sm leading-6 text-muted-foreground">
-          Saved monitoring intent and connected capabilities. These definitions are not running yet.
+          Active, paused, and attention-needed automations. Every write still waits for an exact Pod approval.
         </p>
         <Button className="mt-5" size="sm" nativeButton={false} render={<Link href="/home?chat=new" />}>
           <Plus />Add definition
@@ -68,6 +94,12 @@ export function PingRuleDefinitions({ initialRules }: { initialRules: PingRuleSu
                   <p className="mt-1 text-sm leading-6 text-muted-foreground">{rule.intent_summary}</p>
                 </div>
                 <div className="flex shrink-0 gap-1">
+                  <Button variant="ghost" size="icon-sm" aria-label={`${rule.status === "active" ? "Pause" : "Resume"} ${rule.title}`} onClick={() => changeStatus(rule)} disabled={pending || rule.status === "needs_attention" || rule.schema_version !== 2}>
+                    {rule.status === "active" ? <Pause /> : <Play />}
+                  </Button>
+                  <Button variant="ghost" size="icon-sm" aria-label={`View activity for ${rule.title}`} onClick={() => showActivity(rule)} disabled={activityLoading === rule.id}>
+                    <Activity />
+                  </Button>
                   <Button variant="ghost" size="icon-sm" aria-label={`Edit ${rule.title}`} nativeButton={false} render={<Link href={`/home?edit=${rule.id}`} />}>
                     <Pencil />
                   </Button>
@@ -94,13 +126,27 @@ export function PingRuleDefinitions({ initialRules }: { initialRules: PingRuleSu
                 </div>
                 <div>
                   <dt className="text-caption uppercase tracking-[0.12em] text-muted-foreground">Status</dt>
-                  <dd>Saved · Not running yet</dd>
+                  <dd className={rule.status === "active" ? "text-emerald-700 dark:text-emerald-400" : rule.status === "needs_attention" ? "text-amber-700 dark:text-amber-300" : ""}>
+                    {statusLabel(rule.status)}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-caption uppercase tracking-[0.12em] text-muted-foreground">Last event</dt>
+                  <dd>{rule.runtime?.last_event_at ? dateTime.format(new Date(rule.runtime.last_event_at)) : "None yet"}</dd>
+                </div>
+                <div>
+                  <dt className="text-caption uppercase tracking-[0.12em] text-muted-foreground">Next check</dt>
+                  <dd>{rule.status === "active" && rule.runtime?.next_run_at ? dateTime.format(new Date(rule.runtime.next_run_at)) : "—"}</dd>
                 </div>
               </dl>
               <p className="mt-4 text-caption text-muted-foreground">
-                {rule.capability_safety === "unannotated" ? "MCP read behavior unverified · " : "Read capability verified · "}
+                {rule.action_capability_name ? `${rule.action_capability_name} only after Pod approval · ` : "Notification only · "}
                 Updated {dateTime.format(new Date(rule.updated_at))}
               </p>
+              {rule.status === "needs_attention" ? (
+                <p className="mt-3 flex items-start gap-2 text-sm text-amber-700 dark:text-amber-300"><CircleAlert className="mt-0.5 size-4 shrink-0" />{rule.runtime?.last_error ?? "This Ping needs review before it can continue."}</p>
+              ) : null}
+              {activity?.ruleId === rule.id ? <ActivityTimeline activity={activity.value} /> : null}
             </article>
           )) : (
             <div className="py-8 text-center">
@@ -115,7 +161,7 @@ export function PingRuleDefinitions({ initialRules }: { initialRules: PingRuleSu
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete {removing?.title}?</AlertDialogTitle>
-            <AlertDialogDescription>This removes the saved definition. No external service data or credentials are deleted.</AlertDialogDescription>
+            <AlertDialogDescription>This stops the Ping, cancels pending requests, and removes its retained activity. Connected credentials stay in place.</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Keep definition</AlertDialogCancel>
@@ -124,5 +170,27 @@ export function PingRuleDefinitions({ initialRules }: { initialRules: PingRuleSu
         </AlertDialogContent>
       </AlertDialog>
     </section>
+  );
+}
+
+function statusLabel(status: PingRuleSummary["status"]) {
+  return status === "active" ? "Active" : status === "needs_attention" ? "Needs attention" : "Paused";
+}
+
+function ActivityTimeline({ activity }: { activity: RuleActivity }) {
+  const items = [
+    ...activity.events.map((event) => ({ id: event.id, at: event.occurred_at, label: `Event ${event.status.replaceAll("_", " ")}`, error: event.last_error })),
+    ...activity.runs.map((run) => ({ id: run.id, at: run.created_at, label: `${run.stage} · ${run.outcome}`, error: run.error_message })),
+  ].sort((left, right) => right.at.localeCompare(left.at)).slice(0, 12);
+  return (
+    <div className="mt-5 border-y border-border py-4">
+      <p className="mb-3 text-caption font-medium uppercase tracking-[0.12em] text-muted-foreground">Recent activity</p>
+      {items.length ? <ol className="space-y-3">{items.map((item) => (
+        <li key={item.id} className="grid gap-1 text-sm sm:grid-cols-[10rem_1fr]">
+          <time className="text-muted-foreground">{dateTime.format(new Date(item.at))}</time>
+          <span>{item.label}{item.error ? ` · ${item.error}` : ""}</span>
+        </li>
+      ))}</ol> : <p className="text-sm text-muted-foreground">No events or runs yet.</p>}
+    </div>
   );
 }

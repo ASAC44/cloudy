@@ -15,6 +15,7 @@ import { AvailableProviders } from "@/components/dashboard/connections/available
 import { ConnectionFormDialog } from "@/components/dashboard/connections/connection-form-dialog";
 import { ConnectionList } from "@/components/dashboard/connections/connection-list";
 import { DisconnectConnectionDialog } from "@/components/dashboard/connections/disconnect-connection-dialog";
+import { TelegramConnectionDialog } from "@/components/dashboard/connections/telegram-connection-dialog";
 import { getProvider, PROVIDERS } from "@/components/dashboard/connections/providers";
 import {
   InputGroup,
@@ -22,19 +23,23 @@ import {
   InputGroupButton,
   InputGroupInput,
 } from "@/components/ui/input-group";
-import type { Connection, ConnectionProvider } from "@/lib/api";
+import type { Connection, ConnectionProvider } from "@/types/api";
 
 export function ConnectionsManager({
   initialConnections,
   initialError,
   oauthNotice,
+  initialProvider,
+  resumeSessionId,
 }: {
   initialConnections: Connection[];
   initialError?: string;
   oauthNotice?: { type: "success" | "error"; text: string };
+  initialProvider?: ConnectionProvider;
+  resumeSessionId?: string;
 }) {
   const [connections, setConnections] = useState(initialConnections);
-  const [selectedProvider, setSelectedProvider] = useState<ConnectionProvider | null>(null);
+  const [selectedProvider, setSelectedProvider] = useState<ConnectionProvider | null>(initialProvider ?? null);
   const [editing, setEditing] = useState<Connection | null>(null);
   const [authType, setAuthType] = useState<"none" | "bearer">("none");
   const [testing, setTesting] = useState<string | null>(null);
@@ -67,6 +72,10 @@ export function ConnectionsManager({
   }
 
   function openEdit(connection: Connection) {
+    if (connection.provider === "telegram" && connection.auth_type === "oauth") {
+      openProvider("telegram");
+      return;
+    }
     setSelectedProvider(null);
     setEditing(connection);
     setAuthType(connection.auth_type === "bearer" ? "bearer" : "none");
@@ -122,6 +131,10 @@ export function ConnectionsManager({
       toast[result.connection?.status === "connected" ? "success" : "error"](
         result.connection?.status === "connected" ? `${name} connected.` : `${name} saved, but its test failed.`,
       );
+      if (resumeSessionId && result.connection?.status === "connected") {
+        window.location.assign(`/home?chat=${encodeURIComponent(resumeSessionId)}&connection=connected`);
+        return;
+      }
       closeDialog();
     });
   }
@@ -198,13 +211,22 @@ export function ConnectionsManager({
       />
       <AvailableProviders providers={visibleProviders} searching={Boolean(query)} onConnect={openProvider} />
       <ConnectionFormDialog
-        provider={activeProvider}
+        provider={activeProvider === "telegram" && !editing ? null : activeProvider}
         editing={editing}
         authType={authType}
         pending={pending}
         onAuthTypeChange={setAuthType}
         onClose={closeDialog}
         onSubmit={submit}
+      />
+      <TelegramConnectionDialog
+        open={activeProvider === "telegram" && !editing}
+        onClose={closeDialog}
+        onConnected={(connection) => {
+          replace(connection);
+          closeDialog();
+          window.location.assign(resumeSessionId ? `/home?chat=${encodeURIComponent(resumeSessionId)}&connection=connected` : "/connections?connected=telegram");
+        }}
       />
       <DisconnectConnectionDialog
         connection={removing}

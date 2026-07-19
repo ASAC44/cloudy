@@ -16,10 +16,20 @@ import {
   type Pod,
   type RuleBuilderSession,
   type RuleDraft,
+  type RuleActivity,
+  type RuntimeEvent,
+  type RuntimeRule,
+  type RuntimeStore,
+  type TelegramAuthSession,
   type Capability,
+  type CodexBridge,
+  type CodexCommand,
+  type CodexTarget,
+  type CodexThread,
+  type CodexWorkspace,
   type Store,
-  StoreError,
-} from './store.js'
+} from './types/store.js'
+import { StoreError } from './store.js'
 
 function fail(error: { code?: string; message: string } | null): never {
   if (error?.code === '23503' && error.message.includes('ping_rules')) {
@@ -32,7 +42,7 @@ function fail(error: { code?: string; message: string } | null): never {
     throw new StoreError('automation_key_name_exists', error.message)
   }
   if (error?.code === '23505') throw new StoreError('active_pod_exists', error.message)
-  const code = error?.message.match(/(pairing_rate_limited|invalid_pairing_code|active_pod_exists|pod_not_authorized|request_not_found|request_already_resolved|request_expired|payload_changed|idempotency_conflict|rule_session_not_found|rule_session_expired|rule_session_conflict|rule_pod_unavailable|rule_connection_unavailable|rule_not_found|rule_edit_conflict)/)?.[1]
+  const code = error?.message.match(/(pairing_rate_limited|invalid_pairing_code|invalid_bridge_pairing_code|active_pod_exists|pod_not_authorized|request_not_found|request_already_resolved|request_expired|payload_changed|idempotency_conflict|codex_bridge_not_authorized|codex_target_not_found|codex_target_changed|rule_session_not_found|rule_session_expired|rule_session_conflict|rule_pod_unavailable|rule_connection_unavailable|rule_not_found|rule_edit_conflict|rule_review_required|invalid_rule_status|invalid_rule_definition|ping_event_conflict|invalid_ping_approval|telegram_auth_in_progress|telegram_auth_conflict)/)?.[1]
   throw new StoreError(code ?? 'database_error', error?.message)
 }
 
@@ -42,7 +52,7 @@ function equalHash(left: string, right: string) {
   return a.length === b.length && timingSafeEqual(a, b)
 }
 
-export class SupabaseStore implements Store {
+export class SupabaseStore implements Store, RuntimeStore {
   private readonly db: SupabaseClient
 
   constructor(url: string, secretKey: string) {
@@ -170,13 +180,7 @@ export class SupabaseStore implements Store {
   }
 
   async currentRequest(ownerId: string) {
-    const now = new Date().toISOString()
-    const { error: expiryError } = await this.db
-      .from('approval_requests')
-      .update({ status: 'expired' })
-      .eq('owner_id', ownerId)
-      .eq('status', 'pending')
-      .lte('expires_at', now)
+    const { error: expiryError } = await this.db.rpc('expire_approval_requests')
     if (expiryError) fail(expiryError)
 
     const [{ data, error }, { count, error: countError }] = await Promise.all([
@@ -325,11 +329,7 @@ export class SupabaseStore implements Store {
   }
 
   async expireRequests() {
-    const { error } = await this.db
-      .from('approval_requests')
-      .update({ status: 'expired', decided_at: new Date().toISOString() })
-      .eq('status', 'pending')
-      .lte('expires_at', new Date().toISOString())
+    const { error } = await this.db.rpc('expire_approval_requests')
     if (error) fail(error)
   }
 
@@ -395,21 +395,18 @@ export class SupabaseStore implements Store {
   }
 
   async createConnection(ownerId: string, connection: NewConnection, encryptedPayload: string) {
-    const { data, error } = await this.db
-      .from('connections')
-      .insert({ ...connection, owner_id: ownerId })
-      .select('id, name, provider, protocol, endpoint_url, auth_type, status, account_label, last_error, last_tested_at, created_at, updated_at')
-      .single()
-    if (error || !data) fail(error)
-
-    const { error: secretError } = await this.db
-      .from('connection_secrets')
-      .insert({ connection_id: data.id, encrypted_payload: encryptedPayload })
-    if (secretError) {
-      await this.db.from('connections').delete().eq('id', data.id)
-      fail(secretError)
-    }
-    return data as Connection
+    const { data, error } = await this.db.rpc('create_connection_with_secret', {
+      p_owner_id: ownerId,
+      p_name: connection.name,
+      p_provider: connection.provider,
+      p_protocol: connection.protocol,
+      p_endpoint_url: connection.endpoint_url,
+      p_auth_type: connection.auth_type,
+      p_encrypted_payload: encryptedPayload,
+    })
+    const created = Array.isArray(data) ? data[0] : data
+    if (error || !created) fail(error)
+    return created as Connection
   }
 
   async updateConnection(
@@ -418,24 +415,16 @@ export class SupabaseStore implements Store {
     changes: Partial<Pick<Connection, 'name' | 'endpoint_url' | 'auth_type'>>,
     encryptedPayload?: string,
   ) {
-    const existing = await this.getConnection(ownerId, connectionId)
-    if (!existing) return null
-    if (encryptedPayload) {
-      const { error } = await this.db
-        .from('connection_secrets')
-        .update({ encrypted_payload: encryptedPayload, updated_at: new Date().toISOString() })
-        .eq('connection_id', connectionId)
-      if (error) fail(error)
-    }
-    const { data, error } = await this.db
-      .from('connections')
-      .update({ ...changes, status: 'untested', account_label: null, last_error: null, updated_at: new Date().toISOString() })
-      .eq('id', connectionId)
-      .eq('owner_id', ownerId)
-      .select('id, name, provider, protocol, endpoint_url, auth_type, status, account_label, last_error, last_tested_at, created_at, updated_at')
-      .maybeSingle()
+    const { data, error } = await this.db.rpc('update_connection_with_secret', {
+      p_owner_id: ownerId,
+      p_connection_id: connectionId,
+      p_name: changes.name ?? null,
+      p_endpoint_url: changes.endpoint_url ?? null,
+      p_auth_type: changes.auth_type ?? null,
+      p_encrypted_payload: encryptedPayload ?? null,
+    })
     if (error) fail(error)
-    return data as Connection | null
+    return ((Array.isArray(data) ? data[0] : data) as Connection | null | undefined) ?? null
   }
 
   async updateConnectionSecret(connectionId: string, encryptedPayload: string) {
@@ -449,24 +438,23 @@ export class SupabaseStore implements Store {
   async setConnectionTest(
     ownerId: string,
     connectionId: string,
-    result: { status: 'connected' | 'failed'; accountLabel: string | null; error: string | null },
+    result: {
+      status: 'connected' | 'failed'
+      accountLabel: string | null
+      error: string | null
+      encryptedPayload?: string
+    },
   ) {
-    const now = new Date().toISOString()
-    const { data, error } = await this.db
-      .from('connections')
-      .update({
-        status: result.status,
-        account_label: result.accountLabel,
-        last_error: result.error,
-        last_tested_at: now,
-        updated_at: now,
-      })
-      .eq('id', connectionId)
-      .eq('owner_id', ownerId)
-      .select('id, name, provider, protocol, endpoint_url, auth_type, status, account_label, last_error, last_tested_at, created_at, updated_at')
-      .maybeSingle()
+    const { data, error } = await this.db.rpc('set_connection_test_result', {
+      p_owner_id: ownerId,
+      p_connection_id: connectionId,
+      p_status: result.status,
+      p_account_label: result.accountLabel,
+      p_last_error: result.error,
+      p_encrypted_payload: result.encryptedPayload ?? null,
+    })
     if (error) fail(error)
-    return data as Connection | null
+    return ((Array.isArray(data) ? data[0] : data) as Connection | null | undefined) ?? null
   }
 
   async deleteConnection(ownerId: string, connectionId: string) {
@@ -536,10 +524,210 @@ export class SupabaseStore implements Store {
     return data as StoredAiSettings
   }
 
+  async createCodexPairing(input: { bridgeId: string; codeHash: string; tokenHash: string }) {
+    const { data, error } = await this.db.from('codex_bridge_pairing_sessions').insert({
+      bridge_id: input.bridgeId,
+      code_hash: input.codeHash,
+      token_hash: input.tokenHash,
+    }).select('id, expires_at').single()
+    if (error || !data) fail(error)
+    return { id: data.id, expiresAt: data.expires_at }
+  }
+
+  async getCodexPairingStatus(sessionId: string, bridgeId: string, tokenHash: string) {
+    const { data: session, error } = await this.db.from('codex_bridge_pairing_sessions')
+      .select('claimed_at, expires_at, token_hash').eq('id', sessionId).eq('bridge_id', bridgeId).maybeSingle()
+    if (error) fail(error)
+    if (!session || !equalHash(session.token_hash, tokenHash) || session.expires_at <= new Date().toISOString()) return null
+    if (!session.claimed_at) return 'pending' as const
+    const identity = await this.authenticateCodexBridge(bridgeId, tokenHash)
+    return identity ? 'paired' as const : 'revoked' as const
+  }
+
+  async claimCodexBridge(codeHash: string, ownerId: string, name: string) {
+    const { data, error } = await this.db.rpc('claim_codex_bridge', {
+      p_code_hash: codeHash, p_owner_id: ownerId, p_name: name,
+    })
+    if (error || !data) fail(error)
+    return (Array.isArray(data) ? data[0] : data) as CodexBridge
+  }
+
+  async authenticateCodexBridge(bridgeId: string, tokenHash: string) {
+    const { data, error } = await this.db.from('codex_bridges')
+      .select('id, owner_id, token_hash, last_seen_at').eq('id', bridgeId).is('revoked_at', null).maybeSingle()
+    if (error) fail(error)
+    if (!data || !equalHash(data.token_hash, tokenHash)) return null
+    if (!data.last_seen_at || data.last_seen_at < new Date(Date.now() - 30_000).toISOString()) {
+      const { error: seenError } = await this.db.from('codex_bridges').update({ last_seen_at: new Date().toISOString() }).eq('id', bridgeId)
+      if (seenError) fail(seenError)
+    }
+    return { id: data.id, ownerId: data.owner_id }
+  }
+
+  async listCodex(ownerId: string) {
+    const { data: bridges, error } = await this.db.from('codex_bridges')
+      .select('id, name, version, last_error, paired_at, last_seen_at').eq('owner_id', ownerId).is('revoked_at', null).order('paired_at')
+    if (error) fail(error)
+    const bridgeIds = bridges.map(({ id }) => id)
+    const { data: workspaces, error: workspaceError } = bridgeIds.length
+      ? await this.db.from('codex_workspaces').select('id, bridge_id, local_id, label, available, updated_at').in('bridge_id', bridgeIds).order('label')
+      : { data: [], error: null }
+    if (workspaceError) fail(workspaceError)
+    const workspaceIds = workspaces.map(({ id }) => id)
+    const { data: threads, error: threadError } = workspaceIds.length
+      ? await this.db.from('codex_threads').select('id, workspace_id, codex_thread_id, title, status, milestone, final_summary, last_error, updated_at').in('workspace_id', workspaceIds).order('updated_at', { ascending: false })
+      : { data: [], error: null }
+    if (threadError) fail(threadError)
+    const { data: target, error: targetError } = await this.db.from('codex_targets')
+      .select('workspace_id, thread_id, revision, updated_at').eq('owner_id', ownerId).maybeSingle()
+    if (targetError) fail(targetError)
+    const onlineAfter = Date.now() - 45_000
+    return {
+      bridges: bridges.map((bridge) => ({ ...bridge, online: Boolean(bridge.last_seen_at && new Date(bridge.last_seen_at).getTime() >= onlineAfter) })) as CodexBridge[],
+      workspaces: workspaces as CodexWorkspace[], threads: threads as CodexThread[], target: target as CodexTarget | null,
+    }
+  }
+
+  async revokeCodexBridge(ownerId: string, bridgeId: string) {
+    const { data, error } = await this.db.rpc('revoke_codex_bridge', {
+      p_owner_id: ownerId,
+      p_bridge_id: bridgeId,
+    })
+    if (error) fail(error)
+    return data === true
+  }
+
+  async syncCodexBridge(input: {
+    bridgeId: string; ownerId: string; version: string; processInstanceId: string; error: string | null
+    workspaces: Array<{ localId: string; label: string }>
+    threads: Array<{ workspaceLocalId: string; codexThreadId: string; title: string; status: CodexThread['status']; milestone: string; finalSummary: string; error: string | null }>
+  }) {
+    const { data, error } = await this.db.rpc('sync_codex_bridge', {
+      p_owner_id: input.ownerId,
+      p_bridge_id: input.bridgeId,
+      p_version: input.version,
+      p_process_instance_id: input.processInstanceId,
+      p_error: input.error,
+      p_workspaces: input.workspaces.map(({ localId, label }) => ({ local_id: localId, label })),
+      p_threads: input.threads.map((thread) => ({
+        workspace_local_id: thread.workspaceLocalId,
+        codex_thread_id: thread.codexThreadId,
+        title: thread.title,
+        status: thread.status,
+        milestone: thread.milestone,
+        final_summary: thread.finalSummary,
+        last_error: thread.error,
+      })),
+    })
+    if (error || !data) fail(error)
+    return data as { workspaces: CodexWorkspace[]; threads: CodexThread[] }
+  }
+
+  async setCodexTarget(ownerId: string, workspaceId: string, threadId: string | null, expectedRevision: number | null) {
+    const { data, error } = await this.db.rpc('set_codex_target', {
+      p_owner_id: ownerId,
+      p_workspace_id: workspaceId,
+      p_thread_id: threadId,
+      p_expected_revision: expectedRevision,
+    })
+    if (error) fail(error)
+    return (Array.isArray(data) ? data[0] : data) as CodexTarget | null
+  }
+
+  async queueCodexCommand(input: { ownerId: string; workspaceId: string; threadId: string | null; kind: 'prompt' | 'new_thread'; payload: Record<string, unknown>; idempotencyKey: string; targetRevision?: number | null }) {
+    const { data, error } = await this.db.rpc('queue_codex_command', {
+      p_owner_id: input.ownerId,
+      p_workspace_id: input.workspaceId,
+      p_thread_id: input.threadId,
+      p_kind: input.kind,
+      p_payload: input.payload,
+      p_idempotency_key: input.idempotencyKey,
+      p_target_revision: input.targetRevision ?? null,
+    })
+    if (error || !data) fail(error)
+    return (Array.isArray(data) ? data[0] : data) as CodexCommand
+  }
+
+  async reviseCodexPlan(input: { ownerId: string; podId: string; requestId: string; payloadHash: string; decisionIdempotencyKey: string; promptIdempotencyKey: string; targetRevision: number; prompt: string }) {
+    const { data, error } = await this.db.rpc('revise_codex_plan', {
+      p_owner_id: input.ownerId,
+      p_pod_id: input.podId,
+      p_request_id: input.requestId,
+      p_payload_hash: input.payloadHash,
+      p_decision_idempotency_key: input.decisionIdempotencyKey,
+      p_prompt_idempotency_key: input.promptIdempotencyKey,
+      p_target_revision: input.targetRevision,
+      p_prompt: input.prompt,
+    })
+    if (error) fail(error)
+    if (!data) throw new StoreError('request_expired')
+    return (Array.isArray(data) ? data[0] : data) as CodexCommand
+  }
+
+  async createCodexInteraction(input: {
+    ownerId: string; bridgeId: string; workspaceId: string; threadId: string | null; processInstanceId: string
+    protocolRequestId: string; kind: 'command_approval' | 'file_change_approval' | 'permission_approval' | 'plan_review'
+    encryptedPayload: string; payloadHash: string; title: string; summary: string; risk: 'low' | 'medium' | 'high'; expiresAt: string
+  }) {
+    const { data, error } = await this.db.rpc('create_codex_interaction', {
+      p_owner_id: input.ownerId, p_bridge_id: input.bridgeId, p_workspace_id: input.workspaceId,
+      p_thread_id: input.threadId, p_process_instance_id: input.processInstanceId,
+      p_protocol_request_id: input.protocolRequestId, p_kind: input.kind,
+      p_encrypted_payload: input.encryptedPayload, p_payload_hash: input.payloadHash,
+      p_title: input.title, p_summary: input.summary, p_risk: input.risk, p_expires_at: input.expiresAt,
+    })
+    if (error || !data) fail(error)
+    return (Array.isArray(data) ? data[0] : data) as ApprovalRequest
+  }
+
+  async claimCodexCommand(bridgeId: string, processInstanceId: string) {
+    const { data, error } = await this.db.rpc('claim_codex_command', {
+      p_bridge_id: bridgeId,
+      p_process_instance_id: processInstanceId,
+    })
+    if (error) fail(error)
+    return (data?.[0] ?? null) as CodexCommand | null
+  }
+
+  async acknowledgeCodexCommand(bridgeId: string, processInstanceId: string, commandId: string, result: { ok: boolean; error?: string }) {
+    const { data, error } = await this.db.rpc('acknowledge_codex_command', {
+      p_bridge_id: bridgeId,
+      p_process_instance_id: processInstanceId,
+      p_command_id: commandId,
+      p_ok: result.ok,
+      p_error: result.error?.slice(0, 500) ?? null,
+    })
+    if (error) fail(error)
+    return data === true
+  }
+
+  async codexStatus(ownerId: string) {
+    const { data: target, error } = await this.db.from('codex_targets')
+      .select('workspace_id, thread_id, revision, updated_at').eq('owner_id', ownerId).maybeSingle()
+    if (error) fail(error)
+    if (!target?.thread_id) return { target: target as CodexTarget | null, thread: null }
+    const { data: workspace, error: workspaceError } = await this.db.from('codex_workspaces')
+      .select('available, codex_bridges!inner(owner_id, revoked_at)')
+      .eq('id', target.workspace_id).eq('codex_bridges.owner_id', ownerId).is('codex_bridges.revoked_at', null).maybeSingle()
+    if (workspaceError) fail(workspaceError)
+    if (!workspace?.available) return { target: target as CodexTarget, thread: null }
+    const { data: thread, error: threadError } = await this.db.from('codex_threads')
+      .select('id, workspace_id, codex_thread_id, title, status, milestone, final_summary, last_error, updated_at').eq('id', target.thread_id).maybeSingle()
+    if (threadError) fail(threadError)
+    return { target: target as CodexTarget, thread: thread as CodexThread | null }
+  }
+
+  async codexInteractionPayload(ownerId: string, requestId: string) {
+    const { data, error } = await this.db.from('codex_interactions').select('encrypted_payload')
+      .eq('owner_id', ownerId).eq('approval_request_id', requestId).maybeSingle()
+    if (error) fail(error)
+    return data?.encrypted_payload ?? null
+  }
+
   async getRule(ownerId: string, ruleId: string) {
     const { data, error } = await this.db
       .from('ping_rules')
-      .select('id, destination_pod_id, source_connection_id, title, intent_summary, capability_id, capability_name, capability_schema_hash, capability_safety, definition, schema_version, revision, created_at, updated_at')
+      .select('id, destination_pod_id, source_connection_id, title, intent_summary, capability_id, capability_name, capability_schema_hash, capability_safety, definition, schema_version, status, action_connection_id, action_capability_id, action_capability_name, action_capability_schema_hash, action_capability_safety, activated_at, revision, created_at, updated_at')
       .eq('id', ruleId)
       .eq('owner_id', ownerId)
       .maybeSingle()
@@ -550,18 +738,22 @@ export class SupabaseStore implements Store {
   async listRules(ownerId: string) {
     const { data, error } = await this.db
       .from('ping_rules')
-      .select('id, destination_pod_id, source_connection_id, title, intent_summary, capability_id, capability_name, capability_schema_hash, capability_safety, schema_version, revision, created_at, updated_at, connections(name, provider, account_label, status), pods(name, revoked_at)')
+      .select('id, destination_pod_id, source_connection_id, title, intent_summary, capability_id, capability_name, capability_schema_hash, capability_safety, schema_version, status, action_connection_id, action_capability_id, action_capability_name, action_capability_schema_hash, action_capability_safety, activated_at, revision, created_at, updated_at, connections!ping_rules_owner_id_source_connection_id_fkey(name, provider, account_label, status), pods(name, revoked_at), ping_rule_runtime_states!ping_rule_runtime_states_owner_id_rule_id_fkey(baseline_completed, next_run_at, consecutive_failures, schema_drift, last_error, last_run_at, last_event_at)')
       .eq('owner_id', ownerId)
       .order('updated_at', { ascending: false })
     if (error) fail(error)
     return data.map((row) => {
       const connection = Array.isArray(row.connections) ? row.connections[0] : row.connections
       const pod = Array.isArray(row.pods) ? row.pods[0] : row.pods
-      const { connections: _connections, pods: _pods, ...rule } = row
+      const runtime = Array.isArray(row.ping_rule_runtime_states)
+        ? row.ping_rule_runtime_states[0]
+        : row.ping_rule_runtime_states
+      const { connections: _connections, pods: _pods, ping_rule_runtime_states: _runtime, ...rule } = row
       return {
         ...rule,
         source: connection,
         destination: { name: pod?.name ?? 'Unavailable Pod', available: Boolean(pod && !pod.revoked_at) },
+        runtime: runtime ?? null,
       }
     }) as PingRuleSummary[]
   }
@@ -581,7 +773,13 @@ export class SupabaseStore implements Store {
       capability_schema_hash: editingRule.capability_schema_hash,
       capability_safety: editingRule.capability_safety,
       definition: editingRule.definition,
-      ready: true,
+      context_bindings: editingRule.schema_version === 2
+        ? ((editingRule.definition as { context?: RuleDraft['context_bindings'] }).context ?? [])
+        : [],
+      action: editingRule.schema_version === 2
+        ? ((editingRule.definition as { action?: RuleDraft['action'] }).action ?? null)
+        : null,
+      ready: editingRule.schema_version === 2,
     } : {}
     const { data, error } = await this.db
       .from('rule_builder_sessions')
@@ -642,7 +840,7 @@ export class SupabaseStore implements Store {
     expectedRevision: number,
     draft: RuleDraft,
   ) {
-    const { data, error } = await this.db.rpc('commit_ping_rule_session', {
+    const { data, error } = await this.db.rpc('commit_ping_rule_session_v2', {
       p_owner_id: ownerId,
       p_session_id: sessionId,
       p_expected_revision: expectedRevision,
@@ -652,21 +850,452 @@ export class SupabaseStore implements Store {
       p_capability_id: draft.capability_id,
       p_capability_name: draft.capability_name,
       p_capability_schema_hash: draft.capability_schema_hash,
-      p_capability_safety: draft.capability_safety,
       p_definition: draft.definition,
+      p_context_bindings: draft.context_bindings ?? [],
+      p_action_connection_id: draft.action?.connection_id ?? null,
+      p_action_capability_id: draft.action?.capability_id ?? null,
+      p_action_capability_name: draft.action?.capability_name ?? null,
+      p_action_capability_schema_hash: draft.action?.capability_schema_hash ?? null,
     })
     if (error || !data) fail(error)
     return (Array.isArray(data) ? data[0] : data) as PingRule
   }
 
   async deleteRule(ownerId: string, ruleId: string) {
-    const { data, error } = await this.db
-      .from('ping_rules')
-      .delete()
-      .eq('id', ruleId)
+    const { data, error } = await this.db.rpc('delete_ping_rule', {
+      p_owner_id: ownerId,
+      p_rule_id: ruleId,
+    })
+    if (error) fail(error)
+    return data === true
+  }
+
+  async updateRuleStatus(
+    ownerId: string,
+    ruleId: string,
+    expectedRevision: number,
+    status: 'active' | 'paused',
+  ) {
+    const { data, error } = await this.db.rpc('set_ping_rule_status', {
+      p_owner_id: ownerId,
+      p_rule_id: ruleId,
+      p_expected_revision: expectedRevision,
+      p_status: status,
+    })
+    if (error || !data) fail(error)
+    return (Array.isArray(data) ? data[0] : data) as PingRule
+  }
+
+  async listRuleActivity(ownerId: string, ruleId: string, cursor?: string) {
+    const rule = await this.getRule(ownerId, ruleId)
+    if (!rule) return null
+
+    let before: string | undefined
+    if (cursor) {
+      try {
+        before = Buffer.from(cursor, 'base64url').toString('utf8')
+        if (!Number.isFinite(new Date(before).getTime())) before = undefined
+      } catch {
+        before = undefined
+      }
+    }
+    let eventsQuery = this.db
+      .from('ping_rule_events')
+      .select('id, status, occurred_at, resolved_at, last_error')
       .eq('owner_id', ownerId)
+      .eq('rule_id', ruleId)
+      .order('occurred_at', { ascending: false })
+      .limit(25)
+    let runsQuery = this.db
+      .from('ping_rule_runs')
+      .select('id, stage, outcome, error_code, error_message, duration_ms, created_at')
+      .eq('owner_id', ownerId)
+      .eq('rule_id', ruleId)
+      .order('created_at', { ascending: false })
+      .limit(25)
+    if (before) {
+      eventsQuery = eventsQuery.lt('occurred_at', before)
+      runsQuery = runsQuery.lt('created_at', before)
+    }
+    const [{ data: events, error: eventsError }, { data: runs, error: runsError }] = await Promise.all([
+      eventsQuery,
+      runsQuery,
+    ])
+    if (eventsError || runsError) fail(eventsError ?? runsError)
+    const oldest = [...events.map((item) => item.occurred_at), ...runs.map((item) => item.created_at)]
+      .sort()[0]
+    return {
+      events,
+      runs,
+      next_cursor: events.length === 25 || runs.length === 25
+        ? Buffer.from(oldest, 'utf8').toString('base64url')
+        : null,
+    } as RuleActivity
+  }
+
+  async pingEventPresentation(ownerId: string, eventId: string) {
+    const { data, error } = await this.db
+      .from('ping_rule_events')
+      .select('encrypted_draft_payload, action_payload_hash')
+      .eq('owner_id', ownerId)
+      .eq('id', eventId)
+      .maybeSingle()
+    if (error) fail(error)
+    if (!data?.encrypted_draft_payload || !data.action_payload_hash) return null
+    return { encryptedDraft: data.encrypted_draft_payload, actionHash: data.action_payload_hash }
+  }
+
+  async createTelegramAuthSession(ownerId: string, name: string) {
+    const { data, error } = await this.db.rpc('create_telegram_auth_session', {
+      p_owner_id: ownerId,
+      p_connection_name: name,
+    })
+    if (error || !data) fail(error)
+    return (Array.isArray(data) ? data[0] : data) as TelegramAuthSession
+  }
+
+  async getTelegramAuthSession(ownerId: string, sessionId: string) {
+    const { data, error } = await this.db
+      .from('telegram_auth_sessions')
+      .select('id, status, connection_name, encrypted_qr_payload, qr_expires_at, password_hint, connection_id, last_error, expires_at')
+      .eq('owner_id', ownerId)
+      .eq('id', sessionId)
+      .maybeSingle()
+    if (error) fail(error)
+    return data as TelegramAuthSession | null
+  }
+
+  async submitTelegramAuthPassword(ownerId: string, sessionId: string, encryptedPassword: string) {
+    const { data, error } = await this.db.rpc('submit_telegram_auth_password', {
+      p_owner_id: ownerId,
+      p_session_id: sessionId,
+      p_encrypted_password: encryptedPassword,
+    })
+    if (error) fail(error)
+    return data === true
+  }
+
+  async cancelTelegramAuthSession(ownerId: string, sessionId: string) {
+    const { data, error } = await this.db.rpc('cancel_telegram_auth_session', {
+      p_owner_id: ownerId,
+      p_session_id: sessionId,
+    })
+    if (error) fail(error)
+    return data === true
+  }
+
+  async claimTelegramAuthSession(workerId: string) {
+    const { data, error } = await this.db.rpc('claim_telegram_auth_session', {
+      p_worker_id: workerId,
+      p_lease_seconds: 90,
+    })
+    if (error) fail(error)
+    const row = data?.[0]
+    return row ? { sessionId: row.session_id, ownerId: row.owner_id, leaseToken: row.lease_token } : null
+  }
+
+  async getClaimedTelegramAuthSession(sessionId: string, leaseToken: string) {
+    const { data, error } = await this.db
+      .from('telegram_auth_sessions')
+      .select('id, status, connection_name, encrypted_qr_payload, qr_expires_at, password_hint, encrypted_password, connection_id, last_error, expires_at, lease_token')
+      .eq('id', sessionId)
+      .eq('lease_token', leaseToken)
+      .maybeSingle()
+    if (error) fail(error)
+    return data as TelegramAuthSession | null
+  }
+
+  async updateTelegramAuthSession(
+    sessionId: string,
+    leaseToken: string,
+    changes: Partial<Pick<TelegramAuthSession, 'status' | 'encrypted_qr_payload' | 'qr_expires_at' | 'password_hint' | 'encrypted_password' | 'last_error'>>,
+  ) {
+    const { data, error } = await this.db
+      .from('telegram_auth_sessions')
+      .update({
+        ...changes,
+        leased_until: new Date(Date.now() + 90_000).toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', sessionId)
+      .eq('lease_token', leaseToken)
       .select('id')
     if (error) fail(error)
     return Boolean(data?.length)
+  }
+
+  async completeTelegramAuthSession(
+    sessionId: string,
+    leaseToken: string,
+    encryptedSecret: string,
+    accountLabel: string,
+  ) {
+    const { data, error } = await this.db.rpc('complete_telegram_auth_session', {
+      p_session_id: sessionId,
+      p_lease_token: leaseToken,
+      p_encrypted_connection_secret: encryptedSecret,
+      p_account_label: accountLabel,
+    })
+    if (error || !data) fail(error)
+    return (Array.isArray(data) ? data[0] : data) as Connection
+  }
+
+  async listActiveTelegramConnections() {
+    const { data, error } = await this.db
+      .from('ping_rules')
+      .select('owner_id, source_connection_id, connections!ping_rules_owner_id_source_connection_id_fkey(provider, status)')
+      .eq('status', 'active')
+    if (error) fail(error)
+    const unique = new Map<string, { ownerId: string; connectionId: string }>()
+    for (const row of data) {
+      const connection = Array.isArray(row.connections) ? row.connections[0] : row.connections
+      if (connection?.provider === 'telegram' && connection.status === 'connected') {
+        unique.set(row.source_connection_id, { ownerId: row.owner_id, connectionId: row.source_connection_id })
+      }
+    }
+    return [...unique.values()]
+  }
+
+  async claimConnectionLease(ownerId: string, connectionId: string, workerId: string) {
+    const { data, error } = await this.db.rpc('claim_connection_runtime_lease', {
+      p_owner_id: ownerId,
+      p_connection_id: connectionId,
+      p_worker_id: workerId,
+      p_lease_seconds: 60,
+    })
+    if (error) fail(error)
+    return data as string | null
+  }
+
+  async recordConnectionHealth(ownerId: string, connectionId: string, success: boolean, errorMessage?: string) {
+    const { data, error } = await this.db.rpc('record_ping_connection_health', {
+      p_owner_id: ownerId,
+      p_connection_id: connectionId,
+      p_success: success,
+      p_error: errorMessage ?? null,
+    })
+    if (error) fail(error)
+    return Number(data ?? 0)
+  }
+
+  async listActiveRulesForConnection(ownerId: string, connectionId: string) {
+    const { data, error } = await this.db
+      .from('ping_rules')
+      .select('id')
+      .eq('owner_id', ownerId)
+      .eq('source_connection_id', connectionId)
+      .eq('status', 'active')
+      .eq('schema_version', 2)
+    if (error) fail(error)
+    const rules = await Promise.all(data.map((row) => this.getRuntimeRule(ownerId, row.id)))
+    return rules.filter((rule): rule is RuntimeRule => rule !== null)
+  }
+
+  async claimDueRule(workerId: string) {
+    const { data, error } = await this.db.rpc('claim_due_ping_rule', {
+      p_worker_id: workerId,
+      p_lease_seconds: 60,
+    })
+    if (error) fail(error)
+    const row = data?.[0]
+    return row ? { ruleId: row.rule_id, ownerId: row.owner_id, leaseToken: row.lease_token } : null
+  }
+
+  async getRuntimeRule(ownerId: string, ruleId: string) {
+    const { data, error } = await this.db
+      .from('ping_rules')
+      .select('*, ping_rule_context_bindings(connection_id, capability_id, capability_name, capability_schema_hash, arguments, position), ping_rule_runtime_states(cursor, baseline_completed, next_run_at, consecutive_failures, schema_drift)')
+      .eq('owner_id', ownerId)
+      .eq('id', ruleId)
+      .eq('schema_version', 2)
+      .maybeSingle()
+    if (error) fail(error)
+    if (!data) return null
+    const source = await this.getConnection(ownerId, data.source_connection_id)
+    if (!source) return null
+    const contexts = [...(data.ping_rule_context_bindings ?? [])]
+      .sort((left, right) => left.position - right.position)
+      .map(({ position: _position, ...binding }) => binding)
+    const runtime = Array.isArray(data.ping_rule_runtime_states)
+      ? data.ping_rule_runtime_states[0]
+      : data.ping_rule_runtime_states
+    const { ping_rule_context_bindings: _bindings, ping_rule_runtime_states: _runtime, ...rule } = data
+    return { ...rule, source, contexts, runtime } as RuntimeRule
+  }
+
+  async completeRuleRun(input: {
+    ruleId: string
+    leaseToken: string
+    success: boolean
+    nextRunAt: string
+    cursor: Record<string, unknown>
+    baselineCompleted: boolean
+    schemaDrift: boolean
+    error?: string
+    lastEventAt?: string
+  }) {
+    const { data, error } = await this.db.rpc('complete_ping_rule_run', {
+      p_rule_id: input.ruleId,
+      p_lease_token: input.leaseToken,
+      p_success: input.success,
+      p_next_run_at: input.nextRunAt,
+      p_cursor: input.cursor,
+      p_baseline_completed: input.baselineCompleted,
+      p_schema_drift: input.schemaDrift,
+      p_last_error: input.error ?? null,
+      p_last_event_at: input.lastEventAt ?? null,
+    })
+    if (error) fail(error)
+    return data === true
+  }
+
+  async enqueueRuleEvent(input: {
+    ownerId: string
+    ruleId: string
+    identity: string
+    conversationKey?: string
+    providerEventId?: string
+    occurredAt: string
+    encryptedSource: string
+    telegramRandomId?: string
+  }) {
+    const { data, error } = await this.db.rpc('enqueue_ping_rule_event', {
+      p_owner_id: input.ownerId,
+      p_rule_id: input.ruleId,
+      p_event_identity: input.identity,
+      p_conversation_key: input.conversationKey ?? null,
+      p_provider_event_id: input.providerEventId ?? null,
+      p_occurred_at: input.occurredAt,
+      p_encrypted_source_payload: input.encryptedSource,
+      p_telegram_random_id: input.telegramRandomId ?? null,
+    })
+    if (error || !data?.[0]) fail(error)
+    return { eventId: data[0].event_id, inserted: data[0].inserted }
+  }
+
+  async claimRuleEvent() {
+    const { data, error } = await this.db.rpc('claim_ping_rule_event', { p_lease_seconds: 120 })
+    if (error) fail(error)
+    const row = data?.[0]
+    return row ? { eventId: row.event_id, ownerId: row.owner_id, ruleId: row.rule_id, leaseToken: row.lease_token } : null
+  }
+
+  async getRuntimeEvent(ownerId: string, eventId: string) {
+    const { data, error } = await this.db
+      .from('ping_rule_events')
+      .select('id, owner_id, rule_id, event_identity, conversation_key, provider_event_id, occurred_at, status, encrypted_source_payload, encrypted_draft_payload, encrypted_action_payload, action_payload_hash, approval_request_id, delivery_idempotency_key, telegram_random_id, attempts')
+      .eq('owner_id', ownerId)
+      .eq('id', eventId)
+      .maybeSingle()
+    if (error) fail(error)
+    return data as RuntimeEvent | null
+  }
+
+  async ignoreRuleEvent(eventId: string, leaseToken: string, reason: string) {
+    const { data, error } = await this.db.rpc('ignore_ping_rule_event', {
+      p_event_id: eventId,
+      p_lease_token: leaseToken,
+      p_reason: reason,
+    })
+    if (error) fail(error)
+    return data === true
+  }
+
+  async failRuleEvent(eventId: string, leaseToken: string, errorMessage: string, ambiguous = false) {
+    const { data, error } = await this.db.rpc('fail_ping_rule_event', {
+      p_event_id: eventId,
+      p_lease_token: leaseToken,
+      p_error: errorMessage,
+      p_ambiguous: ambiguous,
+    })
+    if (error) fail(error)
+    return data === true
+  }
+
+  async prepareRuleApproval(input: {
+    eventId: string
+    leaseToken: string
+    encryptedDraft: string
+    encryptedAction: string
+    actionHash: string
+    title: string
+    source: string
+    summary: string
+    details: string
+    affectedContext: string
+    risk: 'low' | 'medium' | 'high'
+    warnings: string[]
+    expiresAt: string
+  }) {
+    const { data, error } = await this.db.rpc('prepare_ping_rule_approval', {
+      p_event_id: input.eventId,
+      p_lease_token: input.leaseToken,
+      p_encrypted_draft_payload: input.encryptedDraft,
+      p_encrypted_action_payload: input.encryptedAction,
+      p_action_payload_hash: input.actionHash,
+      p_title: input.title,
+      p_source: input.source,
+      p_summary: input.summary,
+      p_details: input.details,
+      p_affected_context: input.affectedContext,
+      p_risk: input.risk,
+      p_warnings: input.warnings,
+      p_expires_at: input.expiresAt,
+    })
+    if (error || !data) fail(error)
+    return (Array.isArray(data) ? data[0] : data) as ApprovalRequest
+  }
+
+  async claimApprovedAction() {
+    const { data, error } = await this.db.rpc('claim_approved_ping_action', { p_lease_seconds: 120 })
+    if (error) fail(error)
+    const row = data?.[0]
+    return row ? { eventId: row.event_id, ownerId: row.owner_id, ruleId: row.rule_id, leaseToken: row.lease_token } : null
+  }
+
+  async completeAction(
+    eventId: string,
+    leaseToken: string,
+    result: { delivered: boolean; retryable?: boolean; ambiguous?: boolean; superseded?: boolean; error?: string },
+  ) {
+    const { data, error } = await this.db.rpc('complete_ping_action', {
+      p_event_id: eventId,
+      p_lease_token: leaseToken,
+      p_delivered: result.delivered,
+      p_retryable: result.retryable ?? false,
+      p_ambiguous: result.ambiguous ?? false,
+      p_superseded: result.superseded ?? false,
+      p_error: result.error ?? null,
+    })
+    if (error) fail(error)
+    return data === true
+  }
+
+  async recordRuleRun(input: {
+    ownerId: string
+    ruleId: string
+    eventId?: string
+    stage: string
+    outcome: string
+    errorCode?: string
+    errorMessage?: string
+    durationMs?: number
+  }) {
+    const { error } = await this.db.from('ping_rule_runs').insert({
+      owner_id: input.ownerId,
+      rule_id: input.ruleId,
+      event_id: input.eventId ?? null,
+      stage: input.stage,
+      outcome: input.outcome,
+      error_code: input.errorCode?.slice(0, 100) ?? null,
+      error_message: input.errorMessage?.slice(0, 500) ?? null,
+      duration_ms: input.durationMs ?? null,
+    })
+    if (error) fail(error)
+  }
+
+  async purgeRuntimeData() {
+    const { error } = await this.db.rpc('purge_ping_runtime_data')
+    if (error) fail(error)
   }
 }

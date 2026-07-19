@@ -223,9 +223,9 @@ begin
 
   if request.expires_at <= now() then
     update public.approval_requests
-    set status = 'expired'
+    set status = 'expired', decided_at = now()
     where id = request.id;
-    raise exception 'request_expired' using errcode = 'P0001';
+    return null;
   end if;
 
   if request.payload_hash <> p_payload_hash then

@@ -15,11 +15,17 @@ export default async function DashboardLayout({
 
   if (!claims) redirect("/login");
 
-  const metadataName = claims.user_metadata?.full_name;
+  const metadata = claims.user_metadata;
+  const metadataName = metadata?.full_name;
   const email = typeof claims.email === "string" ? claims.email : "";
   const user = {
     name: typeof metadataName === "string" ? metadataName : email.split("@")[0] || "Podex user",
     email,
+    avatarUrl: typeof metadata?.avatar_url === "string"
+      ? metadata.avatar_url
+      : typeof metadata?.picture === "string"
+        ? metadata.picture
+        : undefined,
   };
 
   return (

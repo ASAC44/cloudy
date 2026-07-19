@@ -3,12 +3,13 @@ import Link from "next/link";
 import { ConnectionsManager } from "@/components/dashboard/connections-manager";
 import { OAuthChatResume } from "@/components/dashboard/new-ping-button";
 import { Button } from "@/components/ui/button";
-import { apiFetch, type Connection } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import type { Connection } from "@/types/api";
 
 export default async function ConnectionsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ connected?: string; error?: string; resume?: string }>;
+  searchParams: Promise<{ connected?: string; error?: string; resume?: string; connect?: string }>;
 }) {
   const query = await searchParams;
   let connections: Connection[] = [];
@@ -31,11 +32,17 @@ export default async function ConnectionsPage({
       <header className="mb-10 border-b border-border pb-10">
         <h1 className="text-[clamp(2.5rem,6vw,4.5rem)] leading-none tracking-[-0.04em]">Bring your tools to the Pod.</h1>
         <p className="mt-5 max-w-2xl text-base leading-7 text-muted-foreground">
-          Connect the services agents may read when preparing a decision. Every smoke test is read-only; writes and provider-generated Pings are not enabled yet.
+          Connect the services Podex may watch and use for approved actions. Every write still waits for an exact approval on your Pod.
         </p>
       </header>
 
-      <ConnectionsManager initialConnections={connections} initialError={error || undefined} oauthNotice={oauthNotice} />
+      <ConnectionsManager
+        initialConnections={connections}
+        initialError={error || undefined}
+        oauthNotice={oauthNotice}
+        initialProvider={isProvider(query.connect) ? query.connect : undefined}
+        resumeSessionId={query.resume}
+      />
       {query.resume ? (
         <div className="mt-10 flex items-center justify-between gap-4 border-y border-border py-4">
           <p className="text-sm text-muted-foreground">Return when the required service is connected.</p>
@@ -50,4 +57,8 @@ export default async function ConnectionsPage({
 
 function providerName(value: string) {
   return value === "github" ? "GitHub" : value === "gmail" ? "Gmail" : "Provider";
+}
+
+function isProvider(value?: string): value is Connection["provider"] {
+  return Boolean(value && ["github", "gmail", "vercel", "telegram", "linear", "stripe", "custom_mcp"].includes(value));
 }

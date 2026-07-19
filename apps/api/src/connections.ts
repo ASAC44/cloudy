@@ -1,31 +1,32 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
+import { lookup as dnsLookup } from 'node:dns'
 import { lookup } from 'node:dns/promises'
-import { isIP } from 'node:net'
+import { isIP, type LookupFunction } from 'node:net'
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import type { Tool } from '@modelcontextprotocol/sdk/types.js'
+import { Api, TelegramClient } from 'telegram'
+import { returnBigInt } from 'telegram/Helpers.js'
+import { StringSession } from 'telegram/sessions/StringSession.js'
+import { Agent } from 'undici'
 
-import type { Capability, Connection, ConnectionProvider, NewConnection, Store } from './store.js'
+import { GithubClient, type GithubMergeAction } from './github-pr.js'
+import type { Capability, CapabilityRole, Connection, ConnectionProvider, NewConnection, Store } from './types/store.js'
+import type { ConnectionConfig } from './types/connections.js'
+
+export type { ConnectionConfig } from './types/connections.js'
 
 const ENDPOINTS = {
   github: 'https://api.githubcopilot.com/mcp/readonly',
   gmail: 'https://gmail.googleapis.com',
   vercel: 'https://api.vercel.com',
   telegram: 'https://api.telegram.org',
+  linear: 'https://mcp.linear.app/mcp',
+  stripe: 'https://mcp.stripe.com',
 } as const
 
 type Credentials = Record<string, string | number | undefined>
-
-export type ConnectionConfig = {
-  encryptionKey: string
-  publicApiUrl: string
-  webUrl: string
-  githubClientId?: string
-  githubClientSecret?: string
-  googleClientId?: string
-  googleClientSecret?: string
-}
 
 export class ConnectionError extends Error {
   constructor(readonly code: string, message = code) {
@@ -45,8 +46,12 @@ export class ConnectionService {
     if (this.key.length !== 32) throw new Error('CONNECTION_ENCRYPTION_KEY must be 32 bytes encoded as base64')
   }
 
+  telegramUserAuthAvailable() {
+    return Boolean(this.config.telegramApiId && this.config.telegramApiHash)
+  }
+
   async createManual(ownerId: string, input: {
-    provider: 'vercel' | 'telegram' | 'custom_mcp'
+    provider: 'vercel' | 'telegram' | 'linear' | 'stripe' | 'custom_mcp'
     name: string
     endpointUrl?: string
     authType?: 'none' | 'bearer'
@@ -73,6 +78,22 @@ export class ConnectionService {
     return requiredCredential(this.decrypt(encryptedCallbackUrl), 'callbackUrl')
   }
 
+  encryptCodexPayload(payload: Record<string, unknown>) {
+    return this.encryptPrivatePayload(payload)
+  }
+
+  decryptCodexPayload(encryptedPayload: string) {
+    return this.decryptPrivatePayload<Record<string, unknown>>(encryptedPayload)
+  }
+
+  encryptPrivatePayload(payload: unknown) {
+    return this.encrypt({ payload: JSON.stringify(payload) })
+  }
+
+  decryptPrivatePayload<T = unknown>(encryptedPayload: string): T {
+    return JSON.parse(requiredCredential(this.decrypt(encryptedPayload), 'payload')) as T
+  }
+
   async update(ownerId: string, connectionId: string, input: {
     name?: string
     endpointUrl?: string
@@ -83,6 +104,9 @@ export class ConnectionService {
     if (!existing) throw new ConnectionError('connection_not_found')
     if (input.endpointUrl !== undefined && existing.provider !== 'custom_mcp') {
       throw new ConnectionError('endpoint_not_editable')
+    }
+    if (input.authType !== undefined && existing.provider !== 'custom_mcp') {
+      throw new ConnectionError('auth_type_not_editable')
     }
 
     const changes: Partial<Pick<Connection, 'name' | 'endpoint_url' | 'auth_type'>> = {}
@@ -113,13 +137,11 @@ export class ConnectionService {
     try {
       const credentials = this.decrypt(stored.encrypted_payload)
       const result = await this.smokeTest(stored, credentials)
-      if (result.credentials) {
-        await this.store.updateConnectionSecret(connectionId, this.encrypt(result.credentials))
-      }
       return await this.store.setConnectionTest(ownerId, connectionId, {
         status: 'connected',
         accountLabel: result.accountLabel,
         error: null,
+        encryptedPayload: result.credentials ? this.encrypt(result.credentials) : undefined,
       })
     } catch (error) {
       const message = safeTestError(error)
@@ -217,19 +239,35 @@ export class ConnectionService {
   async discoverConnectionCapabilities(ownerId: string, connectionId: string): Promise<Capability[]> {
     const connection = await this.store.getConnection(ownerId, connectionId)
     if (!connection || connection.status !== 'connected') return []
-    if (connection.protocol === 'rest') return restCapabilities(connection)
-
     const credentials = this.decrypt(connection.encrypted_payload)
+    if (connection.protocol === 'rest') return restCapabilities(connection, credentials)
+
     const token = connection.provider === 'github'
       ? requiredCredential(credentials, 'accessToken')
       : connection.auth_type === 'bearer'
         ? requiredCredential(credentials, 'token')
         : undefined
     const tools = await this.listMcpTools(connection.endpoint_url, token, connection.provider === 'custom_mcp')
-    return tools.flatMap((tool) => {
+      .catch((error) => {
+        if (connection.provider === 'github') return []
+        throw error
+      })
+    const discovered = tools.flatMap((tool) => {
       if (tool.annotations?.destructiveHint === true) return []
-      const safety = tool.annotations?.readOnlyHint === true ? 'verified_read' as const : 'unannotated' as const
+      const readOnly = tool.annotations?.readOnlyHint
+      const safety = readOnly === true
+        ? 'verified_read' as const
+        : readOnly === false && tool.annotations?.destructiveHint === false
+          ? 'verified_write' as const
+          : 'unannotated' as const
       const inputSchema = sanitizeSchema(tool.inputSchema)
+      const outputSchema = sanitizeSchema(tool.outputSchema)
+      const runtimeSafe = safety !== 'unannotated'
+      const roles: CapabilityRole[] = safety === 'verified_read'
+        ? ['source', 'context', 'setup']
+        : safety === 'verified_write'
+          ? ['action']
+          : ['source', 'context', 'action']
       return [{
         id: `${connection.id}:mcp:${tool.name}`,
         connection_id: connection.id,
@@ -241,17 +279,34 @@ export class ConnectionService {
         title: clip(tool.title ?? tool.name, 160),
         description: clip(tool.description ?? '', 1000),
         input_schema: inputSchema,
-        schema_hash: hash(JSON.stringify(inputSchema)),
+        output_schema: outputSchema,
+        schema_hash: hash(JSON.stringify({ inputSchema, outputSchema, readOnly, destructive: tool.annotations?.destructiveHint })),
         safety,
+        roles,
+        delivery: 'poll' as const,
+        effect: safety === 'verified_read' ? 'read' as const : safety === 'verified_write' ? 'write' as const : 'unannotated' as const,
+        runtime_safe: runtimeSafe,
         callable_during_setup: safety === 'verified_read',
       }]
     })
+    return connection.provider === 'github'
+      ? [...githubCapabilities(connection), ...discovered]
+      : discovered
   }
 
   async callSetupCapability(ownerId: string, capability: Capability, input: Record<string, unknown>) {
     if (!capability.callable_during_setup) throw new ConnectionError('capability_not_safe')
     const connection = await this.store.getConnection(ownerId, capability.connection_id)
     if (!connection || connection.status !== 'connected') throw new ConnectionError('connection_not_found')
+
+    if (connection.provider === 'github' && capability.name.startsWith('github.')) {
+      const client = this.githubClient(connection)
+      if (capability.name === 'github.list_repositories') return await client.listRepositories()
+      if (capability.name === 'github.ready_pull_requests') {
+        return await client.readyPullRequests(stringList(input.repositories, 10))
+      }
+      throw new ConnectionError('capability_not_found')
+    }
 
     if (connection.protocol === 'mcp') {
       const credentials = this.decrypt(connection.encrypted_payload)
@@ -266,7 +321,7 @@ export class ConnectionService {
     }
 
     const credentials = this.decrypt(connection.encrypted_payload)
-    if (capability.name === 'gmail.search_messages') {
+    if (capability.name === 'gmail.search_messages' || capability.name === 'gmail.list_messages') {
       const current = await this.refreshGoogleCredentials(credentials)
       if (JSON.stringify(current) !== JSON.stringify(credentials)) {
         await this.store.updateConnectionSecret(connection.id, this.encrypt(current))
@@ -276,17 +331,122 @@ export class ConnectionService {
       url.searchParams.set('maxResults', String(Math.min(Number(input.limit) || 10, 20)))
       return await this.json(url.toString(), { headers: providerHeaders(requiredCredential(current, 'accessToken')) })
     }
+    if (capability.name === 'gmail.get_thread') {
+      const current = await this.refreshGoogleCredentials(credentials)
+      const threadId = requiredString(input, 'thread_id')
+      return await this.json(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(threadId)}?format=metadata`, {
+        headers: providerHeaders(requiredCredential(current, 'accessToken')),
+      })
+    }
     if (capability.name === 'vercel.list_projects') {
       const url = new URL('https://api.vercel.com/v9/projects')
       url.searchParams.set('limit', String(Math.min(Number(input.limit) || 20, 20)))
       if (typeof input.search === 'string' && input.search) url.searchParams.set('search', input.search)
       return await this.json(url.toString(), { headers: providerHeaders(requiredCredential(credentials, 'token')) })
     }
+    if (capability.name === 'telegram.discover_dialogs') {
+      return await this.withTelegram(credentials, async (client) => {
+        const dialogs = await client.getDialogs({ limit: Math.min(Number(input.limit) || 30, 50) })
+        return dialogs.map((dialog) => ({
+          id: dialog.id?.toString() ?? '',
+          title: clip(dialog.title ?? 'Telegram chat', 160),
+          kind: dialog.isUser ? 'dm' : dialog.isGroup ? 'group' : dialog.isChannel ? 'channel' : 'chat',
+        }))
+      })
+    }
     throw new ConnectionError('capability_not_found')
   }
 
+  async callRuntimeCapability(
+    ownerId: string,
+    capability: Capability,
+    input: Record<string, unknown>,
+    role: 'source' | 'context' | 'action',
+    runtime?: { telegramRandomId?: string },
+  ) {
+    if (!capability.runtime_safe || !capability.roles.includes(role)) throw new ConnectionError('capability_not_safe')
+    const latest = (await this.discoverConnectionCapabilities(ownerId, capability.connection_id))
+      .find(({ id }) => id === capability.id)
+    if (!latest || latest.schema_hash !== capability.schema_hash || !latest.runtime_safe || !latest.roles.includes(role)) {
+      throw new ConnectionError('capability_changed')
+    }
+    if (!validInput(latest.input_schema, input)) throw new ConnectionError('invalid_capability_input')
+    const connection = await this.store.getConnection(ownerId, latest.connection_id)
+    if (!connection || connection.status !== 'connected') throw new ConnectionError('capability_not_found')
+    if (connection.provider === 'github' && latest.name.startsWith('github.')) {
+      const client = this.githubClient(connection)
+      if (role === 'source' && latest.name === 'github.ready_pull_requests') {
+        return await client.readyPullRequests(stringList(input.repositories, 10))
+      }
+      if (role === 'action' && latest.name === 'github.merge_pull_request') {
+        return await client.merge(input as unknown as GithubMergeAction)
+      }
+      throw new ConnectionError('capability_not_found')
+    }
+    if (connection.provider === 'telegram' && connection.protocol === 'rest') {
+      const credentials = this.decrypt(connection.encrypted_payload)
+      return await this.withTelegram(credentials, async (client) => {
+        if (role === 'context' && latest.name === 'telegram.recent_thread') {
+          const messages = await client.getMessages(requiredString(input, 'peer_id'), {
+            limit: Math.min(Number(input.limit) || 10, 20),
+          })
+          return messages.map((message) => ({
+            id: message.id,
+            date: message.date,
+            text: clip(message.message ?? '', 4_000),
+            sender_id: message.senderId?.toString() ?? null,
+          }))
+        }
+        if (role === 'action' && latest.name === 'telegram.send_text') {
+          const response = await client.invoke(new Api.messages.SendMessage({
+            peer: await client.getInputEntity(requiredString(input, 'peer_id')),
+            message: requiredString(input, 'message'),
+            randomId: returnBigInt(runtime?.telegramRandomId ?? randomBytes(8).readBigInt64BE().toString()),
+          }))
+          return { sent: true, response_type: response.className }
+        }
+        throw new ConnectionError('capability_not_found')
+      })
+    }
+    if (role !== 'action') return await this.callSetupCapability(ownerId, { ...latest, callable_during_setup: true }, input)
+    if (connection.protocol !== 'mcp') throw new ConnectionError('capability_not_found')
+    const credentials = this.decrypt(connection.encrypted_payload)
+    const token = connection.provider === 'github'
+      ? requiredCredential(credentials, 'accessToken')
+      : connection.auth_type === 'bearer' ? requiredCredential(credentials, 'token') : undefined
+    return await this.withMcpClient(connection.endpoint_url, token, connection.provider === 'custom_mcp', async (client) => {
+      return await client.callTool({ name: latest.name, arguments: input })
+    })
+  }
+
+  encryptTelegramSession(session: string) {
+    return this.encrypt({ mode: 'user', session })
+  }
+
+  async connectTelegram(ownerId: string, connectionId: string) {
+    const connection = await this.store.getConnection(ownerId, connectionId)
+    if (!connection || connection.provider !== 'telegram' || connection.status !== 'connected') {
+      throw new ConnectionError('connection_not_found')
+    }
+    const credentials = this.decrypt(connection.encrypted_payload)
+    if (credentials.mode !== 'user') throw new ConnectionError('capability_not_found')
+    if (!this.config.telegramApiId || !this.config.telegramApiHash) throw new ConnectionError('provider_not_configured')
+    const client = new TelegramClient(
+      new StringSession(requiredCredential(credentials, 'session')),
+      this.config.telegramApiId,
+      this.config.telegramApiHash,
+      { connectionRetries: 5, autoReconnect: true },
+    )
+    await client.connect()
+    if (!await client.checkAuthorization()) {
+      await client.disconnect().catch(() => undefined)
+      throw new ConnectionError('authentication_failed')
+    }
+    return client
+  }
+
   private async manualDefinition(input: {
-    provider: 'vercel' | 'telegram' | 'custom_mcp'
+    provider: 'vercel' | 'telegram' | 'linear' | 'stripe' | 'custom_mcp'
     name: string
     endpointUrl?: string
     authType?: 'none' | 'bearer'
@@ -309,11 +469,12 @@ export class ConnectionService {
       }
     }
     if (!input.token) throw new ConnectionError('token_required')
+    const mcp = input.provider === 'linear' || input.provider === 'stripe'
     return {
       connection: {
         name: input.name,
         provider: input.provider,
-        protocol: 'rest' as const,
+        protocol: mcp ? 'mcp' as const : 'rest' as const,
         endpoint_url: ENDPOINTS[input.provider],
         auth_type: 'bearer' as const,
       },
@@ -324,11 +485,8 @@ export class ConnectionService {
   private async smokeTest(connection: Connection, credentials: Credentials) {
     if (connection.provider === 'github') {
       const token = requiredCredential(credentials, 'accessToken')
-      const [tools, profile] = await Promise.all([
-        this.listMcpTools(connection.endpoint_url, token, false),
-        this.json('https://api.github.com/user', { headers: providerHeaders(token) }),
-      ])
-      return { accountLabel: String(profile.login ?? `${tools.length} tools`) }
+      const profile = await this.json('https://api.github.com/user', { headers: providerHeaders(token) })
+      return { accountLabel: String(profile.login ?? 'GitHub') }
     }
     if (connection.provider === 'gmail') {
       const current = await this.refreshGoogleCredentials(credentials)
@@ -345,6 +503,14 @@ export class ConnectionService {
       return { accountLabel: String(user.username ?? user.email ?? user.name ?? 'Vercel') }
     }
     if (connection.provider === 'telegram') {
+      if (credentials.mode === 'user') {
+        return await this.withTelegram(credentials, async (client) => {
+          const me = await client.getMe()
+          const username = 'username' in me ? me.username : undefined
+          const firstName = 'firstName' in me ? me.firstName : undefined
+          return { accountLabel: username ? `@${username}` : String(firstName ?? 'Telegram') }
+        })
+      }
       const token = requiredCredential(credentials, 'token')
       const profile = await this.json(`https://api.telegram.org/bot${encodeURIComponent(token)}/getMe`)
       if (profile.ok !== true || typeof profile.result !== 'object' || !profile.result) throw new ConnectionError('authentication_failed')
@@ -357,6 +523,11 @@ export class ConnectionService {
       true,
     )
     return { accountLabel: `${tools.length} tool${tools.length === 1 ? '' : 's'}` }
+  }
+
+  private githubClient(connection: Connection & { encrypted_payload?: string }) {
+    if (!connection.encrypted_payload) throw new ConnectionError('credentials_unreadable')
+    return new GithubClient(requiredCredential(this.decrypt(connection.encrypted_payload), 'accessToken'), this.fetcher)
   }
 
   private async listMcpTools(endpoint: string, token: string | undefined, validate: boolean) {
@@ -383,11 +554,13 @@ export class ConnectionService {
     const guardedFetch: typeof fetch = async (input, init) => {
       const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url)
       if (url.origin !== origin) throw new ConnectionError('unexpected_redirect')
-      return this.fetcher(input, {
+      const response = await publicEndpointFetch(this.fetcher, input, {
         ...init,
         redirect: 'manual',
         signal: combinedSignal(init?.signal),
       })
+      if (response.status === 401 || response.status === 403) throw new ConnectionError('authentication_failed')
+      return response
     }
     const client = new Client({ name: 'podex', version: '0.1.0' })
     const transport = new StreamableHTTPClientTransport(new URL(endpoint), {
@@ -472,6 +645,23 @@ export class ConnectionService {
     return await response.json() as Record<string, unknown>
   }
 
+  private async withTelegram<T>(credentials: Credentials, run: (client: TelegramClient) => Promise<T>) {
+    if (!this.config.telegramApiId || !this.config.telegramApiHash) throw new ConnectionError('provider_not_configured')
+    const client = new TelegramClient(
+      new StringSession(requiredCredential(credentials, 'session')),
+      this.config.telegramApiId,
+      this.config.telegramApiHash,
+      { connectionRetries: 2 },
+    )
+    try {
+      await client.connect()
+      if (!await client.checkAuthorization()) throw new ConnectionError('authentication_failed')
+      return await run(client)
+    } finally {
+      await client.disconnect().catch(() => undefined)
+    }
+  }
+
   private encrypt(credentials: Credentials) {
     const iv = randomBytes(12)
     const cipher = createCipheriv('aes-256-gcm', this.key, iv)
@@ -498,26 +688,147 @@ export class ConnectionService {
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 const providerHeaders = (token: string) => ({ Authorization: `Bearer ${token}`, Accept: 'application/json' })
 
-function restCapabilities(connection: Connection): Capability[] {
+function githubCapabilities(connection: Connection): Capability[] {
+  const definitions = [{
+    name: 'github.list_repositories',
+    title: 'List GitHub repositories',
+    description: 'List repositories available to this GitHub connection during setup.',
+    roles: ['setup'] as CapabilityRole[],
+    effect: 'read' as const,
+    callable: true,
+    input: { type: 'object', properties: {}, additionalProperties: false },
+    output: { type: 'object', properties: { items: { type: 'array' } } },
+  }, {
+    name: 'github.ready_pull_requests',
+    title: 'Watch merge-ready GitHub pull requests',
+    description: 'Poll up to ten repositories for open pull requests GitHub reports ready to merge.',
+    roles: ['source', 'setup'] as CapabilityRole[],
+    effect: 'read' as const,
+    callable: true,
+    input: {
+      type: 'object',
+      properties: { repositories: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 10 } },
+      required: ['repositories'],
+      additionalProperties: false,
+    },
+    output: { type: 'object', properties: { items: { type: 'array' } }, required: ['items'] },
+  }, {
+    name: 'github.merge_pull_request',
+    title: 'Merge a GitHub pull request',
+    description: 'Merge the exact reviewed pull request head after Pod approval.',
+    roles: ['action'] as CapabilityRole[],
+    effect: 'write' as const,
+    callable: false,
+    input: {
+      type: 'object',
+      properties: {
+        repository: { type: 'string' },
+        number: { type: 'number' },
+        head_sha: { type: 'string' },
+        merge_method: { type: 'string', enum: ['squash', 'rebase', 'merge'] },
+      },
+      required: ['repository', 'number', 'head_sha', 'merge_method'],
+      additionalProperties: false,
+    },
+    output: { type: 'object', properties: { merged: { type: 'boolean' }, sha: { type: 'string' } } },
+  }]
+  return definitions.map((definition) => ({
+    id: `${connection.id}:builtin:${definition.name}`,
+    connection_id: connection.id,
+    connection_name: connection.name,
+    provider: 'github' as const,
+    protocol: 'rest' as const,
+    account_label: connection.account_label,
+    name: definition.name,
+    title: definition.title,
+    description: definition.description,
+    input_schema: definition.input,
+    output_schema: definition.output,
+    schema_hash: hash(JSON.stringify({ input: definition.input, output: definition.output, effect: definition.effect })),
+    safety: definition.effect === 'write' ? 'verified_write' as const : 'verified_read' as const,
+    roles: definition.roles,
+    delivery: 'poll' as const,
+    effect: definition.effect,
+    runtime_safe: true,
+    callable_during_setup: definition.callable,
+  }))
+}
+
+function stringList(value: unknown, max: number) {
+  if (!Array.isArray(value) || value.length < 1 || value.length > max || value.some((item) => typeof item !== 'string')) {
+    throw new ConnectionError('invalid_capability_input')
+  }
+  return value as string[]
+}
+
+function restCapabilities(connection: Connection, credentials: Credentials): Capability[] {
   const definitions = connection.provider === 'gmail' ? [{
-    name: 'gmail.search_messages',
-    title: 'Search email',
-    description: 'Find messages using Gmail search syntax.',
+    name: 'gmail.list_messages',
+    title: 'Watch Gmail messages',
+    description: 'Poll messages using Gmail search syntax and stable message identifiers.',
+    roles: ['source', 'setup'] as CapabilityRole[],
+    delivery: 'poll' as const,
     input_schema: {
       type: 'object',
       properties: { query: { type: 'string' }, limit: { type: 'number', minimum: 1, maximum: 20 } },
-      required: ['query'],
-      additionalProperties: false,
+      required: ['query'], additionalProperties: false,
     },
+    output_schema: { type: 'object', properties: { messages: { type: 'array' } } },
+  }, {
+    name: 'gmail.get_thread',
+    title: 'Read a Gmail thread',
+    description: 'Read metadata and snippets for one Gmail thread.',
+    roles: ['context'] as CapabilityRole[],
+    delivery: 'poll' as const,
+    input_schema: { type: 'object', properties: { thread_id: { type: 'string' } }, required: ['thread_id'], additionalProperties: false },
+    output_schema: { type: 'object' },
   }] : connection.provider === 'vercel' ? [{
     name: 'vercel.list_projects',
     title: 'List Vercel projects',
     description: 'List projects visible to the connected Vercel account.',
+    roles: ['source', 'context', 'setup'] as CapabilityRole[],
+    delivery: 'poll' as const,
     input_schema: {
       type: 'object',
       properties: { search: { type: 'string' }, limit: { type: 'number', minimum: 1, maximum: 20 } },
       additionalProperties: false,
     },
+    output_schema: { type: 'object', properties: { projects: { type: 'array' } } },
+  }] : connection.provider === 'telegram' && credentials.mode === 'user' ? [{
+    name: 'telegram.new_message',
+    title: 'New Telegram message',
+    description: 'Receive new cloud messages without marking them read.',
+    roles: ['source'] as CapabilityRole[], delivery: 'event' as const,
+    input_schema: {
+      type: 'object',
+      properties: {
+        chat_ids: { type: 'array', maxItems: 100, items: { type: 'string' } },
+        chat_types: { type: 'array', maxItems: 3, items: { type: 'string', enum: ['dm', 'group', 'channel'] } },
+      },
+      required: ['chat_types'], additionalProperties: false,
+    },
+    output_schema: { type: 'object' },
+  }, {
+    name: 'telegram.discover_dialogs',
+    title: 'List Telegram chats',
+    description: 'List cloud chats available to the connected account.',
+    roles: ['setup'] as CapabilityRole[], delivery: 'poll' as const,
+    input_schema: { type: 'object', properties: { limit: { type: 'number', minimum: 1, maximum: 50 } }, additionalProperties: false },
+    output_schema: { type: 'array' },
+  }, {
+    name: 'telegram.recent_thread',
+    title: 'Read recent Telegram context',
+    description: 'Read recent text and captions from the current cloud chat.',
+    roles: ['context'] as CapabilityRole[], delivery: 'poll' as const,
+    input_schema: { type: 'object', properties: { peer_id: { type: 'string' }, limit: { type: 'number', minimum: 1, maximum: 20 } }, required: ['peer_id'], additionalProperties: false },
+    output_schema: { type: 'array' },
+  }, {
+    name: 'telegram.send_text',
+    title: 'Send Telegram reply',
+    description: 'Send the exact approved text reply to a cloud chat.',
+    roles: ['action'] as CapabilityRole[], delivery: 'event' as const,
+    input_schema: { type: 'object', properties: { peer_id: { type: 'string' }, message: { type: 'string', minLength: 1, maxLength: 4096 } }, required: ['peer_id', 'message'], additionalProperties: false },
+    output_schema: { type: 'object' },
   }] : []
 
   return definitions.map((definition) => ({
@@ -531,9 +842,14 @@ function restCapabilities(connection: Connection): Capability[] {
     title: definition.title,
     description: definition.description,
     input_schema: definition.input_schema,
-    schema_hash: hash(JSON.stringify(definition.input_schema)),
-    safety: 'verified_read',
-    callable_during_setup: true,
+    output_schema: definition.output_schema,
+    schema_hash: hash(JSON.stringify({ inputSchema: definition.input_schema, outputSchema: definition.output_schema, roles: definition.roles, delivery: definition.delivery })),
+    safety: definition.roles.includes('action') ? 'verified_write' : 'verified_read',
+    roles: definition.roles,
+    delivery: definition.delivery,
+    effect: definition.roles.includes('action') ? 'write' : 'read',
+    runtime_safe: true,
+    callable_during_setup: definition.roles.includes('setup'),
   }))
 }
 
@@ -550,6 +866,22 @@ function requiredCredential(credentials: Credentials, key: string) {
   const value = credentials[key]
   if (typeof value !== 'string' || !value) throw new ConnectionError('credentials_missing')
   return value
+}
+
+function requiredString(input: Record<string, unknown>, key: string) {
+  const value = input[key]
+  if (typeof value !== 'string' || !value) throw new ConnectionError('invalid_capability_input')
+  return value
+}
+
+function validInput(schema: Record<string, unknown>, input: Record<string, unknown>) {
+  const required = Array.isArray(schema.required) ? schema.required.filter((key): key is string => typeof key === 'string') : []
+  if (required.some((key) => !(key in input))) return false
+  if (schema.additionalProperties === false && schema.properties && typeof schema.properties === 'object') {
+    const properties = schema.properties as Record<string, unknown>
+    if (Object.keys(input).some((key) => !(key in properties))) return false
+  }
+  return true
 }
 
 function combinedSignal(signal?: AbortSignal | null) {
@@ -586,6 +918,23 @@ export async function validatePublicEndpoint(value: string) {
     throw new ConnectionError('private_endpoint')
   }
 }
+
+export function publicEndpointFetch(fetcher: typeof fetch, input: Parameters<typeof fetch>[0], init?: RequestInit) {
+  return fetcher(input, { ...init, dispatcher: publicEndpointAgent } as RequestInit)
+}
+
+const publicLookup: LookupFunction = (hostname, options, callback) => {
+  dnsLookup(hostname, { ...options, all: true }, (error, addresses) => {
+    if (error) return callback(error, '', 0)
+    if (!addresses.length || addresses.some(({ address }) => isPrivateAddress(address))) {
+      return callback(Object.assign(new Error('private_endpoint'), { code: 'EACCES' }), '', 0)
+    }
+    const selected = addresses[0]
+    callback(null, selected.address, selected.family)
+  })
+}
+
+const publicEndpointAgent = new Agent({ connect: { lookup: publicLookup } })
 
 function isPrivateAddress(address: string) {
   const value = address.toLowerCase()

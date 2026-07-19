@@ -7,7 +7,8 @@ import {
   NativeSelectOption,
 } from "@/components/ui/native-select";
 import { Switch } from "@/components/ui/switch";
-import { apiFetch, type PingRuleSummary } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import type { PingRuleSummary } from "@/types/api";
 
 export default async function ConfigurePage() {
   let rules: PingRuleSummary[] = [];
@@ -39,7 +40,7 @@ export default async function ConfigurePage() {
         <section className="grid gap-8 border-b border-border py-10 md:grid-cols-[minmax(0,0.7fr)_minmax(22rem,1.3fr)] md:gap-16">
           <div>
             <h2 className="font-sans text-lg font-medium">Ping definitions</h2>
-            <p className="mt-2 max-w-sm leading-6 text-muted-foreground">Saved monitoring intent. Execution is not enabled yet.</p>
+            <p className="mt-2 max-w-sm leading-6 text-muted-foreground">Your active and paused Ping automations.</p>
           </div>
           <p className="border-y border-destructive/30 py-3 text-sm text-destructive">{rulesError}</p>
         </section>

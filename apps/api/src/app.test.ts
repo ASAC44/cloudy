@@ -17,9 +17,10 @@ import type {
   OAuthState,
   PairingStatus,
   Pod,
+  RuntimeStore,
   Store,
   StoredAiSettings,
-} from './store.js'
+} from './types/store.js'
 import { StoreError } from './store.js'
 
 const request: ApprovalRequest = {
@@ -54,6 +55,11 @@ class FakeStore implements Store {
   automationKeys: Array<AutomationKey & { owner_id: string; token_hash: string }> = []
   automationRequests = new Map<string, ApprovalRequest>()
   automationIdempotency = new Map<string, ApprovalRequest>()
+  lastCodexInteraction: { summary: string; encryptedPayload: string } | null = null
+  codexTarget: { workspace_id: string; thread_id: string | null; revision: number; updated_at: string } | null = null
+  lastBridgeError: string | null = null
+  current: ApprovalRequest = request
+  pingPresentation: { encryptedDraft: string; actionHash: string } | null = null
   pod: Pod = {
     id: '00000000-0000-4000-8000-000000000001',
     name: 'Test Pod',
@@ -90,7 +96,8 @@ class FakeStore implements Store {
     return { ...request, ...input, payload_hash: payloadHash }
   }
   async listRequests() { return [request] }
-  async currentRequest() { return { request, queueSize: 1 } }
+  async currentRequest() { return { request: this.current, queueSize: 1 } }
+  async pingEventPresentation() { return this.pingPresentation }
   async decideRequest(input: { outcome: 'approved' | 'rejected'; payloadHash: string; idempotencyKey: string }) {
     const prior = this.idempotent.get(input.idempotencyKey)
     if (prior) return prior
@@ -209,10 +216,16 @@ class FakeStore implements Store {
   async setConnectionTest(
     _ownerId: string,
     connectionId: string,
-    result: { status: 'connected' | 'failed'; accountLabel: string | null; error: string | null },
+    result: {
+      status: 'connected' | 'failed'
+      accountLabel: string | null
+      error: string | null
+      encryptedPayload?: string
+    },
   ) {
     const connection = this.connections.find(({ id }) => id === connectionId)
     if (!connection) return null
+    if (result.encryptedPayload) this.connectionSecrets.set(connectionId, result.encryptedPayload)
     Object.assign(connection, {
       status: result.status,
       account_label: result.accountLabel,
@@ -242,6 +255,39 @@ class FakeStore implements Store {
     this.aiSettings = { ...settings, updated_at: new Date().toISOString() }
     return this.aiSettings
   }
+  async createCodexPairing(input: { bridgeId: string; tokenHash: string }) {
+    this.pod.id = input.bridgeId
+    this.pairingTokenHash = input.tokenHash
+    return { id: randomTestId(80), expiresAt: new Date(Date.now() + 60_000).toISOString() }
+  }
+  async getCodexPairingStatus(_sessionId: string, bridgeId: string, tokenHash: string) {
+    return bridgeId === this.pod.id && tokenHash === this.pairingTokenHash ? this.pairingStatus : null
+  }
+  async claimCodexBridge(_codeHash: string, _ownerId: string, name: string) {
+    return { id: this.pod.id, name, version: null, last_error: null, paired_at: new Date().toISOString(), last_seen_at: null }
+  }
+  async authenticateCodexBridge(bridgeId: string, tokenHash: string) {
+    return bridgeId === this.pod.id && tokenHash === this.pairingTokenHash ? { id: bridgeId, ownerId: 'user-1' } : null
+  }
+  async listCodex() { return { bridges: [], workspaces: [], threads: [], target: null } }
+  async revokeCodexBridge() { return true }
+  async syncCodexBridge(input: { error: string | null }) { this.lastBridgeError = input.error; return { workspaces: [], threads: [] } }
+  async setCodexTarget() { return null }
+  async queueCodexCommand(input: { workspaceId: string; threadId: string | null; kind: 'prompt' | 'new_thread'; payload: Record<string, unknown>; idempotencyKey: string; targetRevision?: number | null }) {
+    if (input.targetRevision && input.targetRevision !== this.codexTarget?.revision) throw new StoreError('codex_target_changed')
+    return { id: randomTestId(81), workspace_id: input.workspaceId, thread_id: input.threadId, interaction_id: null, kind: input.kind, payload: input.payload, idempotency_key: input.idempotencyKey }
+  }
+  async reviseCodexPlan(input: { requestId: string; prompt: string; promptIdempotencyKey: string }) {
+    return { id: randomTestId(82), workspace_id: randomTestId(83), thread_id: null, interaction_id: input.requestId, kind: 'prompt' as const, payload: { prompt: input.prompt }, idempotency_key: input.promptIdempotencyKey }
+  }
+  async createCodexInteraction(input: { title: string; summary: string; risk: 'low' | 'medium' | 'high'; payloadHash: string; expiresAt: string; encryptedPayload: string }) {
+    this.lastCodexInteraction = { summary: input.summary, encryptedPayload: input.encryptedPayload }
+    return { ...request, title: input.title, summary: input.summary, risk: input.risk, payload_hash: input.payloadHash, expires_at: input.expiresAt }
+  }
+  async claimCodexCommand() { return null }
+  async acknowledgeCodexCommand() { return true }
+  async codexStatus() { return { target: this.codexTarget, thread: null } }
+  async codexInteractionPayload() { return null }
   async getRule() { return null }
   async listRules() { return [] }
   async createRuleSession(): Promise<never> { throw new Error('Not implemented in this fake') }
@@ -281,7 +327,7 @@ function app(
   return {
     store,
     connections,
-    app: createApp('https://example.supabase.co', store, authenticated, connections, aiTester, ruleBuilder),
+    app: createApp('https://example.supabase.co', store, authenticated, connections, aiTester, ruleBuilder, fetcher, store as unknown as RuntimeStore),
   }
 }
 
@@ -289,6 +335,16 @@ test('health route is public', async () => {
   const response = await app().app.request('/')
   assert.equal(response.status, 200)
   assert.deepEqual(await response.json(), { name: 'podex-api', status: 'ok' })
+})
+
+test('Telegram personal setup fails before creating a session when app credentials are missing', async () => {
+  const response = await app().app.request('/v1/connections/telegram/user-auth', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Telegram' }),
+  })
+  assert.equal(response.status, 503)
+  assert.deepEqual(await response.json(), { error: 'provider not configured' })
 })
 
 test('rule builder routes create, advance, commit, list, and delete definitions', async () => {
@@ -540,6 +596,96 @@ test('pairing creates a valid code and scoped Pod token', async () => {
   assert.match(body.pod_token, /^pod_[0-9a-f-]{36}\.[A-Za-z0-9_-]{43}$/)
 })
 
+test('Codex bridge authentication requires a process instance for command claims', async () => {
+  const { app: api } = app()
+  const paired = await (await api.request('/v1/codex/bridge/pairing-sessions', { method: 'POST' })).json()
+  const withoutInstance = await api.request('/v1/codex/bridge/commands', { headers: { Authorization: `Bearer ${paired.bridge_token}` } })
+  assert.equal(withoutInstance.status, 400)
+  const claimed = await api.request('/v1/codex/bridge/commands', { headers: { Authorization: `Bearer ${paired.bridge_token}`, 'X-Podex-Bridge-Instance': randomTestId(86) } })
+  assert.equal(claimed.status, 200)
+  assert.deepEqual(await claimed.json(), { command: null })
+})
+
+test('bridge heartbeat reports incompatible Codex versions to the dashboard', async () => {
+  const { app: api, store } = app()
+  const paired = await (await api.request('/v1/codex/bridge/pairing-sessions', { method: 'POST' })).json()
+  const response = await api.request('/v1/codex/bridge/sync', {
+    method: 'POST', headers: { Authorization: `Bearer ${paired.bridge_token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ version: 'codex-cli 0.143.9', process_instance_id: randomTestId(89), workspaces: [], threads: [] }),
+  })
+  assert.equal(response.status, 200)
+  assert.equal((await response.json()).compatible, false)
+  assert.match(store.lastBridgeError || '', /0\.144\.5/)
+})
+
+test('Codex interactions encrypt raw payloads and expose only server-sanitized metadata', async () => {
+  const { app: api, store } = app()
+  const paired = await (await api.request('/v1/codex/bridge/pairing-sessions', { method: 'POST' })).json()
+  const rawCommand = 'curl https://secret.example.test --header private-token'
+  const response = await api.request('/v1/codex/bridge/interactions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${paired.bridge_token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      workspace_id: randomTestId(87), thread_id: null, process_instance_id: randomTestId(88),
+      protocol_request_id: 'rpc-1', kind: 'command_approval',
+      payload: { method: 'item/commandExecution/requestApproval', params: { command: rawCommand } },
+      title: rawCommand, summary: rawCommand, risk: 'low',
+    }),
+  })
+  const body = await response.json()
+  assert.equal(response.status, 202)
+  assert.equal(body.request.summary, 'Codex wants to run a repository command.')
+  assert.equal(JSON.stringify(body).includes(rawCommand), false)
+  assert.equal(store.lastCodexInteraction?.encryptedPayload.includes(rawCommand), false)
+})
+
+test('Pod voice returns setup conflict unless official OpenAI settings are configured', async () => {
+  const { app: api } = app()
+  const paired = await (await api.request('/v1/pod/pairing-sessions', { method: 'POST' })).json()
+  const response = await api.request('/v1/pod/codex/transcriptions', {
+    method: 'POST', headers: { Authorization: `Bearer ${paired.pod_token}` }, body: new FormData(),
+  })
+  assert.equal(response.status, 409)
+})
+
+test('Pod voice validates WAV and always uses the fixed transcription model', async () => {
+  let upstreamModel = ''
+  const fetcher: typeof fetch = async (_input, init) => {
+    upstreamModel = String((init?.body as FormData).get('model'))
+    return Response.json({ text: 'Implement the smaller retry loop' })
+  }
+  const setup = app(new FakeStore(), fetcher)
+  setup.store.aiSettings = {
+    provider: 'openai', base_url: 'https://api.openai.com/v1', model: 'ignored-for-voice',
+    encrypted_api_key: setup.connections.encryptApiKey('voice-key'), updated_at: new Date().toISOString(),
+  }
+  const paired = await (await setup.app.request('/v1/pod/pairing-sessions', { method: 'POST' })).json()
+  const wav = new Uint8Array(44 + 3200)
+  const view = new DataView(wav.buffer)
+  wav.set(Buffer.from('RIFF'), 0); view.setUint32(4, wav.length - 8, true); wav.set(Buffer.from('WAVEfmt '), 8)
+  view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true)
+  view.setUint32(24, 16000, true); view.setUint32(28, 32000, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true)
+  wav.set(Buffer.from('data'), 36); view.setUint32(40, 3200, true)
+  const form = new FormData(); form.set('audio', new File([wav], 'voice.wav', { type: 'audio/wav' }))
+  const response = await setup.app.request('/v1/pod/codex/transcriptions', {
+    method: 'POST', headers: { Authorization: `Bearer ${paired.pod_token}` }, body: form,
+  })
+  assert.equal(response.status, 200)
+  assert.equal((await response.json()).transcript, 'Implement the smaller retry loop')
+  assert.equal(upstreamModel, 'gpt-4o-mini-transcribe')
+})
+
+test('confirmed Pod prompts reject stale active-target revisions', async () => {
+  const setup = app()
+  setup.store.codexTarget = { workspace_id: randomTestId(90), thread_id: randomTestId(91), revision: 4, updated_at: new Date().toISOString() }
+  const paired = await (await setup.app.request('/v1/pod/pairing-sessions', { method: 'POST' })).json()
+  const response = await setup.app.request('/v1/pod/codex/prompts', {
+    method: 'POST', headers: { Authorization: `Bearer ${paired.pod_token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt: 'Build it', target_revision: 3, idempotency_key: randomTestId(92) }),
+  })
+  assert.equal(response.status, 409)
+})
+
 test('pairing status rejects malformed tokens', async () => {
   const response = await app().app.request('/v1/pod/pairing-sessions/session', {
     headers: { Authorization: 'Bearer no' },
@@ -600,6 +746,24 @@ test('test Ping validation rejects incomplete input', async () => {
   assert.equal(response.status, 400)
 })
 
+test('test Ping validation rejects malformed warning entries', async () => {
+  const response = await app().app.request('/v1/requests', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      title: 'Deploy the test build',
+      source: 'Dashboard · Test Ping',
+      summary: 'This is only a test.',
+      details: '',
+      affected_context: '',
+      risk: 'medium',
+      warnings: [null],
+      expires_in_minutes: 15,
+    }),
+  })
+  assert.equal(response.status, 400)
+})
+
 test('valid test Ping is persisted', async () => {
   const response = await app().app.request('/v1/requests', {
     method: 'POST',
@@ -641,6 +805,33 @@ test('Pod polls and resolves the exact current request', async () => {
   })
   assert.equal(decision.status, 200)
   assert.equal((await decision.json()).decision.outcome, 'approved')
+})
+
+test('Pod receives an authenticated hash-bound GitHub presentation', async () => {
+  const setup = app()
+  setup.store.current = {
+    ...request,
+    action_payload: { kind: 'ping_rule_action', event_id: randomTestId(40), rule_id: randomTestId(41) },
+  }
+  setup.store.pingPresentation = {
+    actionHash: request.payload_hash,
+    encryptedDraft: setup.connections.encryptPrivatePayload({
+      kind: 'github_pr_v1', context: 'podex/api · feature → main', facts: [['MERGE', 'Squash']],
+      summary: 'Verified GitHub facts.', glance_details: [], details: [], ai_available: false,
+    }),
+  }
+  const paired = await (await setup.app.request('/v1/pod/pairing-sessions', { method: 'POST' })).json()
+  const response = await setup.app.request('/v1/pod/requests/current', {
+    headers: { Authorization: `Bearer ${paired.pod_token}` },
+  })
+  assert.equal(response.status, 200)
+  assert.equal((await response.json()).request.presentation.kind, 'github_pr_v1')
+
+  setup.store.pingPresentation.actionHash = 'b'.repeat(64)
+  const changed = await setup.app.request('/v1/pod/requests/current', {
+    headers: { Authorization: `Bearer ${paired.pod_token}` },
+  })
+  assert.equal(changed.status, 409)
 })
 
 test('revocation immediately invalidates a Pod token', async () => {
@@ -707,6 +898,97 @@ test('Vercel connection is encrypted, tested, and returned without its token', a
   assert.equal(body.connection.account_label, 'octocat')
   assert.equal(JSON.stringify(body).includes('secret-token'), false)
   assert.equal(store.connectionSecrets.get(body.connection.id)?.includes('secret-token'), false)
+})
+
+test('Linear and Stripe use fixed authenticated MCP endpoints without leaking keys', async () => {
+  for (const provider of ['linear', 'stripe'] as const) {
+    const expectedEndpoint = provider === 'linear' ? 'https://mcp.linear.app/mcp' : 'https://mcp.stripe.com/'
+    const authorizations: string[] = []
+    const fetcher: typeof fetch = async (input, init) => {
+      assert.equal(String(input), expectedEndpoint)
+      authorizations.push(new Headers(init?.headers).get('authorization') ?? '')
+      const request = JSON.parse(String(init?.body))
+      if (request.method === 'notifications/initialized') return new Response(null, { status: 202 })
+      const result = request.method === 'initialize'
+        ? { protocolVersion: '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: provider, version: '1' } }
+        : { tools: [{ name: 'list_items', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } }] }
+      return Response.json({ jsonrpc: '2.0', id: request.id, result })
+    }
+    const { app: api, store } = app(new FakeStore(), fetcher)
+    const created = await api.request('/v1/connections', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider, name: provider, token: `${provider}-secret` }),
+    })
+    const body = await created.json()
+    assert.equal(created.status, 201)
+    assert.equal(body.connection.protocol, 'mcp')
+    assert.equal(body.connection.auth_type, 'bearer')
+    assert.equal(body.connection.endpoint_url, expectedEndpoint.replace(/\/$/, ''))
+    assert.equal(body.connection.account_label, '1 tool')
+    assert.equal(JSON.stringify(body).includes(`${provider}-secret`), false)
+    assert.equal(store.connectionSecrets.get(body.connection.id)?.includes(`${provider}-secret`), false)
+    assert.ok(authorizations.every((value) => value === `Bearer ${provider}-secret`))
+
+    authorizations.length = 0
+    const replaced = await api.request(`/v1/connections/${body.connection.id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: `${provider}-replacement` }),
+    })
+    assert.equal(replaced.status, 200)
+    assert.ok(authorizations.every((value) => value === `Bearer ${provider}-replacement`))
+    for (const changes of [{ endpoint_url: 'https://example.com/mcp' }, { auth_type: 'none' }]) {
+      const response = await api.request(`/v1/connections/${body.connection.id}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes),
+      })
+      assert.equal(response.status, 400)
+    }
+  }
+})
+
+test('Linear and Stripe reject missing or unauthorized keys safely', async () => {
+  for (const provider of ['linear', 'stripe'] as const) {
+    const setup = app(new FakeStore(), async () => new Response('private upstream detail', { status: 401 }))
+    const missing = await setup.app.request('/v1/connections', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider, name: provider }),
+    })
+    assert.equal(missing.status, 400)
+    const failed = await setup.app.request('/v1/connections', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider, name: provider, token: 'bad-key' }),
+    })
+    const body = await failed.json()
+    assert.equal(failed.status, 201)
+    assert.equal(body.connection.status, 'failed')
+    assert.match(body.connection.last_error, /Authentication failed/)
+    assert.equal(JSON.stringify(body).includes('bad-key'), false)
+    assert.equal(JSON.stringify(body).includes('private upstream detail'), false)
+  }
+})
+
+test('Stripe capability discovery keeps only annotated non-destructive tools runtime-safe', async () => {
+  const fetcher: typeof fetch = async (_input, init) => {
+    const request = JSON.parse(String(init?.body))
+    if (request.method === 'notifications/initialized') return new Response(null, { status: 202 })
+    const result = request.method === 'initialize'
+      ? { protocolVersion: '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'stripe', version: '1' } }
+      : { tools: [
+          { name: 'retrieve_balance', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } },
+          { name: 'create_customer', inputSchema: { type: 'object' }, annotations: { readOnlyHint: false, destructiveHint: false } },
+          { name: 'create_refund', inputSchema: { type: 'object' }, annotations: { destructiveHint: true } },
+          { name: 'legacy_tool', inputSchema: { type: 'object' } },
+        ] }
+    return Response.json({ jsonrpc: '2.0', id: request.id, result })
+  }
+  const { app: api, connections } = app(new FakeStore(), fetcher)
+  await api.request('/v1/connections', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider: 'stripe', name: 'Stripe', token: 'rk_test_key' }),
+  })
+  const capabilities = await connections.discoverCapabilities('user-1')
+  assert.deepEqual(capabilities.map(({ name, safety, roles, runtime_safe }) => ({ name, safety, roles, runtime_safe })), [
+    { name: 'retrieve_balance', safety: 'verified_read', roles: ['source', 'context', 'setup'], runtime_safe: true },
+    { name: 'create_customer', safety: 'verified_write', roles: ['action'], runtime_safe: true },
+    { name: 'legacy_tool', safety: 'unannotated', roles: ['source', 'context', 'action'], runtime_safe: false },
+  ])
 })
 
 test('failed smoke test keeps the connection and never leaks credentials', async () => {
@@ -816,7 +1098,7 @@ test('OAuth start stores one-use state and returns a provider authorization URL'
   assert.equal(await store.consumeOAuthState(stateHash, 'github'), null)
 })
 
-test('GitHub OAuth callback exchanges credentials and discovers MCP tools', async () => {
+test('GitHub OAuth callback exchanges credentials and verifies the official API', async () => {
   const fetcher: typeof fetch = async (input, init) => {
     const url = String(input)
     if (url.includes('/login/oauth/access_token')) return Response.json({ access_token: 'github-token' })
