@@ -70,6 +70,8 @@ test('Pod screen layouts are constrained, revisioned, and rollback-safe', async 
   assert.match(migration, /pod_layout_conflict/)
   assert.match(migration, /screen_layout_revision = screen_layout_revision \+ 1/)
   assert.match(migration, /array\['left', 'right', 'down'\]/)
+  assert.doesNotMatch(migration, /jsonb_object_length/)
+  assert.match(migration, /count\(\*\) from pg_catalog\.jsonb_object_keys\(p_layout\)/)
   assert.match(migration, /connection\.owner_id = p_owner_id[\s\S]*connection\.provider = 'custom_mcp'/)
   assert.match(migration, /function public\.delete_connection_with_layout_cleanup\([\s\S]*delete from public\.connections[\s\S]*update public\.pods/)
   assert.match(migration, /commit;\s*$/)
@@ -85,6 +87,8 @@ test('Pod screens hold one feed and the migration trims old multi-feed slots ato
 
   assert.match(migration, /^begin;/)
   assert.match(migration, /jsonb_array_length\(p_layout -> direction\) > 1/)
+  assert.doesNotMatch(migration, /jsonb_object_length/)
+  assert.match(migration, /count\(\*\) from pg_catalog\.jsonb_object_keys\(p_layout\)/)
   assert.match(migration, /screen_layout_revision = screen_layout_revision \+ 1/)
   assert.match(migration, /add constraint pods_valid_screen_layout/)
   assert.match(migration, /commit;\s*$/)

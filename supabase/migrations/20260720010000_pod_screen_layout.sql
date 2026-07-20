@@ -12,7 +12,7 @@ declare
   attachment_ids text[];
 begin
   if jsonb_typeof(p_layout) <> 'object'
-    or pg_catalog.jsonb_object_length(p_layout) <> 3
+    or (select count(*) from pg_catalog.jsonb_object_keys(p_layout)) <> 3
     or not (p_layout ?& array['left', 'right', 'down']) then
     return false;
   end if;
