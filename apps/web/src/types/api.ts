@@ -28,6 +28,19 @@ export type ApprovalRequest = {
   status: "pending" | "approved" | "rejected" | "expired" | "cancelled";
   created_at: string;
   decided_at: string | null;
+  editable_reply?: boolean;
+};
+
+export type AgentMemory = {
+  id: string;
+  scope: "user" | "workspace" | "provider";
+  scope_id: string | null;
+  provider: ConnectionProvider | null;
+  memory_key: string;
+  content: string;
+  source: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
 };
 
 export type AutomationKey = {
@@ -44,6 +57,7 @@ export type AiSettings = {
   base_url: string;
   model: string;
   has_api_key: boolean;
+  personalization_enabled: boolean;
   updated_at: string;
 };
 
@@ -56,6 +70,7 @@ export type CodexOverview = { bridges: CodexBridge[]; workspaces: CodexWorkspace
 export type ConnectionProvider =
   | "github"
   | "gmail"
+  | "google_calendar"
   | "vercel"
   | "telegram"
   | "linear"

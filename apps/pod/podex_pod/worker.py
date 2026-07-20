@@ -48,7 +48,7 @@ class PodWorker(threading.Thread):
         pairing: dict[str, Any] | None = None
         saved_credentials = self.storage.credentials()
         token = saved_credentials.get("token") if saved_credentials else None
-        last_request_id: str | None = None
+        last_request_id: tuple[str, str] | None = None
         idle_emitted = False
         last_codex = repr({})
         last_screen_layout = repr(None)
@@ -130,14 +130,15 @@ class PodWorker(threading.Thread):
                 request = current.get("request")
                 if request:
                     self.storage.save_request(request)
-                    if request["id"] != last_request_id:
+                    request_revision = (request["id"], request["payload_hash"])
+                    if request_revision != last_request_id:
                         self.emit(
                             "request",
                             request=request,
                             queue_size=current.get("queue_size", 1),
                             request_screen=current.get("request_screen", "down"),
                         )
-                    last_request_id = request["id"]
+                    last_request_id = request_revision
                     idle_emitted = False
                 else:
                     if last_request_id is not None:

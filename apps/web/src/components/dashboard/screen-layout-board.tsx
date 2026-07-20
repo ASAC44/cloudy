@@ -4,6 +4,7 @@ import { type DragEvent, type ReactNode, useRef, useState } from "react";
 import {
   Bot,
   Box,
+  CalendarDays,
   ChevronLeft,
   ChevronRight,
   CircleDot,
@@ -46,6 +47,7 @@ const directions: Array<{ id: ScreenDirection; label: string; gesture: ReactNode
 const appDefinitions: Array<{ provider: Connection["provider"] | "codex"; name: string; icon: LucideIcon }> = [
   { provider: "github", name: "GitHub", icon: GitPullRequest },
   { provider: "gmail", name: "Gmail", icon: Mail },
+  { provider: "google_calendar", name: "Google Calendar", icon: CalendarDays },
   { provider: "codex", name: "Codex", icon: Bot },
   { provider: "vercel", name: "Vercel", icon: Box },
   { provider: "telegram", name: "Telegram", icon: Send },

@@ -307,7 +307,7 @@ class PodApp:
         point = lambda left, top: self._point(x + left, y + top)
         line = lambda start, end: pygame.draw.line(self.surface, color, point(*start), point(*end), width)
 
-        if feed_id == "calendar":
+        if feed_id in ("calendar", "google_calendar"):
             pygame.draw.rect(self.surface, color, rect(1, 3, 16, 14), width, border_radius=2 * width)
             line((1, 7), (17, 7)); line((5, 1), (5, 5)); line((13, 1), (13, 5))
             for column, row in ((5, 10), (9, 10), (13, 10), (5, 14), (9, 14), (13, 14)):

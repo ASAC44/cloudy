@@ -570,6 +570,26 @@ class PodTests(unittest.TestCase):
         worker.close()
         worker.join(timeout=1)
 
+    def test_worker_reemits_a_request_when_its_payload_hash_changes(self):
+        class RevisedRequestClient:
+            def __init__(self):
+                self.calls = 0
+
+            def current_request(self, _token):
+                self.calls += 1
+                request = {**REQUEST, "payload_hash": ("a" if self.calls == 1 else "b") * 64}
+                return {"request": request, "queue_size": 1}
+
+        self.storage.save_credentials("pod_token")
+        worker = PodWorker(RevisedRequestClient(), self.storage, poll_seconds=0.01)
+        worker.start()
+        first = worker.events.get(timeout=1)
+        second = worker.events.get(timeout=1)
+        self.assertEqual(first["request"]["payload_hash"], "a" * 64)
+        self.assertEqual(second["request"]["payload_hash"], "b" * 64)
+        worker.close()
+        worker.join(timeout=1)
+
     def test_automatic_reconnect_reemits_the_cached_request(self):
         class FlakyRequestClient:
             def __init__(self):

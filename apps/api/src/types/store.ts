@@ -70,7 +70,7 @@ export type CallbackDelivery = {
   decidedAt: string | null
 }
 
-export type ConnectionProvider = 'github' | 'gmail' | 'vercel' | 'telegram' | 'linear' | 'stripe' | 'custom_mcp'
+export type ConnectionProvider = 'github' | 'gmail' | 'google_calendar' | 'vercel' | 'telegram' | 'linear' | 'stripe' | 'custom_mcp'
 export type ConnectionStatus = 'untested' | 'connected' | 'failed'
 
 export type Connection = {
@@ -95,9 +95,11 @@ export type NewConnection = Pick<
 
 export type StoredConnection = Connection & { encrypted_payload: string }
 
+export type OAuthProvider = 'github' | 'gmail' | 'google_calendar'
+
 export type OAuthState = {
   ownerId: string
-  provider: 'github' | 'gmail'
+  provider: OAuthProvider
   connectionName: string
   connectionId: string | null
   codeVerifier: string
@@ -109,6 +111,7 @@ export type AiSettings = {
   provider: AiProvider
   base_url: string
   model: string
+  personalization_enabled: boolean
   updated_at: string
 }
 
@@ -410,6 +413,11 @@ export type RuntimeEvent = {
   attempts: number
 }
 
+export type EditableReply = {
+  event: RuntimeEvent
+  payloadHash: string
+}
+
 export interface Store {
   createPairingSession(input: {
     podId: string
@@ -481,8 +489,9 @@ export interface Store {
   ): Promise<Connection | null>
   deleteConnection(ownerId: string, connectionId: string): Promise<boolean>
   createOAuthState(stateHash: string, state: OAuthState, expiresAt: string): Promise<void>
-  consumeOAuthState(stateHash: string, provider: 'github' | 'gmail'): Promise<OAuthState | null>
+  consumeOAuthState(stateHash: string, provider: OAuthProvider): Promise<OAuthState | null>
   getAiSettings(ownerId: string): Promise<StoredAiSettings | null>
+  setPersonalization(ownerId: string, enabled: boolean): Promise<boolean>
   saveAiSettings(
     ownerId: string,
     settings: Pick<StoredAiSettings, 'provider' | 'base_url' | 'model' | 'encrypted_api_key'>,
@@ -551,6 +560,8 @@ export interface RuntimeStore {
   enqueueRuleEvent(input: { ownerId: string; ruleId: string; identity: string; conversationKey?: string; providerEventId?: string; occurredAt: string; encryptedSource: string; telegramRandomId?: string }): Promise<{ eventId: string; inserted: boolean }>
   claimRuleEvent(): Promise<{ eventId: string; ownerId: string; ruleId: string; leaseToken: string } | null>
   getRuntimeEvent(ownerId: string, eventId: string): Promise<RuntimeEvent | null>
+  getEditableReply(ownerId: string, requestId: string): Promise<EditableReply | null>
+  reviseReply(input: { ownerId: string; requestId: string; expectedHash: string; newHash: string; encryptedDraft: string; encryptedAction: string; memoryContent: string; memorySource: Record<string, unknown> }): Promise<ApprovalRequest>
   ignoreRuleEvent(eventId: string, leaseToken: string, reason: string): Promise<boolean>
   failRuleEvent(eventId: string, leaseToken: string, error: string, ambiguous?: boolean): Promise<boolean>
   prepareRuleApproval(input: { eventId: string; leaseToken: string; encryptedDraft: string; encryptedAction: string; actionHash: string; title: string; source: string; summary: string; details: string; affectedContext: string; risk: 'low' | 'medium' | 'high'; warnings: string[]; expiresAt: string }): Promise<ApprovalRequest>

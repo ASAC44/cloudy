@@ -98,8 +98,22 @@ test('Pod screens hold one feed and the migration trims old multi-feed slots ato
 
 test('rule builder can request first-class Linear and Stripe connections', async () => {
   const source = await readFile(new URL('apps/api/src/rule-builder.ts', root), 'utf8')
-  assert.match(source, /enum: \['github', 'gmail', 'vercel', 'telegram', 'linear', 'stripe', 'custom_mcp', 'other'\]/)
-  assert.match(source, /\['github', 'gmail', 'vercel', 'telegram', 'linear', 'stripe', 'custom_mcp'\]\.includes/)
+  assert.match(source, /enum: \['github', 'gmail', 'google_calendar', 'vercel', 'telegram', 'linear', 'stripe', 'custom_mcp', 'other'\]/)
+  assert.match(source, /\['github', 'gmail', 'google_calendar', 'vercel', 'telegram', 'linear', 'stripe', 'custom_mcp'\]\.includes/)
+})
+
+test('Google Calendar provider migration is atomic, reversible, and preserves constrained layouts', async () => {
+  const migration = await readFile(new URL('supabase/migrations/20260720040000_google_calendar_connections.sql', root), 'utf8')
+  const rollback = await readFile(new URL('supabase/rollback/20260720040000_google_calendar_connections.sql', root), 'utf8')
+
+  assert.match(migration, /^begin;/)
+  assert.match(migration, /connection_oauth_states_provider_check[\s\S]*'google_calendar'/)
+  assert.match(migration, /agent_memories_provider_check[\s\S]*'google_calendar'/)
+  assert.match(migration, /'app:google_calendar'/)
+  assert.match(migration, /commit;\s*$/)
+  assert.match(rollback, /Refusing rollback while Google Calendar data or screen assignments exist/)
+  assert.match(rollback, /check \(provider in \('github', 'gmail'\)\)/)
+  assert.match(rollback, /commit;\s*$/)
 })
 
 test('rule listing disambiguates the owner-scoped runtime-state relationship', async () => {
@@ -126,4 +140,18 @@ test('agent memories are owned, scoped, bounded, and reversible', async () => {
   assert.match(migration, /unique\(owner_id, scope, scope_id, provider, memory_key\)/)
   assert.match(migration, /alter table public\.agent_memories enable row level security/)
   assert.match(rollback, /drop table if exists public\.agent_memories/)
+})
+
+test('reply personalization revisions are atomic, owner-scoped, and reversible', async () => {
+  const migration = await readFile(new URL('supabase/migrations/20260720050000_reply_personalization.sql', root), 'utf8')
+  const rollback = await readFile(new URL('supabase/rollback/20260720050000_reply_personalization.sql', root), 'utf8')
+
+  assert.match(migration, /personalization_enabled boolean not null default true/)
+  assert.match(migration, /where id = p_request_id and owner_id = p_owner_id\s+for update/)
+  assert.match(migration, /where owner_id = p_owner_id and approval_request_id = request\.id\s+for update/)
+  assert.match(migration, /request\.payload_hash <> p_expected_hash/)
+  assert.match(migration, /insert into public\.agent_memories[\s\S]*on conflict/)
+  assert.match(migration, /revoke all on function public\.revise_ping_rule_reply/)
+  assert.match(rollback, /drop function if exists public\.revise_ping_rule_reply/)
+  assert.match(rollback, /drop column if exists personalization_enabled/)
 })

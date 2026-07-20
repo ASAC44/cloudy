@@ -1,5 +1,5 @@
 {
   "title": "Product",
   "defaultOpen": true,
-  "pages": ["overview", "vision"]
+  "pages": ["overview", "personalization", "vision"]
 }

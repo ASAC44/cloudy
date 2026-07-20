@@ -2,7 +2,7 @@ import { generateText, jsonSchema, Output } from 'ai'
 
 import { createAiModel } from './ai.js'
 import { ConnectionService } from './connections.js'
-import { memoryContext } from './memory.js'
+import { memoryContext, memoryScopes } from './memory.js'
 import type {
   Capability,
   ConnectionProvider,
@@ -79,7 +79,7 @@ const REPLY_SCHEMA = {
       required: ['needed', 'provider', 'label', 'reason'],
       properties: {
         needed: { type: 'boolean' },
-        provider: { type: 'string', enum: ['github', 'gmail', 'vercel', 'telegram', 'linear', 'stripe', 'custom_mcp', 'other'] },
+        provider: { type: 'string', enum: ['github', 'gmail', 'google_calendar', 'vercel', 'telegram', 'linear', 'stripe', 'custom_mcp', 'other'] },
         label: { type: 'string' },
         reason: { type: 'string' },
       },
@@ -190,7 +190,9 @@ export class RuleBuilderService {
       ? session.messages
       : [{ role: 'assistant' as const, content: initialReply(session).message }]
     const messages = [...history, { role: 'user' as const, content: userMessage }]
-    const memories = memoryContext(await this.store.listAgentMemories(ownerId, [], userMessage, 12))
+    const memories = settings.personalization_enabled
+      ? memoryContext(await this.store.listAgentMemories(ownerId, memoryScopes(), undefined, 12), 6_000, false)
+      : ''
     let reply = await this.plan(settings, this.connections.decryptApiKey(settings.encrypted_api_key), session, messages, true, memories)
     let lookup: { capability: Capability; result: unknown } | undefined
     if (reply.lookup_request.enabled) {
@@ -644,7 +646,7 @@ function isReply(value: RuleBuilderSession['last_reply']): value is RuleBuilderR
 }
 
 function provider(value: unknown): ConnectionProvider | 'other' {
-  return ['github', 'gmail', 'vercel', 'telegram', 'linear', 'stripe', 'custom_mcp'].includes(String(value))
+  return ['github', 'gmail', 'google_calendar', 'vercel', 'telegram', 'linear', 'stripe', 'custom_mcp'].includes(String(value))
     ? value as ConnectionProvider
     : 'other'
 }

@@ -1,6 +1,6 @@
 ---
 title: Service connections
-description: Connect Linear, Stripe, OAuth providers, and trusted remote MCP servers safely.
+description: Connect Google Calendar, Linear, Stripe, OAuth providers, and trusted remote MCP servers safely.
 ---
 
 Podex stores connection credentials encrypted with `CONNECTION_ENCRYPTION_KEY`.
@@ -15,6 +15,22 @@ the encrypted Pod notification. The summary shows the sender and subject;
 swipe down on the Pod to read the complete email. Reply rules additionally show
 the exact proposed response. Existing inbox messages form the first polling
 baseline, so send a new message after activating a rule when testing.
+
+## Connect Google Calendar
+
+Enable the Google Calendar API and register the
+`/v1/connections/oauth/google_calendar/callback` URL as described in
+[Authentication setup](/docs/development/authentication). Then choose
+**Google Calendar** on the Connections page and continue with Google OAuth.
+
+Calendar rules can list available calendars and read events only inside an
+explicit RFC 3339 time window. Event creation and updates are actions: Podex
+shows the exact title, times, timezone, location, description, and attendees
+for Pod approval before calling Google. Updates also include the source event
+etag and fail if the event changed after approval. Deleting events is not
+exposed. Google Calendar uses the narrowly scoped `calendar.events` and
+`calendar.calendarlist.readonly` permissions documented in
+[Google's Calendar scope reference](https://developers.google.com/workspace/calendar/api/auth).
 
 ## Connect Linear
 
@@ -76,7 +92,7 @@ been exposed, revoke it at the provider first and replace it in Podex
 immediately. Disconnecting a provider deletes its encrypted credential from
 Podex but does not revoke the key at the provider.
 
-GitHub and Gmail continue to use OAuth. Vercel uses a token, while Telegram
+GitHub, Gmail, and Google Calendar use OAuth. Vercel uses a token, while Telegram
 supports the bot webhook and personal-account flows above. **Custom MCP** uses
 public HTTPS Streamable HTTP endpoints: Podex discovers annotated tools, polls
 verified read tools as sources, and runs verified non-destructive writes only

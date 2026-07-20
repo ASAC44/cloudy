@@ -17,6 +17,7 @@ import type {
   NewConnection,
   NewRequest,
   OAuthState,
+  OAuthProvider,
   PairingStatus,
   Pod,
   RuntimeStore,
@@ -257,18 +258,23 @@ class FakeStore implements Store {
     return this.connections.length !== count
   }
   async createOAuthState(stateHash: string, state: OAuthState) { this.oauthStates.set(stateHash, state) }
-  async consumeOAuthState(stateHash: string, provider: 'github' | 'gmail') {
+  async consumeOAuthState(stateHash: string, provider: OAuthProvider) {
     const state = this.oauthStates.get(stateHash)
     if (!state || state.provider !== provider) return null
     this.oauthStates.delete(stateHash)
     return state
   }
   async getAiSettings() { return this.aiSettings }
+  async setPersonalization(_ownerId: string, enabled: boolean) {
+    if (!this.aiSettings) return false
+    this.aiSettings.personalization_enabled = enabled
+    return true
+  }
   async saveAiSettings(
     _ownerId: string,
     settings: Pick<StoredAiSettings, 'provider' | 'base_url' | 'model' | 'encrypted_api_key'>,
   ) {
-    this.aiSettings = { ...settings, updated_at: new Date().toISOString() }
+    this.aiSettings = { ...settings, personalization_enabled: this.aiSettings?.personalization_enabled ?? true, updated_at: new Date().toISOString() }
     return this.aiSettings
   }
   async createCodexPairing(input: { bridgeId: string; tokenHash: string }) {
@@ -579,6 +585,7 @@ test('AI settings encrypt the API key and never return it', async () => {
   assert.equal(savedBody.settings.base_url, 'https://api.cerebras.ai/v1')
   assert.equal(savedBody.settings.provider, 'cerebras')
   assert.equal(savedBody.settings.has_api_key, true)
+  assert.equal(savedBody.settings.personalization_enabled, true)
   assert.ok(store.aiSettings?.encrypted_api_key.startsWith('v1.'))
   assert.ok(!store.aiSettings?.encrypted_api_key.includes(apiKey))
   assert.ok(!JSON.stringify(savedBody).includes(apiKey))
@@ -586,6 +593,13 @@ test('AI settings encrypt the API key and never return it', async () => {
   const readBody = await (await api.request('/v1/settings/ai')).json()
   assert.ok(!JSON.stringify(readBody).includes(apiKey))
   assert.equal(readBody.settings.model, 'gpt-oss-120b')
+
+  const personalization = await api.request('/v1/settings/personalization', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: false }),
+  })
+  assert.equal(personalization.status, 200)
+  assert.equal((await personalization.json()).personalization_enabled, false)
+  assert.equal(store.aiSettings?.personalization_enabled, false)
 
   const tested = await api.request('/v1/settings/ai/test', { method: 'POST' })
   assert.equal(tested.status, 200)
@@ -684,7 +698,7 @@ test('Pod voice validates WAV and always uses the fixed transcription model', as
   const setup = app(new FakeStore(), fetcher)
   setup.store.aiSettings = {
     provider: 'openai', base_url: 'https://api.openai.com/v1', model: 'ignored-for-voice',
-    encrypted_api_key: setup.connections.encryptApiKey('voice-key'), updated_at: new Date().toISOString(),
+    encrypted_api_key: setup.connections.encryptApiKey('voice-key'), personalization_enabled: true, updated_at: new Date().toISOString(),
   }
   const paired = await (await setup.app.request('/v1/pod/pairing-sessions', { method: 'POST' })).json()
   const wav = new Uint8Array(44 + 3200)
@@ -1284,4 +1298,65 @@ test('Gmail OAuth refreshes an expired token before reading the profile', async 
   const connections = (await (await api.request('/v1/connections')).json()).connections
   assert.equal(connections[0].account_label, 'owner@example.com')
   assert.equal(connections[0].status, 'connected')
+})
+
+test('Google Calendar OAuth exposes bounded reads and approval-safe event writes', async () => {
+  const requests: Array<{ url: string; init?: RequestInit }> = []
+  const fetcher: typeof fetch = async (input, init) => {
+    const url = String(input)
+    requests.push({ url, init })
+    if (url === 'https://oauth2.googleapis.com/token') {
+      return Response.json({
+        access_token: 'calendar-token', refresh_token: 'refresh-token', expires_in: 3600,
+        scope: 'https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.calendarlist.readonly',
+      })
+    }
+    if (url.endsWith('/users/me/calendarList/primary')) return Response.json({ summary: 'Work calendar' })
+    if (url.includes('/calendars/primary/events/event-1?')) return Response.json({ id: 'event-1', etag: 'v2' })
+    if (url.includes('/calendars/primary/events?')) return Response.json(init?.method === 'POST' ? { id: 'created-event' } : { items: [{ id: 'event-1', etag: 'v1' }] })
+    return new Response(null, { status: 404 })
+  }
+  const { app: api, connections: service } = app(new FakeStore(), fetcher, {
+    googleClientId: 'google-id', googleClientSecret: 'google-secret',
+  })
+  const start = await api.request('/v1/connections/oauth/google_calendar/start', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Calendar' }),
+  })
+  const authorizationUrl = (await start.json()).authorization_url
+  assert.match(authorizationUrl, /calendar.events/)
+  const state = new URL(authorizationUrl).searchParams.get('state')!
+  const callback = await api.request(`/v1/connections/oauth/google_calendar/callback?state=${encodeURIComponent(state)}&code=code`)
+  assert.equal(callback.headers.get('location'), 'https://example.com/connections?connected=google_calendar')
+
+  const [connection] = (await (await api.request('/v1/connections')).json()).connections
+  assert.equal(connection.account_label, 'Work calendar')
+  assert.equal((await api.request('/v1/connections/oauth/gmail/start', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Wrong provider', connection_id: connection.id }),
+  })).status, 404)
+  const capabilities = await service.discoverConnectionCapabilities('user-1', connection.id)
+  const list = capabilities.find(({ name }) => name === 'google_calendar.list_events')!
+  const create = capabilities.find(({ name }) => name === 'google_calendar.create_event')!
+  const update = capabilities.find(({ name }) => name === 'google_calendar.update_event')!
+  await service.callRuntimeCapability('user-1', list, {
+    calendar_id: 'primary', time_min: '2026-07-20T00:00:00Z', time_max: '2026-07-21T00:00:00Z',
+  }, 'source')
+  await assert.rejects(() => service.callRuntimeCapability('user-1', list, {
+    calendar_id: 'primary', time_min: '2026-07-21T00:00:00Z', time_max: '2026-07-20T00:00:00Z',
+  }, 'source'), /invalid_capability_input/)
+  await service.callRuntimeCapability('user-1', create, {
+    calendar_id: 'primary', title: 'Design review', start: '2026-07-21T09:00:00Z', end: '2026-07-21T09:30:00Z',
+    attendees: ['owner@example.com'],
+  }, 'action')
+  await service.callRuntimeCapability('user-1', update, {
+    calendar_id: 'primary', event_id: 'event-1', etag: '"v1"', title: 'Design review',
+    start: '2026-07-21T09:30:00Z', end: '2026-07-21T10:00:00Z', time_zone: 'Asia/Kolkata',
+  }, 'action')
+  const write = requests.find(({ url, init }) => url.includes('/calendars/primary/events?') && init?.method === 'POST')!
+  assert.deepEqual(JSON.parse(String(write.init?.body)), {
+    summary: 'Design review', start: { dateTime: '2026-07-21T09:00:00Z' }, end: { dateTime: '2026-07-21T09:30:00Z' },
+    attendees: [{ email: 'owner@example.com' }],
+  })
+  const updateRequest = requests.find(({ url, init }) => url.includes('/events/event-1?') && init?.method === 'PATCH')!
+  assert.equal((updateRequest.init?.headers as Record<string, string>)['If-Match'], '"v1"')
 })

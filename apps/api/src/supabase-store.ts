@@ -9,6 +9,7 @@ import {
   type NewRequest,
   type NewConnection,
   type OAuthState,
+  type OAuthProvider,
   type PairingSession,
   type PairingStatus,
   type PingRule,
@@ -45,7 +46,7 @@ function fail(error: { code?: string; message: string } | null): never {
     throw new StoreError('automation_key_name_exists', error.message)
   }
   if (error?.code === '23505') throw new StoreError('active_pod_exists', error.message)
-  const code = error?.message.match(/(pairing_rate_limited|invalid_pairing_code|invalid_bridge_pairing_code|active_pod_exists|pod_not_authorized|pod_not_found|pod_layout_conflict|invalid_pod_layout|request_not_found|request_already_resolved|request_expired|payload_changed|idempotency_conflict|codex_bridge_not_authorized|codex_target_not_found|codex_target_changed|rule_session_not_found|rule_session_expired|rule_session_conflict|rule_pod_unavailable|rule_connection_unavailable|rule_not_found|rule_edit_conflict|rule_review_required|invalid_rule_status|invalid_rule_definition|ping_event_conflict|invalid_ping_approval|telegram_auth_in_progress|telegram_auth_conflict)/)?.[1]
+  const code = error?.message.match(/(pairing_rate_limited|invalid_pairing_code|invalid_bridge_pairing_code|active_pod_exists|pod_not_authorized|pod_not_found|pod_layout_conflict|invalid_pod_layout|request_not_found|request_already_resolved|request_expired|reply_not_editable|invalid_reply_revision|payload_changed|idempotency_conflict|codex_bridge_not_authorized|codex_target_not_found|codex_target_changed|rule_session_not_found|rule_session_expired|rule_session_conflict|rule_pod_unavailable|rule_connection_unavailable|rule_not_found|rule_edit_conflict|rule_review_required|invalid_rule_status|invalid_rule_definition|ping_event_conflict|invalid_ping_approval|telegram_auth_in_progress|telegram_auth_conflict)/)?.[1]
   throw new StoreError(code ?? 'database_error', error?.message)
 }
 
@@ -552,7 +553,7 @@ export class SupabaseStore implements Store, RuntimeStore {
     if (error) fail(error)
   }
 
-  async consumeOAuthState(stateHash: string, provider: 'github' | 'gmail') {
+  async consumeOAuthState(stateHash: string, provider: OAuthProvider) {
     const { data, error } = await this.db
       .from('connection_oauth_states')
       .update({ used_at: new Date().toISOString() })
@@ -575,11 +576,19 @@ export class SupabaseStore implements Store, RuntimeStore {
   async getAiSettings(ownerId: string) {
     const { data, error } = await this.db
       .from('ai_settings')
-      .select('provider, base_url, model, encrypted_api_key, updated_at')
+      .select('provider, base_url, model, encrypted_api_key, personalization_enabled, updated_at')
       .eq('owner_id', ownerId)
       .maybeSingle()
     if (error) fail(error)
     return data as StoredAiSettings | null
+  }
+
+  async setPersonalization(ownerId: string, enabled: boolean) {
+    const { data, error } = await this.db.from('ai_settings')
+      .update({ personalization_enabled: enabled, updated_at: new Date().toISOString() })
+      .eq('owner_id', ownerId).select('owner_id').maybeSingle()
+    if (error) fail(error)
+    return Boolean(data)
   }
 
   async saveAiSettings(
@@ -589,7 +598,7 @@ export class SupabaseStore implements Store, RuntimeStore {
     const { data, error } = await this.db
       .from('ai_settings')
       .upsert({ owner_id: ownerId, ...settings, updated_at: new Date().toISOString() })
-      .select('provider, base_url, model, encrypted_api_key, updated_at')
+      .select('provider, base_url, model, encrypted_api_key, personalization_enabled, updated_at')
       .single()
     if (error || !data) fail(error)
     return data as StoredAiSettings
@@ -1260,6 +1269,32 @@ export class SupabaseStore implements Store, RuntimeStore {
       .maybeSingle()
     if (error) fail(error)
     return data as RuntimeEvent | null
+  }
+
+  async getEditableReply(ownerId: string, requestId: string) {
+    const { data, error } = await this.db.from('ping_rule_events')
+      .select('id, owner_id, rule_id, event_identity, conversation_key, provider_event_id, occurred_at, status, encrypted_source_payload, encrypted_draft_payload, encrypted_action_payload, action_payload_hash, approval_request_id, delivery_idempotency_key, telegram_random_id, attempts, approval_requests!inner(status, payload_hash)')
+      .eq('owner_id', ownerId).eq('approval_request_id', requestId).maybeSingle()
+    if (error) fail(error)
+    const request = Array.isArray(data?.approval_requests) ? data.approval_requests[0] : data?.approval_requests
+    if (!data || data.status !== 'pending_approval' || request?.status !== 'pending' || !request.payload_hash) return null
+    const { approval_requests: _request, ...event } = data
+    return { event: event as RuntimeEvent, payloadHash: request.payload_hash }
+  }
+
+  async reviseReply(input: { ownerId: string; requestId: string; expectedHash: string; newHash: string; encryptedDraft: string; encryptedAction: string; memoryContent: string; memorySource: Record<string, unknown> }) {
+    const { data, error } = await this.db.rpc('revise_ping_rule_reply', {
+      p_owner_id: input.ownerId,
+      p_request_id: input.requestId,
+      p_expected_hash: input.expectedHash,
+      p_new_hash: input.newHash,
+      p_encrypted_draft_payload: input.encryptedDraft,
+      p_encrypted_action_payload: input.encryptedAction,
+      p_memory_content: input.memoryContent,
+      p_memory_source: input.memorySource,
+    })
+    if (error || !data) fail(error)
+    return (Array.isArray(data) ? data[0] : data) as ApprovalRequest
   }
 
   async ignoreRuleEvent(eventId: string, leaseToken: string, reason: string) {

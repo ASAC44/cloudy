@@ -1,5 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { PingRuleDefinitions } from "@/components/dashboard/ping-rule-definitions";
+import { PersonalizationManager } from "@/components/dashboard/personalization-manager";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -8,16 +9,22 @@ import {
 } from "@/components/ui/native-select";
 import { Switch } from "@/components/ui/switch";
 import { apiFetch } from "@/lib/api";
-import type { PingRuleSummary } from "@/types/api";
+import type { AgentMemory, AiSettings, PingRuleSummary } from "@/types/api";
 
 export default async function ConfigurePage() {
   let rules: PingRuleSummary[] = [];
+  let memories: AgentMemory[] = [];
+  let aiSettings: AiSettings | null = null;
   let rulesError = "";
-  try {
-    rules = (await apiFetch<{ rules: PingRuleSummary[] }>("/v1/rules")).rules;
-  } catch (error) {
-    rulesError = error instanceof Error ? error.message : "Ping definitions could not be loaded";
-  }
+  const [rulesResult, memoriesResult, settingsResult] = await Promise.allSettled([
+    apiFetch<{ rules: PingRuleSummary[] }>("/v1/rules"),
+    apiFetch<{ memories: AgentMemory[] }>("/v1/memories?limit=50"),
+    apiFetch<{ settings: AiSettings | null }>("/v1/settings/ai"),
+  ]);
+  if (rulesResult.status === "fulfilled") rules = rulesResult.value.rules;
+  else rulesError = rulesResult.reason instanceof Error ? rulesResult.reason.message : "Ping definitions could not be loaded";
+  if (memoriesResult.status === "fulfilled") memories = memoriesResult.value.memories.filter((memory) => ["preference", "writing_sample", "correction"].includes(String(memory.source.kind)));
+  if (settingsResult.status === "fulfilled") aiSettings = settingsResult.value.settings;
 
   return (
     <div className="mx-auto w-full max-w-5xl px-6 py-12 md:px-10 md:py-16">
@@ -122,9 +129,9 @@ export default async function ConfigurePage() {
 
             <div className="flex items-center justify-between gap-6 py-5">
               <div>
-                <Label htmlFor="dictation">Dictated corrections · coming later</Label>
+                <Label htmlFor="dictation">Pod-dictated corrections · coming later</Label>
                 <p className="mt-2 text-sm leading-5 text-muted-foreground">
-                  Microphone input and rejection reasons are outside this milestone.
+                  Dashboard text corrections are available now; microphone corrections remain outside this milestone.
                 </p>
               </div>
               <Switch id="dictation" disabled />
@@ -165,18 +172,11 @@ export default async function ConfigurePage() {
           </div>
 
           <div className="divide-y divide-border border-y border-border">
-            <div className="flex items-center justify-between gap-6 py-5">
-              <div>
-                <Label htmlFor="personalization">
-                  Personalize drafted replies
-                </Label>
-                <p className="mt-2 text-sm leading-5 text-muted-foreground">
-                  Use approved replies, corrections, relationships, and writing
-                  preferences to sound like you.
-                </p>
-              </div>
-              <Switch id="personalization" defaultChecked />
-            </div>
+            <PersonalizationManager
+              initialMemories={memories}
+              initialEnabled={aiSettings?.personalization_enabled ?? false}
+              configured={Boolean(aiSettings)}
+            />
 
             <div className="flex items-center justify-between gap-6 py-5">
               <div>

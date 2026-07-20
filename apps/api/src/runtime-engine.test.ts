@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import test from 'node:test'
 
 import { gmailNotificationPresentation, gmailReviewPresentation, RuntimeEngine, pointerValue, resolveArguments } from './runtime-engine.js'
@@ -82,6 +83,7 @@ test('all-incoming Gmail rules do not ask AI to infer sender metadata from IDs',
     claimRuleEvent: async () => ({ eventId: 'event-1', ownerId: runtimeRule.owner_id, ruleId: runtimeRule.id, leaseToken: 'lease' }),
     getRuntimeRule: async () => runtimeRule,
     getRuntimeEvent: async () => ({ id: 'event-1', event_identity: 'identity', encrypted_source_payload: JSON.stringify(event) }),
+    getAiSettings: async () => ({ personalization_enabled: true }),
     listAgentMemories: async () => [],
     prepareRuleApproval: async (input: { encryptedDraft: string }) => { encryptedDraft = input.encryptedDraft },
     recordRuleRun: async () => undefined,
@@ -98,6 +100,50 @@ test('all-incoming Gmail rules do not ask AI to infer sender metadata from IDs',
     kind: 'gmail_notification_v1', sender: 'ava@example.com', time: 'Today', subject: 'Review',
     summary: 'A new incoming Gmail message matched this Ping.', email: 'Complete original email.',
   })
+})
+
+test('reply corrections replace draft-bound arguments and retain a scoped before-after example', async () => {
+  const runtimeRule = rule()
+  runtimeRule.action_connection_id = 'connection-1'
+  runtimeRule.action_capability_id = 'send-reply'
+  runtimeRule.action_capability_name = 'Send reply'
+  runtimeRule.action_capability_schema_hash = 'b'.repeat(64)
+  runtimeRule.action_capability_safety = 'verified_write'
+  runtimeRule.definition.action = {
+    connection_id: 'connection-1', capability_id: 'send-reply', capability_name: 'Send reply',
+    capability_schema_hash: 'b'.repeat(64), arguments: { message: { from: 'decision', pointer: '/draft' }, thread_id: 'thread-1' },
+  }
+  const action = {
+    kind: 'capability', rule_id: runtimeRule.id, rule_revision: runtimeRule.revision, event_identity: 'message-1',
+    connection_id: 'connection-1', capability_id: 'send-reply', capability_schema_hash: 'b'.repeat(64),
+    arguments: { message: 'Old reply', thread_id: 'thread-1' },
+  }
+  const canonical = (value: unknown): string => Array.isArray(value) ? `[${value.map(canonical).join(',')}]`
+    : value && typeof value === 'object' ? `{${Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`).join(',')}}`
+      : JSON.stringify(value)
+  const payloadHash = createHash('sha256').update(canonical(action)).digest('hex')
+  let revision: Parameters<RuntimeStore['reviseReply']>[0] | undefined
+  const event = {
+    id: 'event-1', owner_id: 'owner-1', rule_id: runtimeRule.id, event_identity: 'message-1', status: 'pending_approval',
+    encrypted_draft_payload: JSON.stringify({ proposed_reply: 'Old reply' }), encrypted_action_payload: JSON.stringify(action),
+    action_payload_hash: payloadHash, approval_request_id: 'request-1',
+  }
+  const store = {
+    getEditableReply: async () => ({ event, payloadHash }),
+    getRuntimeRule: async () => runtimeRule,
+    reviseReply: async (input: Parameters<RuntimeStore['reviseReply']>[0]) => { revision = input; return {} },
+  } as unknown as Store & RuntimeStore
+  const engine = new RuntimeEngine(store, {
+    decryptPrivatePayload: (value: string) => JSON.parse(value),
+    encryptPrivatePayload: (value: unknown) => JSON.stringify(value),
+  } as never)
+
+  assert.deepEqual(await engine.editableReply('owner-1', 'request-1'), { reply: 'Old reply', payload_hash: payloadHash })
+  const result = await engine.reviseReply('owner-1', 'request-1', payloadHash, 'New reply')
+  assert.equal(JSON.parse(revision!.encryptedAction).arguments.message, 'New reply')
+  assert.match(revision!.memoryContent, /Before:\nOld reply[\s\S]*After:\nNew reply/)
+  assert.deepEqual(revision!.memorySource, { kind: 'correction', request_id: 'request-1', rule_id: 'rule-1', provider: 'custom_mcp', connection_id: 'connection-1' })
+  assert.equal(result.payload_hash, revision!.newHash)
 })
 
 test('GitHub polling also establishes a baseline without alerting on existing pull requests', async () => {

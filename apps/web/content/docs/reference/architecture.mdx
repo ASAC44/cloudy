@@ -71,13 +71,15 @@ changing it makes existing encrypted values unreadable.
 
 ## Connections and dynamic rules
 
-The shipped connection providers are GitHub, Gmail, Vercel, Telegram, Linear,
-Stripe, and a custom remote MCP endpoint. GitHub and Gmail use OAuth; Vercel,
-Linear, and Stripe accept encrypted bearer credentials; Telegram supports an
-authenticated bot webhook or user authorization; and custom MCP connections
-support configured authentication. Bot updates enter the API directly, while
-personal-account events are maintained by the worker. Linear and Stripe use
-fixed official Streamable HTTP endpoints.
+The shipped connection providers are GitHub, Gmail, Google Calendar, Vercel,
+Telegram, Linear, Stripe, and a custom remote MCP endpoint. GitHub, Gmail, and
+Google Calendar use OAuth; Vercel, Linear, and Stripe accept encrypted bearer
+credentials; Telegram supports an authenticated bot webhook or user
+authorization; and custom MCP connections support configured authentication.
+Bot updates enter the API directly, while personal-account events are
+maintained by the worker. Linear and Stripe use fixed official Streamable HTTP
+endpoints. Google Calendar uses bounded REST reads plus approval-gated event
+creation and etag-guarded updates behind the same capability interface.
 Gmail requests `gmail.readonly` plus `gmail.send`; reply delivery is exposed only
 as an exact, hash-bound action after the user approves the complete email and
 response on the Pod.
@@ -125,11 +127,21 @@ sessions. Memories may be scoped to a user, workspace, or provider and can
 include a source pointer. They are bounded context only: they never authorize
 an action, replace a provider read, or bypass Pod approval.
 
-The prototype exposes explicit authenticated endpoints: `POST /v1/memories` to
+The API exposes explicit authenticated endpoints: `POST /v1/memories` to
 write a memory, `GET /v1/memories?q=...&limit=...` to list memories, and
 `DELETE /v1/memories/:id` to soft-delete one. Workspace and provider memories
 also require their scope identifier; provider memories require `provider`.
 Integrations do not silently save arbitrary conversation text.
+
+`PUT /v1/settings/personalization` controls collection and prompt injection.
+For editable Ping replies, `GET /v1/requests/:id/reply` returns the current
+exact text and hash, while `PUT /v1/requests/:id/reply` atomically replaces the
+encrypted draft, encrypted action, payload hash, and provider-scoped correction
+memory. A Pod holding the previous hash cannot approve the changed action.
+
+Reply prompts receive no more than 12 memories or 6,000 characters. General
+preferences apply across providers; corrections use the source connection ID
+so examples from separate accounts do not mix.
 
 ## Decision guarantees
 

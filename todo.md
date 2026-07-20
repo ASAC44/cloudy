@@ -7,6 +7,7 @@
 ## Activate shared agent memory
 
 - [ ] Apply `supabase/migrations/20260720020000_agent_memories.sql` before deploying the matching API build; verify authenticated memory create, list, scoped retrieval, soft-delete, and cross-owner isolation, then test `supabase/rollback/20260720020000_agent_memories.sql` on a disposable database.
+- [ ] After the base memory migration, apply `supabase/migrations/20260720050000_reply_personalization.sql` before deploying the matching API, web, and Pod builds; verify preference/sample CRUD, disable/enable behavior, connection-scoped retrieval, concurrent correction conflict handling, stale Pod hash rejection, revised exact-reply delivery once, and cross-owner isolation, then test `supabase/rollback/20260720050000_reply_personalization.sql` on a disposable database.
 
 ## Activate Pod screen layout sync
 
@@ -24,6 +25,12 @@
 - [ ] Apply `supabase/migrations/20260720000000_linear_stripe_connections.sql` on staging before deploying the matching API build; verify existing provider connections remain readable.
 - [ ] Connect a disposable Linear workspace key and a restricted Stripe sandbox key, verify tool discovery and a read-only Ping, then approve one reversible write from each provider and confirm the exact payload executes once.
 - [ ] Attempt `supabase/rollback/20260720000000_linear_stripe_connections.sql` while a Linear or Stripe connection exists and verify it refuses without changing data; remove the disposable connections and verify rollback succeeds.
+
+## Activate Google Calendar connections
+
+- [ ] Enable the Google Calendar API, add `/v1/connections/oauth/google_calendar/callback` to the production Google OAuth client, and approve `calendar.events` plus `calendar.calendarlist.readonly` on the consent screen.
+- [ ] Apply `supabase/migrations/20260720040000_google_calendar_connections.sql` before deploying the matching API, web, worker, and Pod builds; connect a disposable calendar and verify bounded event reads, one approved event creation, and one etag-guarded update.
+- [ ] Verify a rejected approval creates no event, a stale etag cannot overwrite a changed event, and rollback refuses while a Calendar connection, memory, OAuth state, or Pod screen assignment remains.
 
 ## Activate Gmail reply approvals
 

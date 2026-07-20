@@ -78,20 +78,22 @@ refresh tokens.
 
 ## 5. Configure provider OAuth
 
-The Connections page uses separate OAuth applications for GitHub and Gmail.
-Both callbacks terminate at the public Hono API:
+The Connections page uses separate OAuth connections for GitHub, Gmail, and
+Google Calendar. Their callbacks terminate at the public Hono API:
 
 ```text
 https://<your-api-domain>/v1/connections/oauth/github/callback
 https://<your-api-domain>/v1/connections/oauth/gmail/callback
+https://<your-api-domain>/v1/connections/oauth/google_calendar/callback
 ```
 
 Create a GitHub OAuth App with the first callback, then set
 `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`. In Google Cloud, enable the
-Gmail API, add the second callback to the web OAuth client, configure consent
-for `gmail.readonly` and `gmail.send`, and set `GOOGLE_CLIENT_ID` and
-`GOOGLE_CLIENT_SECRET`. Existing read-only Gmail connections must be
-reconnected before reply actions become available.
+Gmail and Google Calendar APIs, add both Google callbacks to the web OAuth
+client, and set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`. Configure the
+consent screen for `gmail.readonly`, `gmail.send`, `calendar.events`, and
+`calendar.calendarlist.readonly`. Existing Google connections must be
+reconnected when their required scopes change.
 
 Set `PODEX_PUBLIC_API_URL` to the public API origin, `PODEX_WEB_URL` to the
 dashboard origin, and `CONNECTION_ENCRYPTION_KEY` to a stable 32-byte base64
