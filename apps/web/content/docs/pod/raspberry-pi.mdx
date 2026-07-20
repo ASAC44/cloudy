@@ -46,6 +46,7 @@ PODEX_API_URL=https://your-api-domain.example
 PODEX_STATE_DIR=/var/lib/podex-pod
 PODEX_APPROVE_PIN=5
 PODEX_REJECT_PIN=6
+PODEX_IDLE_ANIMATION_SECONDS=30
 ```
 
 Then install and start the kiosk service:
@@ -61,6 +62,12 @@ journalctl -u podex-pod -f
 The service runs Cage directly on tty1, restarts after failures, and launches
 the same pygame code used by the simulator. The Pod API token remains on the
 Pi; Supabase and integration secrets never do.
+
+Swipe up from a feed to open Quick Settings. Changes persist in
+`PODEX_STATE_DIR/settings.json`. Brightness currently dims the rendered UI;
+volume uses the native ALSA `Master` control through `amixer`. Connectivity,
+reduced motion, and the idle-animation timeout are configurable from the same
+touchscreen list.
 
 ## Hardware acceptance
 

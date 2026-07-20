@@ -11,6 +11,7 @@ import { GithubApiError } from './github-pr.js'
 import { RuleBuilderService, RuleBuilderError } from './rule-builder.js'
 import type {
   AutomationKey,
+  AgentMemory,
   ApprovalRequest,
   Connection,
   NewConnection,
@@ -187,6 +188,11 @@ class FakeStore implements Store {
   async claimCallback() { return null }
   async completeCallback() {}
   async listConnections() { return this.connections }
+  async listAgentMemories() { return [] as AgentMemory[] }
+  async upsertAgentMemory(input: { ownerId: string; scope: AgentMemory['scope']; scopeId?: string; provider?: AgentMemory['provider']; memoryKey: string; content: string; source?: Record<string, unknown> }) {
+    return { id: randomTestId(90), owner_id: input.ownerId, scope: input.scope, scope_id: input.scopeId ?? null, provider: input.provider ?? null, memory_key: input.memoryKey, content: input.content, source: input.source ?? {}, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+  }
+  async deleteAgentMemory() { return true }
   async getConnection(_ownerId: string, connectionId: string) {
     const connection = this.connections.find(({ id }) => id === connectionId)
     const encrypted_payload = this.connectionSecrets.get(connectionId)
@@ -759,7 +765,7 @@ test('claim rejects a second active Pod', async () => {
 
 test('screen layouts persist once and reject invalid or stale writes', async () => {
   const setup = app()
-  const layout = { left: ['app:github', 'app:vercel'], right: ['app:gmail'], down: ['app:codex'] }
+  const layout = { left: ['app:vercel'], right: ['app:gmail'], down: ['app:codex'] }
   const saved = await setup.app.request(`/v1/pods/${setup.store.pod.id}/screen-layout`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
@@ -840,6 +846,7 @@ test('Pod polls and resolves the exact current request', async () => {
   assert.deepEqual(currentBody.screen_layout, {
     left: ['app:github'], right: ['app:gmail'], down: ['app:codex'],
   })
+  assert.equal(currentBody.request_screen, 'down')
 
   const decision = await api.request(`/v1/pod/requests/${request.id}/decision`, {
     method: 'POST',
@@ -852,6 +859,18 @@ test('Pod polls and resolves the exact current request', async () => {
   })
   assert.equal(decision.status, 200)
   assert.equal((await decision.json()).decision.outcome, 'approved')
+})
+
+test('Pod routes a notification to its configured feed screen', async () => {
+  const setup = app()
+  setup.store.current = { ...request, source: 'GitHub · PR merge' }
+  const pairing = await setup.app.request('/v1/pod/pairing-sessions', { method: 'POST' })
+  const { pod_token: token } = await pairing.json()
+  const current = await setup.app.request('/v1/pod/requests/current', {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+
+  assert.equal((await current.json()).request_screen, 'left')
 })
 
 test('Pod receives an authenticated hash-bound GitHub presentation', async () => {

@@ -162,6 +162,19 @@ export type CodexCommand = {
   idempotency_key: string
 }
 
+export type AgentMemory = {
+  id: string
+  owner_id: string
+  scope: 'user' | 'workspace' | 'provider'
+  scope_id: string | null
+  provider: ConnectionProvider | null
+  memory_key: string
+  content: string
+  source: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
 export type CapabilitySafety = 'verified_read' | 'verified_write' | 'unannotated'
 export type CapabilityRole = 'source' | 'context' | 'action' | 'setup'
 export type CapabilityDelivery = 'poll' | 'event'
@@ -511,6 +524,9 @@ export interface Store {
     draft: RuleDraft,
   ): Promise<PingRule>
   deleteRule(ownerId: string, ruleId: string): Promise<boolean>
+  listAgentMemories(ownerId: string, scopes?: Array<{ scope: AgentMemory['scope']; scopeId?: string; provider?: ConnectionProvider }>, query?: string, limit?: number): Promise<AgentMemory[]>
+  upsertAgentMemory(input: { ownerId: string; scope: AgentMemory['scope']; scopeId?: string; provider?: ConnectionProvider; memoryKey: string; content: string; source?: Record<string, unknown> }): Promise<AgentMemory>
+  deleteAgentMemory(ownerId: string, memoryId: string): Promise<boolean>
 }
 
 export interface RuntimeStore {

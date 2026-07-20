@@ -7,6 +7,15 @@ Podex stores connection credentials encrypted with `CONNECTION_ENCRYPTION_KEY`.
 The dashboard never receives a saved key after submission, and replacing a key
 runs a fresh connection test.
 
+## Connect Gmail
+
+Gmail watch rules first receive stable message and thread IDs, then Podex reads
+the matching thread through the same read-only OAuth connection before creating
+the encrypted Pod notification. The summary shows the sender and subject;
+swipe down on the Pod to read the complete email. Reply rules additionally show
+the exact proposed response. Existing inbox messages form the first polling
+baseline, so send a new message after activating a rule when testing.
+
 ## Connect Linear
 
 1. In Linear, open **Settings → Account → Security & Access** and create an API

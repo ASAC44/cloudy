@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { gmailReviewPresentation, RuntimeEngine, pointerValue, resolveArguments } from './runtime-engine.js'
+import { gmailNotificationPresentation, gmailReviewPresentation, RuntimeEngine, pointerValue, resolveArguments } from './runtime-engine.js'
 import type { RuntimeRule, RuntimeStore, Store } from './types/store.js'
 
 const rule = (): RuntimeRule => ({
@@ -69,6 +69,35 @@ test('polling establishes a baseline, then enqueues only unseen deterministic id
   assert.deepEqual(enqueued, [])
   assert.equal(await engine.pollOnce('worker'), true)
   assert.equal(enqueued.length, 1)
+})
+
+test('all-incoming Gmail rules do not ask AI to infer sender metadata from IDs', async () => {
+  const runtimeRule = rule()
+  runtimeRule.source.provider = 'gmail'
+  runtimeRule.title = 'New Gmail'
+  runtimeRule.definition.source.arguments = { query: 'in:inbox -from:me', limit: 20 }
+  const event = { id: 'message-1', threadId: 'thread-1' }
+  let encryptedDraft = ''
+  const store = {
+    claimRuleEvent: async () => ({ eventId: 'event-1', ownerId: runtimeRule.owner_id, ruleId: runtimeRule.id, leaseToken: 'lease' }),
+    getRuntimeRule: async () => runtimeRule,
+    getRuntimeEvent: async () => ({ id: 'event-1', event_identity: 'identity', encrypted_source_payload: JSON.stringify(event) }),
+    listAgentMemories: async () => [],
+    prepareRuleApproval: async (input: { encryptedDraft: string }) => { encryptedDraft = input.encryptedDraft },
+    recordRuleRun: async () => undefined,
+  } as unknown as Store & RuntimeStore
+  const engine = new RuntimeEngine(store, {
+    decryptPrivatePayload: (value: string) => JSON.parse(value),
+    encryptPrivatePayload: (value: unknown) => JSON.stringify(value),
+    discoverConnectionCapabilities: async () => [{ name: 'gmail.get_thread', roles: ['context'] }],
+    callRuntimeCapability: async () => ({ messages: [{ headers: { from: 'ava@example.com', subject: 'Review', date: 'Today' }, body: 'Complete original email.' }] }),
+  } as never)
+
+  assert.equal(await engine.evaluateOnce(), true)
+  assert.deepEqual(JSON.parse(encryptedDraft), {
+    kind: 'gmail_notification_v1', sender: 'ava@example.com', time: 'Today', subject: 'Review',
+    summary: 'A new incoming Gmail message matched this Ping.', email: 'Complete original email.',
+  })
 })
 
 test('GitHub polling also establishes a baseline without alerting on existing pull requests', async () => {
@@ -140,5 +169,17 @@ test('Gmail approvals expose the complete reviewed email and exact reply', () =>
   assert.deepEqual(presentation, {
     kind: 'email_reply_v1', sender: 'ava@example.com', time: 'Today', subject: 'Review', summary: 'A reply is ready.',
     email: 'Complete original email.', response: 'Exact approved reply.',
+  })
+})
+
+test('Gmail notification presentation exposes the complete email without a reply', () => {
+  const presentation = gmailNotificationPresentation(
+    { threadId: 'thread-1' },
+    [{ messages: [{ headers: { from: 'ava@example.com', subject: 'Review', date: 'Today' }, body: 'Complete original email.' }] }],
+    { match: true, title: 'Notify', summary: 'A new email arrived.', risk: 'low', warnings: [], draft: null },
+  )
+  assert.deepEqual(presentation, {
+    kind: 'gmail_notification_v1', sender: 'ava@example.com', time: 'Today', subject: 'Review',
+    summary: 'A new email arrived.', email: 'Complete original email.',
   })
 })

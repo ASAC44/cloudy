@@ -9,6 +9,7 @@ class Storage:
         self.root = root
         self.credentials_path = root / "credentials.json"
         self.request_path = root / "active-request.json"
+        self.settings_path = root / "settings.json"
 
     def _read(self, path: Path) -> dict[str, Any] | None:
         try:
@@ -41,3 +42,9 @@ class Storage:
 
     def clear_request(self) -> None:
         self.request_path.unlink(missing_ok=True)
+
+    def settings(self) -> dict[str, Any] | None:
+        return self._read(self.settings_path)
+
+    def save_settings(self, settings: dict[str, Any]) -> None:
+        self._write(self.settings_path, settings)

@@ -327,7 +327,8 @@ export class ConnectionService {
         await this.store.updateConnectionSecret(connection.id, this.encrypt(current))
       }
       const url = new URL('https://gmail.googleapis.com/gmail/v1/users/me/messages')
-      if (typeof input.query === 'string' && input.query) url.searchParams.set('q', input.query)
+      const query = input.query === 'all_incoming' ? 'in:inbox' : input.query
+      if (typeof query === 'string' && query) url.searchParams.set('q', query)
       url.searchParams.set('maxResults', String(Math.min(Number(input.limit) || 10, 20)))
       return await this.json(url.toString(), { headers: providerHeaders(requiredCredential(current, 'accessToken')) })
     }

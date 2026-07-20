@@ -31,10 +31,12 @@ export class LocalPodLayoutStore {
     const row = this.db.prepare('select layout, revision from pod_screen_layouts where pod_id = ?').get(podId) as { layout: string; revision: number } | undefined
     if (!row) return { layout: DEFAULT_SCREEN_LAYOUT, revision: 0 }
     const layout = JSON.parse(row.layout) as Record<string, unknown>
-    return { layout: 'left' in layout ? layout as ScreenLayout : DEFAULT_SCREEN_LAYOUT, revision: row.revision }
+    const saved = 'left' in layout ? layout as ScreenLayout : DEFAULT_SCREEN_LAYOUT
+    return { layout: { left: saved.left.slice(0, 1), right: saved.right.slice(0, 1), down: saved.down.slice(0, 1) }, revision: row.revision }
   }
 
   update(podId: string, expectedRevision: number, layout: ScreenLayout) {
+    if (Object.values(layout).some((feeds) => feeds.length > 1)) throw new StoreError('invalid_pod_layout')
     this.db.exec('begin immediate')
     try {
       const current = this.get(podId)

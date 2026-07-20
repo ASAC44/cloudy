@@ -28,6 +28,7 @@ import {
   type CodexTarget,
   type CodexThread,
   type CodexWorkspace,
+  type AgentMemory,
   type Store,
 } from './types/store.js'
 import { StoreError } from './store.js'
@@ -56,6 +57,10 @@ function equalHash(left: string, right: string) {
 
 function missingPodLayoutSchema(error: { code?: string; message: string } | null) {
   return error?.code === '42703' || error?.code === '42883' || error?.code === 'PGRST202'
+}
+
+function missingMemorySchema(error: { code?: string; message: string } | null) {
+  return error?.code === '42P01' || error?.code === 'PGRST205'
 }
 
 export class SupabaseStore implements Store, RuntimeStore {
@@ -1358,6 +1363,50 @@ export class SupabaseStore implements Store, RuntimeStore {
       duration_ms: input.durationMs ?? null,
     })
     if (error) fail(error)
+  }
+
+  async listAgentMemories(ownerId: string, scopes: Array<{ scope: AgentMemory['scope']; scopeId?: string; provider?: AgentMemory['provider'] }> = [], query?: string, limit = 12) {
+    // ponytail: scan 100 recent rows; add SQL full-text search if memory volume grows.
+    const { data, error } = await this.db
+      .from('agent_memories')
+      .select('id, owner_id, scope, scope_id, provider, memory_key, content, source, created_at, updated_at')
+      .eq('owner_id', ownerId)
+      .is('deleted_at', null)
+      .order('updated_at', { ascending: false })
+      .limit(Math.min(Math.max(limit * 4, 12), 100))
+    if (missingMemorySchema(error)) return []
+    if (error) fail(error)
+    const normalized = (data as AgentMemory[]).filter((row) => {
+      const inScope = !scopes.length || scopes.some((scope) =>
+        scope.scope === row.scope &&
+        (scope.scopeId ?? '') === (row.scope_id ?? '') &&
+        (scope.provider ?? '') === (row.provider ?? '')
+      )
+      return inScope && (!query || `${row.memory_key} ${row.content}`.toLowerCase().includes(query.toLowerCase()))
+    }).slice(0, Math.min(Math.max(limit, 1), 50))
+    return normalized.map((row) => ({ ...row, scope_id: row.scope_id || null, provider: row.provider || null }))
+  }
+
+  async upsertAgentMemory(input: { ownerId: string; scope: AgentMemory['scope']; scopeId?: string; provider?: AgentMemory['provider']; memoryKey: string; content: string; source?: Record<string, unknown> }) {
+    const { data, error } = await this.db.from('agent_memories').upsert({
+      owner_id: input.ownerId,
+      scope: input.scope,
+      scope_id: input.scopeId ?? '',
+      provider: input.provider ?? '',
+      memory_key: input.memoryKey,
+      content: input.content,
+      source: input.source ?? {},
+      updated_at: new Date().toISOString(),
+      deleted_at: null,
+    }, { onConflict: 'owner_id,scope,scope_id,provider,memory_key' }).select('id, owner_id, scope, scope_id, provider, memory_key, content, source, created_at, updated_at').single()
+    if (error || !data) fail(error)
+    return { ...(data as AgentMemory), scope_id: data.scope_id || null, provider: data.provider || null }
+  }
+
+  async deleteAgentMemory(ownerId: string, memoryId: string) {
+    const { data, error } = await this.db.from('agent_memories').update({ deleted_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq('id', memoryId).eq('owner_id', ownerId).is('deleted_at', null).select('id').maybeSingle()
+    if (error) fail(error)
+    return Boolean(data)
   }
 
   async purgeRuntimeData() {

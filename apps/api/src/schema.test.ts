@@ -79,6 +79,19 @@ test('Pod screen layouts are constrained, revisioned, and rollback-safe', async 
   assert.match(rollback, /commit;\s*$/)
 })
 
+test('Pod screens hold one feed and the migration trims old multi-feed slots atomically', async () => {
+  const migration = await readFile(new URL('supabase/migrations/20260720030000_single_feed_screens.sql', root), 'utf8')
+  const rollback = await readFile(new URL('supabase/rollback/20260720030000_single_feed_screens.sql', root), 'utf8')
+
+  assert.match(migration, /^begin;/)
+  assert.match(migration, /jsonb_array_length\(p_layout -> direction\) > 1/)
+  assert.match(migration, /screen_layout_revision = screen_layout_revision \+ 1/)
+  assert.match(migration, /add constraint pods_valid_screen_layout/)
+  assert.match(migration, /commit;\s*$/)
+  assert.match(rollback, /jsonb_array_length\(p_layout -> direction\) > 6/)
+  assert.match(rollback, /commit;\s*$/)
+})
+
 test('rule builder can request first-class Linear and Stripe connections', async () => {
   const source = await readFile(new URL('apps/api/src/rule-builder.ts', root), 'utf8')
   assert.match(source, /enum: \['github', 'gmail', 'vercel', 'telegram', 'linear', 'stripe', 'custom_mcp', 'other'\]/)
@@ -98,4 +111,15 @@ test('runtime execution stays in the dedicated worker process', async () => {
   assert.doesNotMatch(api, /startRuntimeLoop/)
   assert.match(worker, /startRuntimeLoop/)
   assert.match(packageJson, /"start:worker": "node --env-file-if-exists=\.env dist\/worker\.js"/)
+})
+
+test('agent memories are owned, scoped, bounded, and reversible', async () => {
+  const migration = await readFile(new URL('supabase/migrations/20260720020000_agent_memories.sql', root), 'utf8')
+  const rollback = await readFile(new URL('supabase/rollback/20260720020000_agent_memories.sql', root), 'utf8')
+
+  assert.match(migration, /owner_id uuid not null references auth\.users\(id\) on delete cascade/)
+  assert.match(migration, /content text not null check \(char_length\(content\) between 1 and 2000\)/)
+  assert.match(migration, /unique\(owner_id, scope, scope_id, provider, memory_key\)/)
+  assert.match(migration, /alter table public\.agent_memories enable row level security/)
+  assert.match(rollback, /drop table if exists public\.agent_memories/)
 })

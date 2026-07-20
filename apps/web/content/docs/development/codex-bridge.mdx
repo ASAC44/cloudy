@@ -74,6 +74,10 @@ Voice transcription requires the official OpenAI provider and API base URL in
 **Settings**. Other supported AI providers can be used by the rule builder,
 but they do not enable Pod voice transcription.
 
+Codex prompts may also receive relevant Podex memory. Memory is user-owned
+context shared with other integrations; it is not treated as instructions and
+does not bypass Codex or Pod approvals.
+
 ## Troubleshooting
 
 - `Codex CLI is not installed`: ensure `codex --version` works for the same

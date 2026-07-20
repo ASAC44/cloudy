@@ -70,6 +70,20 @@ EMAIL_REQUEST = {
     },
 }
 
+GMAIL_NOTIFICATION = {
+    **REQUEST,
+    "title": "Tomorrow's project review",
+    "source": "Gmail",
+    "presentation": {
+        "kind": "gmail_notification_v1",
+        "sender": "ava@northstar.studio",
+        "time": "09:42",
+        "subject": "Tomorrow's project review",
+        "summary": "A new incoming Gmail message matched this Ping.",
+        "email": "Hi Vansh,\n\nCould we move tomorrow's project review to 3:30 PM?\n\nThanks,\nAva",
+    },
+}
+
 
 class FakeWorker:
     def __init__(self):
@@ -111,6 +125,12 @@ class PodTests(unittest.TestCase):
         self.assertEqual(restarted.credentials(), {"token": "pod_token"})
         self.assertEqual(restarted.request()["id"], REQUEST["id"])
         self.assertEqual(stat.S_IMODE(restarted.credentials_path.stat().st_mode), 0o600)
+
+    def test_quick_settings_survive_restart(self):
+        self.storage.save_settings({"brightness": 50, "volume": 75, "reduce_motion": True, "idle_animation_seconds": 60})
+        restarted = PodApp(self.worker, Storage(Path(self.temp.name)), simulator=True)
+
+        self.assertEqual((restarted.brightness, restarted.volume, restarted.reduce_motion, restarted.idle_animation_seconds), (50, 75, True, 60))
 
     def test_long_text_wraps_within_width(self):
         lines = wrap(self.app.font, "one two three four five six seven", 80)
@@ -159,12 +179,30 @@ class PodTests(unittest.TestCase):
         self.assertNotEqual(floating[1], resting[1])
         self.assertTrue(blinking[2])
 
+    def test_screen_two_is_default_and_mascot_waits_for_inactivity(self):
+        with patch.object(self.app, "_render_idle", wraps=self.app._render_idle) as render_idle:
+            self.app.state = "idle"
+            self.app.screen = "home"
+            self.app.last_interaction_at = 100
+            with patch("podex_pod.app.time.monotonic", return_value=110):
+                self.app.render()
+            render_idle.assert_not_called()
+            with patch("podex_pod.app.time.monotonic", return_value=131):
+                self.app.render()
+            self.app.state = "request"
+            self.app.request = REQUEST
+            with patch("podex_pod.app.time.monotonic", return_value=200):
+                self.app.render()
+
+        render_idle.assert_called_once()
+
     def test_approve_while_idle_triggers_one_second_yawn(self):
         self.app.state = "idle"
         with patch("podex_pod.app.time.monotonic", return_value=100):
             self.app.choose("approved")
 
         self.assertEqual(self.worker.decisions, [])
+        self.assertEqual(self.app.last_interaction_at, 100)
         self.assertEqual(yawn_openness(0), 0)
         self.assertEqual(yawn_openness(0.5), 1)
         self.assertEqual(yawn_openness(1), 0)
@@ -178,8 +216,8 @@ class PodTests(unittest.TestCase):
         self.assertEqual(demo.request["source"], "GitHub · PR merge")
         self.assertEqual(self.worker.decisions, [])
         with patch("pygame.time.get_ticks", return_value=0):
-            demo.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(320, 430)))
-            demo.handle_event(pygame.event.Event(pygame.MOUSEBUTTONUP, pos=(320, 180)))
+            demo.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(320, 180)))
+            demo.handle_event(pygame.event.Event(pygame.MOUSEBUTTONUP, pos=(320, 430)))
         with patch("pygame.time.get_ticks", return_value=300):
             demo.render()
         self.assertEqual(demo.review_page, 1)
@@ -188,8 +226,8 @@ class PodTests(unittest.TestCase):
         self.assertEqual(demo.detail_scroll, 40)
         demo.detail_scroll = 0
         with patch("pygame.time.get_ticks", return_value=0):
-            demo.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(320, 240)))
-            demo.handle_event(pygame.event.Event(pygame.MOUSEBUTTONUP, pos=(320, 400)))
+            demo.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(320, 400)))
+            demo.handle_event(pygame.event.Event(pygame.MOUSEBUTTONUP, pos=(320, 180)))
         with patch("pygame.time.get_ticks", return_value=300):
             demo.render()
         self.assertEqual(demo.review_page, 0)
@@ -199,8 +237,8 @@ class PodTests(unittest.TestCase):
         self.app.request = GITHUB_REQUEST
         self.assertEqual(self.app.render().get_size(), (640, 480))
         with patch("pygame.time.get_ticks", return_value=0):
-            self.app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(320, 430)))
-            self.app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONUP, pos=(320, 180)))
+            self.app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(320, 180)))
+            self.app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONUP, pos=(320, 430)))
         with patch("pygame.time.get_ticks", return_value=300):
             self.app.render()
         self.assertEqual(self.app.review_page, 1)
@@ -215,8 +253,8 @@ class PodTests(unittest.TestCase):
         self.assertEqual(demo.state, "email_chat")
         self.assertEqual(demo.render().get_size(), (640, 480))
         with patch("pygame.time.get_ticks", return_value=0):
-            demo.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(320, 430)))
-            demo.handle_event(pygame.event.Event(pygame.MOUSEBUTTONUP, pos=(320, 180)))
+            demo.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(320, 180)))
+            demo.handle_event(pygame.event.Event(pygame.MOUSEBUTTONUP, pos=(320, 430)))
         with patch("pygame.time.get_ticks", return_value=300):
             demo.render()
         self.assertEqual(demo.review_page, 1)
@@ -235,14 +273,36 @@ class PodTests(unittest.TestCase):
         self.app.request = EMAIL_REQUEST
         self.assertEqual(self.app.render().get_size(), (640, 480))
         with patch("pygame.time.get_ticks", return_value=0):
-            self.app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(320, 430)))
-            self.app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONUP, pos=(320, 180)))
+            self.app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(320, 180)))
+            self.app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONUP, pos=(320, 430)))
         with patch("pygame.time.get_ticks", return_value=300):
             self.app.render()
         self.assertEqual(self.app.review_page, 1)
         self.app.choose("approved")
         self.assertEqual(self.worker.decisions[-1], (EMAIL_REQUEST["id"], "approved"))
         self.assertEqual(self.app.state, "submitting")
+
+    def test_gmail_notification_swipe_down_renders_the_full_email(self):
+        self.app.state = "request"
+        self.app.request = GMAIL_NOTIFICATION
+        self.app.reduce_motion = True
+        self.app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(320, 160)))
+        self.app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONUP, pos=(320, 430)))
+
+        self.assertEqual(self.app.review_page, 1)
+        with patch.object(self.app, "_wrapped", wraps=self.app._wrapped) as wrapped:
+            self.app.render()
+        self.assertIn(GMAIL_NOTIFICATION["presentation"]["email"], [call.args[0] for call in wrapped.call_args_list])
+        self.assertIn(520, [call.args[3] for call in wrapped.call_args_list if call.args[0] == GMAIL_NOTIFICATION["presentation"]["subject"]])
+
+    def test_long_gmail_headers_and_subjects_stay_inside_the_screen(self):
+        header = "Mohit Madan <mohitmadan128@gmail.com> · Mon, 20 Jul 2026 15:28:58 +0530"
+        subject = "hi i was interested in your business can we have a meeting to discuss the complete proposal"
+
+        self.assertTrue(all(self.app.review_label.size(line)[0] <= 560 for line in wrap(self.app.review_label, header, 560, 1)))
+        subject_lines = wrap(self.app.review_title, subject, 520, 2)
+        self.assertTrue(all(self.app.review_title.size(line)[0] <= 520 for line in subject_lines))
+        self.assertGreater(len(subject_lines), 1)
 
     def test_offline_mode_blocks_decisions(self):
         self.app.state = "request"
@@ -372,10 +432,60 @@ class PodTests(unittest.TestCase):
         self.assertEqual(self.app.screen, "left")
         self.app.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RIGHT))
         self.assertEqual(self.app.screen, "home")
-        self.app.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_DOWN))
-        self.assertEqual(self.app.screen, "down")
-        self.app.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_UP))
+        self.app.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RIGHT))
+        self.assertEqual(self.app.screen, "right")
+        self.app.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_LEFT))
         self.assertEqual(self.app.screen, "home")
+
+    def test_feed_swipe_up_opens_quick_settings_and_down_returns(self):
+        self.app.state = "idle"
+        self.app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(320, 400)))
+        self.app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONUP, pos=(320, 160)))
+
+        self.assertTrue(self.app.quick_settings)
+        self.assertEqual(self.app.render().get_size(), (640, 480))
+
+        self.app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(320, 160)))
+        self.app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONUP, pos=(320, 400)))
+        self.assertFalse(self.app.quick_settings)
+
+    def test_quick_settings_rows_change_and_persist(self):
+        self.app.state = "idle"
+        self.app.quick_settings = True
+        for y in (118, 274, 326):
+            self.app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(320, y)))
+            self.app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONUP, pos=(320, y)))
+        for y in (170, 222):
+            self.app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(360, y)))
+            self.app.handle_event(pygame.event.Event(pygame.MOUSEMOTION, pos=(540, y), rel=(180, 0)))
+            self.app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONUP, pos=(540, y)))
+
+        self.assertTrue(self.worker.offline)
+        self.assertEqual((self.app.brightness, self.app.volume, self.app.reduce_motion, self.app.idle_animation_seconds), (75, 75, True, 60))
+        self.assertEqual(self.storage.settings(), {"brightness": 75, "volume": 75, "reduce_motion": True, "idle_animation_seconds": 60})
+
+    def test_hardware_volume_uses_alsa_and_missing_control_is_safe(self):
+        self.app.simulator = False
+        with patch("podex_pod.app.subprocess.run") as run:
+            self.app._apply_volume()
+        self.assertEqual(run.call_args.args[0], ["amixer", "sset", "Master", "50%"])
+        with patch("podex_pod.app.subprocess.run", side_effect=FileNotFoundError):
+            self.app._apply_volume()
+
+    def test_new_notification_opens_its_feed_and_swipe_down_shows_details(self):
+        self.app.quick_settings = True
+        self.worker.events.put({"event": "request", "request": REQUEST, "queue_size": 1, "request_screen": "left"})
+        self.app.apply_worker_events()
+
+        self.assertEqual(self.app.screen, "left")
+        self.assertEqual(self.app.notification_screen, "left")
+        self.assertFalse(self.app.quick_settings)
+        self.app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(320, 160)))
+        self.app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONUP, pos=(320, 400)))
+        self.assertEqual(self.app.review_page, 1)
+        self.app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, pos=(320, 400)))
+        self.app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONUP, pos=(320, 160)))
+        self.assertEqual(self.app.review_page, 0)
 
     def test_idle_touchscreen_taps_navigate_and_decisions_return_home(self):
         self.app.state = "idle"
@@ -387,7 +497,7 @@ class PodTests(unittest.TestCase):
         self.app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONUP, pos=(100, 240)))
         self.assertEqual(self.app.screen, "home")
 
-        self.app.screen = "down"
+        self.app.screen = "right"
         self.worker.events.put({"event": "decided", "outcome": "approved"})
         self.app.apply_worker_events()
         self.assertEqual(self.app.screen, "home")
@@ -412,6 +522,20 @@ class PodTests(unittest.TestCase):
         worker = PodWorker(LayoutClient(), self.storage, poll_seconds=0.01)
         worker.start()
         self.assertEqual(worker.events.get(timeout=1), {"event": "screen_layout", "screen_layout": layout, "screen_items": []})
+        worker.close()
+        worker.join(timeout=1)
+
+    def test_worker_emits_idle_only_once_while_polling(self):
+        class IdleClient:
+            def current_request(self, _token):
+                return {"request": None, "queue_size": 0, "codex": {}}
+
+        self.storage.save_credentials("pod_token")
+        worker = PodWorker(IdleClient(), self.storage, poll_seconds=0.01)
+        worker.start()
+        self.assertEqual(worker.events.get(timeout=1)["event"], "idle")
+        with self.assertRaises(queue.Empty):
+            worker.events.get(timeout=0.05)
         worker.close()
         worker.join(timeout=1)
 

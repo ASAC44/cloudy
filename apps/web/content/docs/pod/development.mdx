@@ -55,10 +55,20 @@ Simulator controls:
   press both physical buttons within 250 ms and release either button to stop.
 - Press `O` to simulate a disconnection. Cached content remains readable, but
   decisions stay disabled until the connection returns.
-- From Home, swipe or press left, right, or down to open that configurable
-  keychain surface; use the inverse direction to return Home.
-- Press the up and down arrow keys to move between a request summary and its
-  supporting facts.
+- Screen 2 is the default feed. Swipe left for Screen 1 and right for Screen 3;
+  each screen holds one feed configured from the dashboard Kanban board.
+- Swipe up from a feed to open Quick Settings. Drag or tap the brightness and
+  volume sliders; tap the other rows to toggle connectivity, reduced motion,
+  or cycle the idle-animation timeout. Settings persist locally; swipe down to
+  return to the feed.
+- A new notification opens its assigned screen. Swipe down to see its details
+  and swipe up to return to the summary. Reject removes the notification.
+- Pairing, approval, voice, result, and error states keep their dedicated
+  screens. Screen 2 remains visible when the queue becomes idle. After 30 seconds with
+  no interaction, the mascot replaces it until the next touch or button press.
+  Set `PODEX_IDLE_ANIMATION_SECONDS` to tune that hardware inactivity delay.
+- Press the down and up arrow keys to move between a notification summary and
+  its details, or to close and open Quick Settings from a feed.
 - Press Escape to close the simulator.
 
 Test Pings record only the decision. They never execute an external action.

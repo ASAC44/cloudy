@@ -32,13 +32,15 @@ Approve and Reject buttons, a microphone, Wi-Fi, and no speaker. Raspberry Pi
 OS Lite launches pygame under Cage as a systemd service.
 
 The Pod polls the API every two seconds using a revocable Pod-scoped bearer
-token. Each response includes the saved AI-keychain layout; the dashboard
+token. Each response includes the saved three-screen layout; the dashboard
 autosaves drag-and-drop changes, and the Pod applies them on its next poll.
-The animated mascot is Home. A left, right, or downward finger swipe opens the
-matching configurable surface, and the inverse gesture returns Home. Each
-surface can hold up to six ordered official apps or individual Custom MCP
-connections. Feed order, labels, connection health, and provider symbols mirror
-the dashboard while approval and Codex states take display priority. The Pod stores its token and active request in its state
+Screen 2 is the default, with horizontal swipes opening Screens 1 and 3. Each
+screen holds one official app or Custom MCP feed. A new notification opens its
+assigned screen, swipe-down opens its details, and swipe-up returns to its
+summary. Screen 2 remains the default idle view; after the configurable
+`PODEX_IDLE_ANIMATION_SECONDS` delay without interaction, the mascot replaces
+it until the next input. Feed labels, connection health, and provider symbols
+mirror the dashboard. The Pod stores its token and active request in its state
 directory with mode `0600`; Supabase, OAuth, AI, and integration credentials
 never reach the device. If the network drops, the cached request remains
 readable but decisions stay disabled until the API is reachable.
@@ -112,6 +114,20 @@ thread state, and encrypted approval payloads.
 Other configured AI providers can power the rule builder, but voice currently
 requires the official OpenAI endpoint because the transcription route calls
 OpenAI's audio API directly.
+
+## Shared agent memory
+
+Podex stores small, user-owned memories in Supabase so the rule builder,
+integration runtime, and Codex prompts can reuse relevant context across
+sessions. Memories may be scoped to a user, workspace, or provider and can
+include a source pointer. They are bounded context only: they never authorize
+an action, replace a provider read, or bypass Pod approval.
+
+The prototype exposes explicit authenticated endpoints: `POST /v1/memories` to
+write a memory, `GET /v1/memories?q=...&limit=...` to list memories, and
+`DELETE /v1/memories/:id` to soft-delete one. Workspace and provider memories
+also require their scope identifier; provider memories require `provider`.
+Integrations do not silently save arbitrary conversation text.
 
 ## Decision guarantees
 

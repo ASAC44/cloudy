@@ -49,6 +49,7 @@ class PodWorker(threading.Thread):
         saved_credentials = self.storage.credentials()
         token = saved_credentials.get("token") if saved_credentials else None
         last_request_id: str | None = None
+        idle_emitted = False
         last_codex = repr({})
         last_screen_layout = repr(None)
 
@@ -79,6 +80,7 @@ class PodWorker(threading.Thread):
                     command = None
                 if command and command.get("refresh"):
                     last_request_id = None
+                    idle_emitted = False
                 elif command and command.get("transcribe"):
                     path = command["transcribe"]
                     try:
@@ -129,19 +131,27 @@ class PodWorker(threading.Thread):
                 if request:
                     self.storage.save_request(request)
                     if request["id"] != last_request_id:
-                        self.emit("request", request=request, queue_size=current.get("queue_size", 1))
+                        self.emit(
+                            "request",
+                            request=request,
+                            queue_size=current.get("queue_size", 1),
+                            request_screen=current.get("request_screen", "down"),
+                        )
                     last_request_id = request["id"]
+                    idle_emitted = False
                 else:
                     if last_request_id is not None:
                         self.storage.clear_request()
                         self.emit("idle")
-                    elif last_request_id is None:
+                    elif not idle_emitted:
                         self.emit("idle")
+                    idle_emitted = True
                     last_request_id = None
                 self.stop_event.wait(self.poll_seconds)
             except ApiError as error:
                 if error.status == 0:
                     last_request_id = None
+                    idle_emitted = False
                     if command and not command.get("refresh") and not command.get("transcribe"):
                         self.commands.put(command)
                     self.emit("offline")
