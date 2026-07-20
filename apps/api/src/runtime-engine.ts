@@ -227,6 +227,7 @@ export class RuntimeEngine {
       const presentation = githubPresentation ?? gmailPresentation ?? gmailNotification ?? {
         sender: firstText(source, ['sender_name', 'sender', 'from', 'author']) ?? rule.source.account_label ?? rule.source.name,
         excerpt: firstText(source, ['text', 'message', 'caption', 'summary'])?.slice(0, 600) ?? 'A new event matched this Ping.',
+        source_detail: ['telegram', 'custom_mcp'].includes(rule.source.provider) ? JSON.stringify(source, null, 2).slice(0, 6_000) : undefined,
         proposed_reply: decision.draft,
         destination: rule.action_capability_name ?? 'No external action',
         summary: decision.summary,
@@ -608,6 +609,7 @@ function actionFailure(error: unknown, rule: RuntimeRule): { retryable?: boolean
     if (error.code === 'ambiguous') return { ambiguous: true }
     return {}
   }
+  if (rule.action_capability_id?.includes(':rest:telegram.bot_send_text') || rule.action_capability_name === 'Send Telegram bot reply') return { ambiguous: true }
   if (rule.source.provider === 'telegram'
     || rule.action_capability_id?.includes(':rest:telegram.send_text')
     || rule.action_capability_name === 'Send Telegram reply') return { retryable: true }

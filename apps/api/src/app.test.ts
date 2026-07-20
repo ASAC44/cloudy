@@ -4,7 +4,7 @@ import test from 'node:test'
 
 import type { MiddlewareHandler } from 'hono'
 
-import { createApp } from './app.js'
+import { createApp, normalizeTelegramBotUpdate } from './app.js'
 import { createAiModel, type AiTester } from './ai.js'
 import { ConnectionService } from './connections.js'
 import { GithubApiError } from './github-pr.js'
@@ -311,6 +311,7 @@ class FakeStore implements Store {
   async updateRuleSession() { return null }
   async commitRuleSession(): Promise<never> { throw new Error('Not implemented in this fake') }
   async deleteRule() { return false }
+  async listActiveRulesForConnection() { return [] }
 }
 
 function randomTestId(value: number) {
@@ -1070,6 +1071,58 @@ test('failed smoke test keeps the connection and never leaks credentials', async
   assert.equal(body.connection.status, 'failed')
   assert.equal(JSON.stringify(body).includes('bot-secret'), false)
   assert.match(body.connection.last_error, /Authentication failed/)
+})
+
+test('Telegram bot registers an authenticated webhook, exposes event/send capabilities, and accepts updates', async () => {
+  let webhook: Record<string, unknown> = {}
+  let sent: Record<string, unknown> = {}
+  let webhookDeleted = false
+  const fetcher: typeof fetch = async (input, init) => {
+    const url = String(input)
+    if (url.endsWith('/getMe')) return Response.json({ ok: true, result: { username: 'podex_test_bot' } })
+    if (url.endsWith('/setWebhook')) {
+      webhook = JSON.parse(String(init?.body))
+      return Response.json({ ok: true, result: true })
+    }
+    if (url.endsWith('/sendMessage')) {
+      sent = JSON.parse(String(init?.body))
+      return Response.json({ ok: true, result: { message_id: 99 } })
+    }
+    if (url.endsWith('/deleteWebhook')) {
+      webhookDeleted = true
+      return Response.json({ ok: true, result: true })
+    }
+    return new Response(null, { status: 404 })
+  }
+  const setup = app(new FakeStore(), fetcher)
+  const created = await setup.app.request('/v1/connections', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider: 'telegram', name: 'Alerts', token: 'bot-secret' }),
+  })
+  const body = await created.json()
+  assert.equal(body.connection.status, 'connected')
+  assert.match(String(webhook.url), /\/v1\/webhooks\/telegram\/user-1\/00000000-0000-4000-8000-000000000010$/)
+  assert.equal(typeof webhook.secret_token, 'string')
+
+  const capabilities = await setup.connections.discoverConnectionCapabilities('user-1', body.connection.id)
+  assert.deepEqual(capabilities.map(({ name }) => name), ['telegram.new_message', 'telegram.bot_send_text'])
+  await setup.connections.callRuntimeCapability('user-1', capabilities[1], { peer_id: '-10042', message: 'Approved reply' }, 'action')
+  assert.deepEqual(sent, { chat_id: '-10042', text: 'Approved reply' })
+
+  const path = `/v1/webhooks/telegram/00000000-0000-4000-8000-000000000099/${body.connection.id}`
+  const update = { update_id: 1, message: { message_id: 7, date: 1_721_000_000, text: 'Need approval', from: { id: 42, username: 'ava' }, chat: { id: -10042, type: 'supergroup', title: 'Ops' } } }
+  assert.equal((await setup.app.request(path, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Telegram-Bot-Api-Secret-Token': 'wrong' }, body: JSON.stringify(update) })).status, 401)
+  assert.equal((await setup.app.request(path, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Telegram-Bot-Api-Secret-Token': String(webhook.secret_token) }, body: JSON.stringify(update) })).status, 200)
+  assert.equal((await setup.app.request(`/v1/connections/${body.connection.id}`, { method: 'DELETE' })).status, 204)
+  assert.equal(webhookDeleted, true)
+})
+
+test('Telegram bot updates normalize text, sender, chat type, and stable identity', () => {
+  assert.deepEqual(normalizeTelegramBotUpdate({
+    channel_post: { message_id: 8, date: 1_721_000_000, caption: 'Release ready', chat: { id: -100, type: 'channel', title: 'Deployments' }, photo: [{}] },
+  }), {
+    id: '-100:8', provider_event_id: '8', occurred_at: '2024-07-14T23:33:20.000Z', conversation_key: '-100', peer_id: '-100', sender_id: '-100', sender_name: 'Deployments', chat_type: 'channel', text: 'Release ready', attachment: { type: 'photo', caption_present: true, downloaded: false },
+  })
 })
 
 test('custom MCP rejects private and non-HTTPS endpoints before saving', async () => {

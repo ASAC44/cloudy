@@ -295,6 +295,18 @@ class PodTests(unittest.TestCase):
         self.assertIn(GMAIL_NOTIFICATION["presentation"]["email"], [call.args[0] for call in wrapped.call_args_list])
         self.assertIn(520, [call.args[3] for call in wrapped.call_args_list if call.args[0] == GMAIL_NOTIFICATION["presentation"]["subject"]])
 
+    def test_telegram_and_mcp_details_render_message_and_source_event(self):
+        self.app.state = "request"
+        self.app.request = {**REQUEST, "presentation": {"sender": "@ava", "excerpt": "Need approval", "source_detail": '{"chat_type":"group"}'}}
+        self.app.review_page = 1
+
+        with patch.object(self.app, "_wrapped", wraps=self.app._wrapped) as wrapped:
+            self.app.render()
+
+        rendered = [call.args[0] for call in wrapped.call_args_list]
+        self.assertIn("Need approval", rendered)
+        self.assertIn('{"chat_type":"group"}', rendered)
+
     def test_long_gmail_headers_and_subjects_stay_inside_the_screen(self):
         header = "Mohit Madan <mohitmadan128@gmail.com> · Mon, 20 Jul 2026 15:28:58 +0530"
         subject = "hi i was interested in your business can we have a meeting to discuss the complete proposal"

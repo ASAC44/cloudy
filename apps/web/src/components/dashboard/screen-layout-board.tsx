@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import type { CodexOverview, Connection, ScreenDirection, ScreenLayout } from "@/types/api";
+import { moveScreenItem } from "./screen-layout-state";
 
 type AppItem = {
   id: string;
@@ -101,13 +102,7 @@ export function ScreenLayoutBoard({
   }
 
   function move(itemId: string, target?: ScreenDirection) {
-    const current = layoutRef.current;
-    const next: ScreenLayout = {
-      left: current.left.filter((id) => id !== itemId),
-      right: current.right.filter((id) => id !== itemId),
-      down: current.down.filter((id) => id !== itemId),
-    };
-    if (target) next[target] = [itemId];
+    const next = moveScreenItem(layoutRef.current, itemId, target);
     layoutRef.current = next;
     setLayout(next);
     void persist(next);
@@ -125,7 +120,7 @@ export function ScreenLayoutBoard({
       <div className="mb-6 flex items-start justify-between gap-6">
         <div>
           <h2 id="keychain-title" className="text-heading-sm">Screen layout</h2>
-          <p className="mt-1 max-w-2xl text-muted-foreground">Drag apps between screens or use their move menu. Screen 2 stays default; the mascot appears only after the Pod becomes inactive.</p>
+          <p className="mt-1 max-w-2xl text-muted-foreground">Drag apps between screens or use their move menu. Dropping onto an occupied screen swaps the apps. Screen 2 stays default; the mascot appears only after the Pod becomes inactive.</p>
         </div>
         <span className={cn("shrink-0 text-caption", syncStatus === "error" ? "text-destructive" : "text-muted-foreground")} aria-live="polite">
           {syncStatus === "saving" ? "Syncing…" : syncStatus === "error" ? "Sync failed · reverted" : "Synced to Pod"}

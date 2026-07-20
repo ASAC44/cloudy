@@ -127,7 +127,7 @@ export function AutomationsManager({
               One decision, four steps
             </h2>
             <p className="mt-2 text-muted-foreground">
-              n8n supplies a private resume URL; Podex calls it after your decision.
+              n8n supplies a unique public resume URL; Podex calls it after your decision.
             </p>
           </div>
           <span className="hidden font-mono text-caption text-muted-foreground sm:block">
@@ -220,6 +220,9 @@ export function AutomationsManager({
           <h2 id="setup-title" className="font-sans text-lg font-medium">n8n setup</h2>
           <p className="mt-2 max-w-sm leading-6 text-muted-foreground">
             Configure three built-in nodes. Expressions keep every field connected to the current execution.
+          </p>
+          <p className="mt-3 max-w-sm text-sm leading-6 text-muted-foreground">
+            Self-hosted n8n must set <code className="font-mono text-foreground">WEBHOOK_URL</code> to its public HTTPS origin.
           </p>
         </div>
 

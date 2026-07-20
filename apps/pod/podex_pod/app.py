@@ -878,6 +878,8 @@ class PodApp:
             ("SUMMARY", self.request.get("summary", "")),
             ("DETAILS", self.request.get("details", "")),
             ("AFFECTED", self.request.get("affected_context", "")),
+            ("MESSAGE", presentation.get("excerpt", "")),
+            ("SOURCE EVENT", presentation.get("source_detail", "")),
             ("PROPOSED REPLY", presentation.get("proposed_reply", "")),
             ("WARNINGS", " · ".join(map(str, presentation.get("warnings") or self.request.get("warnings", [])))),
             ("FULL PLAN", (self.request.get("codex_payload") or {}).get("plan", "")),

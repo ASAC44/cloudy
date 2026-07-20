@@ -4,9 +4,9 @@ description: Deploy the Podex web, API, and execution worker from the monorepo.
 ---
 
 Podex uses three Railway services: `web`, `api`, and `worker`. The API serves
-authenticated requests while the worker owns scheduling, Telegram sessions,
-AI evaluation, approvals, and delivery. The Raspberry Pi Pod and local Codex
-bridge are not Railway services.
+authenticated requests and Telegram bot webhooks, while the worker owns
+scheduling, personal Telegram sessions, AI evaluation, approvals, and delivery.
+The Raspberry Pi Pod and local Codex bridge are not Railway services.
 
 ## Create the services
 
@@ -60,8 +60,9 @@ PODEX_WORKER_ID=production-worker-1
 
 Generate `CONNECTION_ENCRYPTION_KEY` once with `openssl rand -base64 32` and
 retain it across deploys. GitHub and Google values can remain blank until their
-OAuth providers are enabled. Set both Telegram values only when Telegram
-connections are enabled; GitHub-only deployments do not require them.
+OAuth providers are enabled. Telegram bot webhooks need only the public HTTPS
+API domain and connection encryption key. Set both Telegram values on the API
+and worker only for personal-account QR connections.
 
 `PODEX_WORKER_ID` should be stable and unique for each worker replica. Railway
 injects `PORT` into HTTP services; do not set it manually on `api`, and the
@@ -87,6 +88,8 @@ OAuth callbacks use the public API domain.
 - Open the API root; it should return `{"name":"podex-api","status":"ok"}`.
 - Confirm the web and API `/` healthchecks pass and the worker remains running.
 - Activate a rule and confirm its activity log records polling and delivery.
+- Connect or retest a Telegram bot, send it a new message, and confirm the API
+  webhook creates exactly one rule event before testing an approved reply.
 - Pair a Pod against the API's public HTTPS origin and complete a Test Ping.
 
 Railway references: [monorepos](https://docs.railway.com/deployments/monorepo),

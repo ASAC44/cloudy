@@ -41,6 +41,20 @@ Podex connects only to `https://mcp.stripe.com`. Stripe controls which tools are
 available from the permissions on that key. See [Stripe's MCP documentation](https://docs.stripe.com/mcp)
 and [key security guidance](https://docs.stripe.com/keys-best-practices).
 
+## Connect Telegram
+
+Choose **Personal account** to scan Telegram's QR code. This mode watches DMs,
+groups, and channels through the worker and requires `TELEGRAM_API_ID` plus
+`TELEGRAM_API_HASH` on both the API and worker services.
+
+Choose **Bot** to paste a BotFather token. After `getMe` succeeds, Podex
+registers an HTTPS webhook under `PODEX_PUBLIC_API_URL` with Telegram's secret
+token header. Incoming text, captions, and attachment metadata enter the same
+deduplicated Ping engine. A bot reply is available only as an exact Pod-approved
+action; an uncertain Bot API delivery is not retried automatically. Retest an
+existing bot connection after deploying this version to register its webhook.
+See Telegram's [Bot API webhook documentation](https://core.telegram.org/bots/api#setwebhook).
+
 ## Capability safety
 
 Podex follows MCP tool annotations instead of guessing what a tool does:
@@ -62,6 +76,8 @@ been exposed, revoke it at the provider first and replace it in Podex
 immediately. Disconnecting a provider deletes its encrypted credential from
 Podex but does not revoke the key at the provider.
 
-GitHub and Gmail continue to use OAuth. Vercel and Telegram use their existing
-token or account flows. **Custom MCP** remains available for other public HTTPS
-Streamable HTTP endpoints.
+GitHub and Gmail continue to use OAuth. Vercel uses a token, while Telegram
+supports the bot webhook and personal-account flows above. **Custom MCP** uses
+public HTTPS Streamable HTTP endpoints: Podex discovers annotated tools, polls
+verified read tools as sources, and runs verified non-destructive writes only
+after exact Pod approval.

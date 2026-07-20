@@ -11,6 +11,7 @@ import { GithubApiError } from './github-pr.js'
 import { isAiProvider, testAiSettings, type AiTester } from './ai.js'
 import { RuleBuilderError, type RuleBuilderService } from './rule-builder.js'
 import { memoryContext, memoryScopes } from './memory.js'
+import { RuntimeEngine } from './runtime-engine.js'
 
 type SupabaseJwt = { sub?: unknown; email?: unknown }
 type Variables = JwtVariables<SupabaseJwt>
@@ -269,6 +270,7 @@ export function createApp(
   runtimeStore?: RuntimeStore,
 ) {
   const app = new Hono<{ Variables: Variables }>()
+  const runtimeEngine = runtimeStore && connectionService ? new RuntimeEngine(store as Store & RuntimeStore, connectionService) : null
   const issuer = `${supabaseUrl.replace(/\/$/, '')}/auth/v1`
   const userAuth = userAuthOverride ?? (jwk({
     jwks_uri: `${issuer}/.well-known/jwks.json`,
@@ -277,6 +279,26 @@ export function createApp(
   }) as MiddlewareHandler<{ Variables: Variables }>)
 
   app.get('/', (c) => c.json({ name: 'podex-api', status: 'ok' }))
+
+  app.post('/v1/webhooks/telegram/:ownerId/:connectionId', async (c) => {
+    if (!runtimeStore || !runtimeEngine || !connectionService) return c.json({ error: 'Telegram webhook is not configured' }, 503)
+    const ownerId = c.req.param('ownerId')
+    const connectionId = c.req.param('connectionId')
+    if (!UUID_PATTERN.test(ownerId) || !UUID_PATTERN.test(connectionId)) return c.json({ error: 'Invalid Telegram webhook' }, 400)
+    if (!connectionService.telegramWebhookAuthorized(connectionId, c.req.header('x-telegram-bot-api-secret-token'))) return c.json({ error: 'Unauthorized' }, 401)
+    if (Number(c.req.header('content-length') ?? 0) > 1_000_000) return c.json({ error: 'Telegram update is too large' }, 413)
+    const update = normalizeTelegramBotUpdate(await c.req.json().catch(() => null))
+    if (!update) return c.json({ error: 'Invalid Telegram update' }, 400)
+    try {
+      const connection = await store.getConnection(ownerId, connectionId)
+      if (!connection || connection.provider !== 'telegram' || connection.status !== 'connected') return c.json({ error: 'Telegram connection not found' }, 404)
+      const rules = await runtimeStore.listActiveRulesForConnection(ownerId, connectionId)
+      await Promise.all(rules.map((rule) => runtimeEngine.receiveEvent(rule, update)))
+      return c.json({ ok: true })
+    } catch {
+      return c.json({ error: 'Telegram webhook failed' }, 500)
+    }
+  })
 
   for (const route of ['/v1/me', '/v1/pods', '/v1/pods/*', '/v1/requests', '/v1/requests/*', '/v1/settings/*']) {
     app.use(route, userAuth)
@@ -928,7 +950,7 @@ export function createApp(
     if (!ownerId) return c.json({ error: 'Unauthorized' }, 401)
     if (!UUID_PATTERN.test(c.req.param('id'))) return c.json({ error: 'Invalid connection' }, 400)
     try {
-      return (await store.deleteConnection(ownerId, c.req.param('id')))
+      return (await connectionService?.delete(ownerId, c.req.param('id')) ?? await store.deleteConnection(ownerId, c.req.param('id')))
         ? c.body(null, 204)
         : c.json({ error: 'Connection not found' }, 404)
     } catch (error) {
@@ -1321,4 +1343,41 @@ function automationRequest(request: {
     expires_at: request.expires_at,
     decided_at: request.decided_at,
   }
+}
+
+export function normalizeTelegramBotUpdate(value: unknown) {
+  const update = objectValue(value)
+  const message = objectValue(update?.message) ?? objectValue(update?.channel_post)
+  const chat = objectValue(message?.chat)
+  const sender = objectValue(message?.from) ?? chat
+  const messageId = message?.message_id
+  const chatId = chat?.id
+  const date = message?.date
+  if ((!Number.isInteger(messageId) && typeof messageId !== 'string') || (!Number.isInteger(chatId) && typeof chatId !== 'string') || !Number.isInteger(date)) return null
+  const chatType = chat?.type === 'private' ? 'dm' : chat?.type === 'channel' ? 'channel' : chat?.type === 'group' || chat?.type === 'supergroup' ? 'group' : null
+  if (!chatType) return null
+  const textValue = typeof message?.text === 'string' ? message.text : typeof message?.caption === 'string' ? message.caption : ''
+  const attachmentType = Array.isArray(message?.photo) ? 'photo' : ['document', 'video', 'audio', 'voice', 'sticker'].find((key) => objectValue(message?.[key]))
+  const peerId = String(chatId)
+  const firstName = typeof sender?.first_name === 'string' ? sender.first_name : ''
+  const lastName = typeof sender?.last_name === 'string' ? sender.last_name : ''
+  const senderName = typeof sender?.username === 'string' && sender.username
+    ? `@${sender.username}`
+    : `${firstName} ${lastName}`.trim() || (typeof sender?.title === 'string' ? sender.title : 'Telegram contact')
+  return {
+    id: `${peerId}:${messageId}`,
+    provider_event_id: String(messageId),
+    occurred_at: new Date(Number(date) * 1000).toISOString(),
+    conversation_key: peerId,
+    peer_id: peerId,
+    sender_id: sender?.id === undefined ? null : String(sender.id),
+    sender_name: senderName.slice(0, 160),
+    chat_type: chatType,
+    text: textValue.slice(0, 8_000),
+    attachment: attachmentType ? { type: attachmentType, caption_present: Boolean(textValue), downloaded: false } : null,
+  }
+}
+
+function objectValue(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null
 }

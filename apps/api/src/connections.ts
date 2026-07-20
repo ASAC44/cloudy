@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { lookup as dnsLookup } from 'node:dns'
 import { lookup } from 'node:dns/promises'
 import { isIP, type LookupFunction } from 'node:net'
@@ -48,6 +48,13 @@ export class ConnectionService {
 
   telegramUserAuthAvailable() {
     return Boolean(this.config.telegramApiId && this.config.telegramApiHash)
+  }
+
+  telegramWebhookAuthorized(connectionId: string, secret: string | undefined) {
+    if (!secret) return false
+    const expected = Buffer.from(this.telegramWebhookSecret(connectionId))
+    const actual = Buffer.from(secret)
+    return expected.length === actual.length && timingSafeEqual(expected, actual)
   }
 
   async createManual(ownerId: string, input: {
@@ -136,7 +143,7 @@ export class ConnectionService {
 
     try {
       const credentials = this.decrypt(stored.encrypted_payload)
-      const result = await this.smokeTest(stored, credentials)
+      const result = await this.smokeTest(ownerId, stored, credentials)
       return await this.store.setConnectionTest(ownerId, connectionId, {
         status: 'connected',
         accountLabel: result.accountLabel,
@@ -151,6 +158,17 @@ export class ConnectionService {
         error: message,
       })
     }
+  }
+
+  async delete(ownerId: string, connectionId: string) {
+    const existing = await this.store.getConnection(ownerId, connectionId)
+    if (!existing) return false
+    const credentials = this.decrypt(existing.encrypted_payload)
+    const deleted = await this.store.deleteConnection(ownerId, connectionId)
+    if (deleted && existing.provider === 'telegram' && credentials.mode !== 'user' && credentials.token) {
+      await this.json(`https://api.telegram.org/bot${encodeURIComponent(String(credentials.token))}/deleteWebhook`, { method: 'POST' }).catch(() => undefined)
+    }
+    return deleted
   }
 
   async startOAuth(
@@ -403,6 +421,16 @@ export class ConnectionService {
     }
     if (connection.provider === 'telegram' && connection.protocol === 'rest') {
       const credentials = this.decrypt(connection.encrypted_payload)
+      if (credentials.mode !== 'user') {
+        if (role !== 'action' || latest.name !== 'telegram.bot_send_text') throw new ConnectionError('capability_not_found')
+        const result = await this.json(`https://api.telegram.org/bot${encodeURIComponent(requiredCredential(credentials, 'token'))}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: requiredString(input, 'peer_id'), text: requiredString(input, 'message') }),
+        })
+        if (result.ok !== true) throw new ConnectionError('endpoint_failed', 'Telegram rejected the message.')
+        return { sent: true, message_id: (result.result as Record<string, unknown> | undefined)?.message_id }
+      }
       return await this.withTelegram(credentials, async (client) => {
         if (role === 'context' && latest.name === 'telegram.recent_thread') {
           const messages = await client.getMessages(requiredString(input, 'peer_id'), {
@@ -496,11 +524,11 @@ export class ConnectionService {
         endpoint_url: ENDPOINTS[input.provider],
         auth_type: 'bearer' as const,
       },
-      credentials: { token: input.token },
+      credentials: input.provider === 'telegram' ? { mode: 'bot', token: input.token } : { token: input.token },
     }
   }
 
-  private async smokeTest(connection: Connection, credentials: Credentials) {
+  private async smokeTest(ownerId: string, connection: Connection, credentials: Credentials) {
     if (connection.provider === 'github') {
       const token = requiredCredential(credentials, 'accessToken')
       const profile = await this.json('https://api.github.com/user', { headers: providerHeaders(token) })
@@ -532,6 +560,16 @@ export class ConnectionService {
       const token = requiredCredential(credentials, 'token')
       const profile = await this.json(`https://api.telegram.org/bot${encodeURIComponent(token)}/getMe`)
       if (profile.ok !== true || typeof profile.result !== 'object' || !profile.result) throw new ConnectionError('authentication_failed')
+      const webhook = await this.json(`https://api.telegram.org/bot${encodeURIComponent(token)}/setWebhook`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: `${this.config.publicApiUrl.replace(/\/$/, '')}/v1/webhooks/telegram/${ownerId}/${connection.id}`,
+          secret_token: this.telegramWebhookSecret(connection.id),
+          allowed_updates: ['message', 'channel_post'],
+        }),
+      })
+      if (webhook.ok !== true) throw new ConnectionError('endpoint_failed', 'Telegram rejected the webhook.')
       const bot = profile.result as Record<string, unknown>
       return { accountLabel: bot.username ? `@${bot.username}` : String(bot.first_name ?? 'Telegram bot') }
     }
@@ -681,6 +719,10 @@ export class ConnectionService {
     }
   }
 
+  private telegramWebhookSecret(connectionId: string) {
+    return createHmac('sha256', this.key).update(`telegram-webhook:${connectionId}`).digest('hex')
+  }
+
   private encrypt(credentials: Credentials) {
     const iv = randomBytes(12)
     const cipher = createCipheriv('aes-256-gcm', this.key, iv)
@@ -821,10 +863,10 @@ function restCapabilities(connection: Connection, credentials: Credentials): Cap
       additionalProperties: false,
     },
     output_schema: { type: 'object', properties: { projects: { type: 'array' } } },
-  }] : connection.provider === 'telegram' && credentials.mode === 'user' ? [{
+  }] : connection.provider === 'telegram' ? [{
     name: 'telegram.new_message',
     title: 'New Telegram message',
-    description: 'Receive new cloud messages without marking them read.',
+    description: credentials.mode === 'user' ? 'Receive new cloud messages without marking them read.' : 'Receive new bot messages through an authenticated Telegram webhook.',
     roles: ['source'] as CapabilityRole[], delivery: 'event' as const,
     input_schema: {
       type: 'object',
@@ -835,7 +877,7 @@ function restCapabilities(connection: Connection, credentials: Credentials): Cap
       required: ['chat_types'], additionalProperties: false,
     },
     output_schema: { type: 'object' },
-  }, {
+  }, ...(credentials.mode === 'user' ? [{
     name: 'telegram.discover_dialogs',
     title: 'List Telegram chats',
     description: 'List cloud chats available to the connected account.',
@@ -849,10 +891,10 @@ function restCapabilities(connection: Connection, credentials: Credentials): Cap
     roles: ['context'] as CapabilityRole[], delivery: 'poll' as const,
     input_schema: { type: 'object', properties: { peer_id: { type: 'string' }, limit: { type: 'number', minimum: 1, maximum: 20 } }, required: ['peer_id'], additionalProperties: false },
     output_schema: { type: 'array' },
-  }, {
-    name: 'telegram.send_text',
+  }] : []), {
+    name: credentials.mode === 'user' ? 'telegram.send_text' : 'telegram.bot_send_text',
     title: 'Send Telegram reply',
-    description: 'Send the exact approved text reply to a cloud chat.',
+    description: credentials.mode === 'user' ? 'Send the exact approved text reply to a cloud chat.' : 'Send the exact approved text reply as the connected bot.',
     roles: ['action'] as CapabilityRole[], delivery: 'event' as const,
     input_schema: { type: 'object', properties: { peer_id: { type: 'string' }, message: { type: 'string', minLength: 1, maxLength: 4096 } }, required: ['peer_id', 'message'], additionalProperties: false },
     output_schema: { type: 'object' },

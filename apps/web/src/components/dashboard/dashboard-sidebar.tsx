@@ -36,7 +36,7 @@ const navigation = [
   { label: "Logs", href: "/logs" },
   { label: "Configure", href: "/configure" },
   { label: "Connections", href: "/connections" },
-  { label: "Automations", href: "/automations" },
+  { label: "Automations", href: "/automations/n8n" },
   { label: "Codex", href: "/codex" },
   { label: "Settings", href: "/settings" },
 ];

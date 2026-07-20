@@ -73,9 +73,11 @@ changing it makes existing encrypted values unreadable.
 
 The shipped connection providers are GitHub, Gmail, Vercel, Telegram, Linear,
 Stripe, and a custom remote MCP endpoint. GitHub and Gmail use OAuth; Vercel,
-Linear, and Stripe accept encrypted bearer credentials; Telegram supports bot
-or user authorization; and custom MCP connections support configured
-authentication. Linear and Stripe use fixed official Streamable HTTP endpoints.
+Linear, and Stripe accept encrypted bearer credentials; Telegram supports an
+authenticated bot webhook or user authorization; and custom MCP connections
+support configured authentication. Bot updates enter the API directly, while
+personal-account events are maintained by the worker. Linear and Stripe use
+fixed official Streamable HTTP endpoints.
 Gmail requests `gmail.readonly` plus `gmail.send`; reply delivery is exposed only
 as an exact, hash-bound action after the user approves the complete email and
 response on the Pod.
