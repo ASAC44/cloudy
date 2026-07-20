@@ -8,6 +8,7 @@
 
 - [ ] Apply `supabase/migrations/20260720020000_agent_memories.sql` before deploying the matching API build; verify authenticated memory create, list, scoped retrieval, soft-delete, and cross-owner isolation, then test `supabase/rollback/20260720020000_agent_memories.sql` on a disposable database.
 - [ ] After the base memory migration, apply `supabase/migrations/20260720050000_reply_personalization.sql` before deploying the matching API, web, and Pod builds; verify preference/sample CRUD, disable/enable behavior, connection-scoped retrieval, concurrent correction conflict handling, stale Pod hash rejection, revised exact-reply delivery once, and cross-owner isolation, then test `supabase/rollback/20260720050000_reply_personalization.sql` on a disposable database.
+- [ ] On a machine with Docker and the Supabase CLI, run `./scripts/local.sh --reset`; verify all tracked migrations apply, create a local user and memory, restart with `./scripts/local.sh`, and confirm the local data remains available.
 
 ## Activate Pod screen layout sync
 

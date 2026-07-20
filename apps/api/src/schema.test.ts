@@ -155,3 +155,15 @@ test('reply personalization revisions are atomic, owner-scoped, and reversible',
   assert.match(rollback, /drop function if exists public\.revise_ping_rule_reply/)
   assert.match(rollback, /drop column if exists personalization_enabled/)
 })
+
+test('local Supabase startup replays tracked migrations and injects local credentials', async () => {
+  const config = await readFile(new URL('supabase/config.toml', root), 'utf8')
+  const launcher = await readFile(new URL('scripts/local.sh', root), 'utf8')
+
+  assert.match(config, /\[db\.migrations\]\s+enabled = true/)
+  assert.match(config, /\[db\.seed\]\s+enabled = false/)
+  assert.match(launcher, /supabase db reset --local/)
+  assert.match(launcher, /supabase status -o env/)
+  assert.match(launcher, /NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY/)
+  assert.match(launcher, /SUPABASE_SECRET_KEY/)
+})

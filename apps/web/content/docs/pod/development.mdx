@@ -18,28 +18,28 @@ The repository setup script installs the web and API dependencies and creates
 
 Create the documented environment files before starting all three apps:
 
-- `apps/api/.env`: `SUPABASE_URL`, the server-only `SUPABASE_SECRET_KEY`, and
-  the connection variables from `.env.example`. Generate the local encryption
-  value with `openssl rand -base64 32` and keep it stable.
-- `apps/web/.env.local`: the two `NEXT_PUBLIC_SUPABASE_*` values and
-  `PODEX_API_URL=http://localhost:3001`.
+- `apps/api/.env`: the connection variables from `.env.example`. Generate the
+  local encryption value with `openssl rand -base64 32` and keep it stable.
+- `apps/web/.env.local`: copy `.env.example`; the local launcher overrides its
+  Supabase placeholders and API URL.
 - The Pod defaults to the local API and stores simulator state under
   `apps/pod/.state` when launched through the root script.
 
-Apply the tracked migration to the linked hosted development project:
+Start local Supabase, rebuild its database from the tracked migrations, and run
+the complete development environment:
 
 ```sh
-supabase link
-supabase db push
+./scripts/local.sh --reset
 ```
 
-Do not edit the hosted schema manually after adopting migrations.
+On later runs, use `./scripts/local.sh` without `--reset` to keep local data.
+For a hosted development project, use `supabase link`, `supabase db push`, and
+`./start.sh`. Do not edit either schema manually after adopting migrations.
 
 ## Run
 
-```sh
-./start.sh
-```
+The local launcher starts the same processes as `./start.sh` after Supabase is
+ready.
 
 The root script also starts the dedicated rule worker, so active Pings are polled while the simulator is running.
 
