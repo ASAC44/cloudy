@@ -198,7 +198,8 @@ async function normalizeTelegramEvent(event: NewMessageEvent) {
   return normalizeTelegramMessage(event.message)
 }
 
-async function normalizeTelegramMessage(message: NewMessageEvent['message']) {
+export async function normalizeTelegramMessage(message: NewMessageEvent['message']) {
+  if (message.out) return null
   const peerClass = message.peerId?.className ?? ''
   if (peerClass.includes('Encrypted')) return null
   const peerId = message.chatId?.toString() ?? message.peerId?.toString()

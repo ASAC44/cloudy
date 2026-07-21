@@ -285,7 +285,7 @@ export async function removeConnection(id: string): Promise<{ error?: string }> 
 }
 
 export async function startConnectionOAuth(
-  provider: "github" | "gmail" | "google_calendar",
+  provider: "github" | "gmail" | "google_calendar" | "notion",
   name: string,
   connectionId?: string,
 ): Promise<{ authorization_url?: string; error?: string }> {

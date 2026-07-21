@@ -537,6 +537,28 @@ class PodTests(unittest.TestCase):
         worker.close()
         worker.join(timeout=1)
 
+    def test_worker_reemits_an_existing_request_when_its_screen_changes(self):
+        responses = iter([
+            {"request": REQUEST, "queue_size": 1, "codex": {}, "request_screen": "down"},
+            {"request": REQUEST, "queue_size": 1, "codex": {}, "request_screen": "left"},
+        ])
+
+        class RequestClient:
+            def current_request(self, _token):
+                return next(responses)
+
+        self.storage.save_credentials("pod_token")
+        worker = PodWorker(RequestClient(), self.storage, poll_seconds=0.01)
+        worker.start()
+        first = worker.events.get(timeout=1)
+        self.assertEqual(first["event"], "request")
+        self.assertEqual(first["request_screen"], "down")
+        second = worker.events.get(timeout=1)
+        self.assertEqual(second["event"], "request")
+        self.assertEqual(second["request_screen"], "left")
+        worker.close()
+        worker.join(timeout=1)
+
     def test_worker_emits_idle_only_once_while_polling(self):
         class IdleClient:
             def current_request(self, _token):
@@ -633,6 +655,25 @@ class PodTests(unittest.TestCase):
         self.assertEqual(worker.events.get(timeout=1)["event"], "decided")
         self.assertEqual(len(client.keys), 2)
         self.assertEqual(client.keys[0], client.keys[1])
+        worker.close()
+        worker.join(timeout=1)
+
+    def test_resolved_decision_clears_the_stale_request(self):
+        class ResolvedDecisionClient:
+            def current_request(self, _token):
+                return {"request": REQUEST, "queue_size": 1}
+
+            def decide(self, *_args):
+                raise ApiError(409, "request already resolved")
+
+        self.storage.save_credentials("pod_token")
+        self.storage.save_request(REQUEST)
+        worker = PodWorker(ResolvedDecisionClient(), self.storage, poll_seconds=0.01)
+        worker.start()
+        self.assertEqual(worker.events.get(timeout=1)["event"], "request")
+        worker.decide(REQUEST, "approved")
+        self.assertEqual(worker.events.get(timeout=1)["event"], "idle")
+        self.assertIsNone(self.storage.request())
         worker.close()
         worker.join(timeout=1)
 

@@ -49,6 +49,9 @@ The root script also starts the dedicated rule worker, so active Pings are polle
 
 The virtual Pod displays an eight-character code. Sign in to the dashboard,
 enter that code, and create a **New Ping**. The Pod polls every two seconds.
+When a request is active, the Pod opens the screen assigned to that request;
+changing the screen layout while it is pending moves the Pod there on the next
+poll.
 
 Simulator controls:
 
@@ -72,6 +75,8 @@ Simulator controls:
   screens. Screen 2 remains visible when the queue becomes idle. After 30 seconds with
   no interaction, the mascot replaces it until the next touch or button press.
   Set `PODEX_IDLE_ANIMATION_SECONDS` to tune that hardware inactivity delay.
+- If another client resolves an approval first, the Pod discards its stale
+  cached request and returns to the current queue instead of retrying it.
 - Press the down and up arrow keys to move between a notification summary and
   its details, or to close and open Quick Settings from a feed.
 - Press Escape to close the simulator.

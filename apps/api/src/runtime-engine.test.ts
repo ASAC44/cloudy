@@ -2,8 +2,9 @@ import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import test from 'node:test'
 
-import { gmailNotificationPresentation, gmailReviewPresentation, RuntimeEngine, pointerValue, resolveArguments } from './runtime-engine.js'
-import type { RuntimeRule, RuntimeStore, Store } from './types/store.js'
+import { availableCalendarSlots, gmailNotificationPresentation, gmailReviewPresentation, makeGithubActionEnvelope, RuntimeEngine, pointerValue, resolveArguments, telegramConversationContext } from './runtime-engine.js'
+import type { GithubPullRequest } from './types/github.js'
+import type { RuntimeEvent, RuntimeRule, RuntimeStore, Store } from './types/store.js'
 
 const rule = (): RuntimeRule => ({
   id: 'rule-1', owner_id: 'owner-1', destination_pod_id: 'pod-1', source_connection_id: 'connection-1',
@@ -41,6 +42,35 @@ test('JSON pointers and immutable bindings support RFC 6901 escaping', () => {
   }, event, { draft: 'Exact reply' }), { peer: '42', text: 'Exact reply', fixed: 'literal' })
   assert.deepEqual(resolveArguments({ peer_id: { from: 'event', pointer: '/chat/id' } }, event, {}), { peer_id: '42' })
   assert.throws(() => resolveArguments({ missing: { from: 'event', pointer: '/none' } }, event, {}), /could not be resolved/)
+})
+
+test('Telegram conversation context is chronological and includes only delivered replies', () => {
+  const action = (message: string) => ({
+    kind: 'capability' as const, rule_id: 'rule-1', rule_revision: 1, event_identity: 'message-1',
+    connection_id: 'connection-1', capability_id: 'send', capability_schema_hash: 'hash', arguments: { message },
+  })
+  assert.deepEqual(telegramConversationContext([
+    { id: '2', occurred_at: '2026-07-21T10:01:00Z', status: 'rejected', source: { sender_name: 'M_M', text: 'Send the final one' }, action: action('Rejected draft') },
+    { id: '1', occurred_at: '2026-07-21T10:00:00Z', status: 'delivered', source: { sender_name: 'M_M', text: 'Which report?' }, action: action('The July report?') },
+  ]), [
+    { direction: 'incoming', text: 'Which report?', sender: 'M_M', occurred_at: '2026-07-21T10:00:00Z' },
+    { direction: 'outgoing', text: 'The July report?', occurred_at: '2026-07-21T10:00:00Z' },
+    { direction: 'incoming', text: 'Send the final one', sender: 'M_M', occurred_at: '2026-07-21T10:01:00Z' },
+  ])
+})
+
+test('schedule slots exclude calendar conflicts and return three weekday openings', () => {
+  const slots = availableCalendarSlots([
+    { items: [{ start: { dateTime: '2026-07-21T09:00:00Z' }, end: { dateTime: '2026-07-21T10:00:00Z' } }] },
+  ], {
+    relevant: true, duration_minutes: 60, start_date: '2026-07-21', end_date: '2026-07-21', timezone: 'UTC', missing_fields: [],
+  }, 'UTC')
+
+  assert.deepEqual(slots.map(({ start, end }) => [start, end]), [
+    ['2026-07-21T10:00:00.000Z', '2026-07-21T11:00:00.000Z'],
+    ['2026-07-21T10:30:00.000Z', '2026-07-21T11:30:00.000Z'],
+    ['2026-07-21T11:00:00.000Z', '2026-07-21T12:00:00.000Z'],
+  ])
 })
 
 test('polling establishes a baseline, then enqueues only unseen deterministic identities', async () => {
@@ -175,6 +205,33 @@ test('GitHub polling also establishes a baseline without alerting on existing pu
 
   assert.equal(await engine.pollOnce('worker'), true)
   assert.equal(enqueued.length, 0)
+})
+
+test('GitHub notification-only rules do not require a merge action', () => {
+  const runtimeRule = rule()
+  runtimeRule.source.provider = 'github'
+  const event = { event_identity: 'podex/api#42@abc' } as RuntimeEvent
+  const pull = {
+    repository: 'podex/api', number: 42, head_sha: 'a'.repeat(40), merge_method: 'squash',
+  } as GithubPullRequest
+
+  assert.deepEqual(makeGithubActionEnvelope(runtimeRule, event, pull), {
+    kind: 'none', rule_id: runtimeRule.id, rule_revision: runtimeRule.revision,
+    event_identity: event.event_identity, connection_id: null, capability_id: null,
+    capability_schema_hash: null, arguments: {},
+  })
+
+  runtimeRule.action_connection_id = 'connection-1'
+  runtimeRule.action_capability_id = 'merge-pr'
+  runtimeRule.action_capability_name = 'Merge a GitHub pull request'
+  runtimeRule.action_capability_schema_hash = 'b'.repeat(64)
+  runtimeRule.definition.action = {
+    connection_id: 'connection-1', capability_id: 'merge-pr', capability_name: 'Merge a GitHub pull request',
+    capability_schema_hash: 'b'.repeat(64), arguments: {},
+  }
+  assert.deepEqual(makeGithubActionEnvelope(runtimeRule, event, pull).arguments, {
+    repository: 'podex/api', number: 42, head_sha: 'a'.repeat(40), merge_method: 'squash',
+  })
 })
 
 test('event delivery ignores history from before activation', async () => {

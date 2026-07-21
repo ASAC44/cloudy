@@ -25,6 +25,7 @@ const ENDPOINTS = {
   telegram: 'https://api.telegram.org',
   linear: 'https://mcp.linear.app/mcp',
   stripe: 'https://mcp.stripe.com',
+  notion: 'https://mcp.notion.com/mcp',
 } as const
 
 type Credentials = Record<string, string | number | undefined>
@@ -182,7 +183,9 @@ export class ConnectionService {
     if (connectionId && (!existing || existing.provider !== provider)) {
       throw new ConnectionError('connection_not_found')
     }
-    const clientId = provider === 'github' ? this.config.githubClientId : this.config.googleClientId
+    const clientId = provider === 'github'
+      ? this.config.githubClientId
+      : provider === 'notion' ? this.config.notionClientId : this.config.googleClientId
     if (!clientId) throw new ConnectionError('provider_not_configured')
 
     const state = randomBytes(32).toString('base64url')
@@ -198,15 +201,19 @@ export class ConnectionService {
     const callback = `${this.config.publicApiUrl.replace(/\/$/, '')}/v1/connections/oauth/${provider}/callback`
     const url = new URL(provider === 'github'
       ? 'https://github.com/login/oauth/authorize'
-      : 'https://accounts.google.com/o/oauth2/v2/auth')
+      : provider === 'notion' ? 'https://api.notion.com/v1/oauth/authorize' : 'https://accounts.google.com/o/oauth2/v2/auth')
     url.searchParams.set('client_id', clientId)
     url.searchParams.set('redirect_uri', callback)
     url.searchParams.set('state', state)
     url.searchParams.set('response_type', 'code')
-    url.searchParams.set('code_challenge', createHash('sha256').update(verifier).digest('base64url'))
-    url.searchParams.set('code_challenge_method', 'S256')
+    if (provider !== 'notion') {
+      url.searchParams.set('code_challenge', createHash('sha256').update(verifier).digest('base64url'))
+      url.searchParams.set('code_challenge_method', 'S256')
+    }
     if (provider === 'github') {
       url.searchParams.set('scope', 'read:user repo')
+    } else if (provider === 'notion') {
+      url.searchParams.set('owner', 'user')
     } else if (provider === 'gmail') {
       url.searchParams.set('scope', 'openid email https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send')
       url.searchParams.set('access_type', 'offline')
@@ -225,11 +232,13 @@ export class ConnectionService {
 
     const credentials = provider === 'github'
       ? await this.exchangeGithubCode(code, oauth.codeVerifier)
-      : await this.exchangeGoogleCode(provider, code, oauth.codeVerifier)
+      : provider === 'notion'
+        ? await this.exchangeNotionCode(code)
+        : await this.exchangeGoogleCode(provider, code, oauth.codeVerifier)
     const connection: NewConnection = {
       name: oauth.connectionName,
       provider,
-      protocol: provider === 'github' ? 'mcp' : 'rest',
+      protocol: provider === 'github' || provider === 'notion' ? 'mcp' : 'rest',
       endpoint_url: ENDPOINTS[provider],
       auth_type: 'oauth',
     }
@@ -266,10 +275,15 @@ export class ConnectionService {
     const credentials = this.decrypt(connection.encrypted_payload)
     if (connection.protocol === 'rest') return restCapabilities(connection, credentials)
 
+    const current = connection.provider === 'notion'
+      ? await this.currentNotionCredentials(connection, credentials)
+      : credentials
     const token = connection.provider === 'github'
-      ? requiredCredential(credentials, 'accessToken')
+      ? requiredCredential(current, 'accessToken')
+      : connection.provider === 'notion'
+        ? requiredCredential(current, 'accessToken')
       : connection.auth_type === 'bearer'
-        ? requiredCredential(credentials, 'token')
+        ? requiredCredential(current, 'token')
         : undefined
     const tools = await this.listMcpTools(connection.endpoint_url, token, connection.provider === 'custom_mcp')
       .catch((error) => {
@@ -334,10 +348,15 @@ export class ConnectionService {
 
     if (connection.protocol === 'mcp') {
       const credentials = this.decrypt(connection.encrypted_payload)
+      const current = connection.provider === 'notion'
+        ? await this.currentNotionCredentials(connection, credentials)
+        : credentials
       const token = connection.provider === 'github'
-        ? requiredCredential(credentials, 'accessToken')
+        ? requiredCredential(current, 'accessToken')
+        : connection.provider === 'notion'
+          ? requiredCredential(current, 'accessToken')
         : connection.auth_type === 'bearer'
-          ? requiredCredential(credentials, 'token')
+          ? requiredCredential(current, 'token')
           : undefined
       return await this.withMcpClient(connection.endpoint_url, token, connection.provider === 'custom_mcp', async (client) => {
         return await client.callTool({ name: capability.name, arguments: input })
@@ -498,9 +517,14 @@ export class ConnectionService {
     if (role !== 'action') return await this.callSetupCapability(ownerId, { ...latest, callable_during_setup: true }, input)
     if (connection.protocol !== 'mcp') throw new ConnectionError('capability_not_found')
     const credentials = this.decrypt(connection.encrypted_payload)
+    const current = connection.provider === 'notion'
+      ? await this.currentNotionCredentials(connection, credentials)
+      : credentials
     const token = connection.provider === 'github'
-      ? requiredCredential(credentials, 'accessToken')
-      : connection.auth_type === 'bearer' ? requiredCredential(credentials, 'token') : undefined
+      ? requiredCredential(current, 'accessToken')
+      : connection.provider === 'notion'
+        ? requiredCredential(current, 'accessToken')
+        : connection.auth_type === 'bearer' ? requiredCredential(current, 'token') : undefined
     return await this.withMcpClient(connection.endpoint_url, token, connection.provider === 'custom_mcp', async (client) => {
       return await client.callTool({ name: latest.name, arguments: input })
     })
@@ -625,12 +649,19 @@ export class ConnectionService {
       const bot = profile.result as Record<string, unknown>
       return { accountLabel: bot.username ? `@${bot.username}` : String(bot.first_name ?? 'Telegram bot') }
     }
+    const notionCredentials = connection.provider === 'notion'
+      ? await this.currentNotionCredentials(connection, credentials)
+      : credentials
     const tools = await this.listMcpTools(
       connection.endpoint_url,
-      connection.auth_type === 'bearer' ? requiredCredential(credentials, 'token') : undefined,
+      connection.provider === 'notion'
+        ? requiredCredential(notionCredentials, 'accessToken')
+        : connection.auth_type === 'bearer' ? requiredCredential(notionCredentials, 'token') : undefined,
       true,
     )
-    return { accountLabel: `${tools.length} tool${tools.length === 1 ? '' : 's'}` }
+    return { accountLabel: connection.provider === 'notion' && notionCredentials.workspaceName
+      ? String(notionCredentials.workspaceName)
+      : `${tools.length} tool${tools.length === 1 ? '' : 's'}`, credentials: connection.provider === 'notion' ? notionCredentials : undefined }
   }
 
   private githubClient(connection: Connection & { encrypted_payload?: string }) {
@@ -752,6 +783,53 @@ export class ConnectionService {
       expiresAt: Date.now() + Number(response.expires_in ?? 3600) * 1000,
       scope: String(response.scope ?? ''),
     }
+  }
+
+  private async exchangeNotionCode(code: string) {
+    if (!this.config.notionClientId || !this.config.notionClientSecret) throw new ConnectionError('provider_not_configured')
+    const response = await this.json('https://api.notion.com/v1/oauth/token', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        Authorization: `Basic ${Buffer.from(`${this.config.notionClientId}:${this.config.notionClientSecret}`).toString('base64')}`,
+        'Notion-Version': '2026-03-11',
+      },
+      body: JSON.stringify({
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: `${this.config.publicApiUrl.replace(/\/$/, '')}/v1/connections/oauth/notion/callback`,
+      }),
+    })
+    if (!response.access_token) throw new ConnectionError('oauth_exchange_failed')
+    return {
+      accessToken: String(response.access_token),
+      refreshToken: response.refresh_token ? String(response.refresh_token) : undefined,
+      workspaceName: response.workspace_name ? String(response.workspace_name) : undefined,
+    }
+  }
+
+  private async currentNotionCredentials(connection: Connection, credentials: Credentials) {
+    if (!credentials.refreshToken || !this.config.notionClientId || !this.config.notionClientSecret) return credentials
+    const response = await this.json('https://api.notion.com/v1/oauth/token', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        Authorization: `Basic ${Buffer.from(`${this.config.notionClientId}:${this.config.notionClientSecret}`).toString('base64')}`,
+        'Notion-Version': '2026-03-11',
+      },
+      body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: credentials.refreshToken }),
+    })
+    if (!response.access_token) throw new ConnectionError('authentication_failed')
+    const current = {
+      ...credentials,
+      accessToken: String(response.access_token),
+      refreshToken: response.refresh_token ? String(response.refresh_token) : credentials.refreshToken,
+      workspaceName: response.workspace_name ? String(response.workspace_name) : credentials.workspaceName,
+    }
+    if (JSON.stringify(current) !== JSON.stringify(credentials)) await this.store.updateConnectionSecret(connection.id, this.encrypt(current))
+    return current
   }
 
   private async json(url: string, init?: RequestInit) {
@@ -985,7 +1063,7 @@ function restCapabilities(connection: Connection, credentials: Credentials): Cap
 const calendarCapabilities = [{
   name: 'google_calendar.list_calendars', title: 'List Google calendars',
   description: 'List calendars available to the connected Google account.',
-  roles: ['setup'] as CapabilityRole[], delivery: 'poll' as const,
+  roles: ['context', 'setup'] as CapabilityRole[], delivery: 'poll' as const,
   input_schema: { type: 'object', properties: { limit: { type: 'number', minimum: 1, maximum: 50 } }, additionalProperties: false },
   output_schema: { type: 'object', properties: { items: { type: 'array' } } },
 }, {

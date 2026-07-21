@@ -98,8 +98,8 @@ test('Pod screens hold one feed and the migration trims old multi-feed slots ato
 
 test('rule builder can request first-class Linear and Stripe connections', async () => {
   const source = await readFile(new URL('apps/api/src/rule-builder.ts', root), 'utf8')
-  assert.match(source, /enum: \['github', 'gmail', 'google_calendar', 'vercel', 'telegram', 'linear', 'stripe', 'custom_mcp', 'other'\]/)
-  assert.match(source, /\['github', 'gmail', 'google_calendar', 'vercel', 'telegram', 'linear', 'stripe', 'custom_mcp'\]\.includes/)
+  assert.match(source, /enum: \['github', 'gmail', 'google_calendar', 'vercel', 'telegram', 'linear', 'stripe', 'notion', 'custom_mcp', 'other'\]/)
+  assert.match(source, /\['github', 'gmail', 'google_calendar', 'vercel', 'telegram', 'linear', 'stripe', 'notion', 'custom_mcp'\]\.includes/)
 })
 
 test('Google Calendar provider migration is atomic, reversible, and preserves constrained layouts', async () => {
@@ -113,6 +113,20 @@ test('Google Calendar provider migration is atomic, reversible, and preserves co
   assert.match(migration, /commit;\s*$/)
   assert.match(rollback, /Refusing rollback while Google Calendar data or screen assignments exist/)
   assert.match(rollback, /check \(provider in \('github', 'gmail'\)\)/)
+  assert.match(rollback, /commit;\s*$/)
+})
+
+test('Notion provider migration is atomic, reversible, and preserves constrained layouts', async () => {
+  const migration = await readFile(new URL('supabase/migrations/20260721000000_notion_connections.sql', root), 'utf8')
+  const rollback = await readFile(new URL('supabase/rollback/20260721000000_notion_connections.sql', root), 'utf8')
+
+  assert.match(migration, /^begin;/)
+  assert.match(migration, /connection_oauth_states_provider_check[\s\S]*'notion'/)
+  assert.match(migration, /agent_memories_provider_check[\s\S]*'notion'/)
+  assert.match(migration, /'app:notion'/)
+  assert.match(migration, /commit;\s*$/)
+  assert.match(rollback, /Refusing rollback while Notion data or screen assignments exist/)
+  assert.match(rollback, /check \(provider in \('github', 'gmail', 'google_calendar'\)\)/)
   assert.match(rollback, /commit;\s*$/)
 })
 

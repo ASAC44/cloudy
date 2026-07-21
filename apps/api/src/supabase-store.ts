@@ -1301,6 +1301,22 @@ export class SupabaseStore implements Store, RuntimeStore {
     return data as RuntimeEvent | null
   }
 
+  async listConversationEvents(ownerId: string, ruleId: string, conversationKey: string, limit: number) {
+    const { data, error } = await this.db
+      .from('ping_rule_events')
+      .select('id, owner_id, rule_id, event_identity, conversation_key, provider_event_id, occurred_at, status, encrypted_source_payload, encrypted_draft_payload, encrypted_action_payload, action_payload_hash, approval_request_id, delivery_idempotency_key, telegram_random_id, attempts')
+      .eq('owner_id', ownerId)
+      .eq('rule_id', ruleId)
+      .eq('conversation_key', conversationKey)
+      .not('status', 'in', '(detected,evaluating)')
+      .not('encrypted_source_payload', 'is', null)
+      .order('occurred_at', { ascending: false })
+      .order('id', { ascending: false })
+      .limit(Math.max(1, Math.min(limit, 20)))
+    if (error) fail(error)
+    return (data ?? []) as RuntimeEvent[]
+  }
+
   async getEditableReply(ownerId: string, requestId: string) {
     const { data, error } = await this.db.from('ping_rule_events')
       .select('id, owner_id, rule_id, event_identity, conversation_key, provider_event_id, occurred_at, status, encrypted_source_payload, encrypted_draft_payload, encrypted_action_payload, action_payload_hash, approval_request_id, delivery_idempotency_key, telegram_random_id, attempts, approval_requests!inner(status, payload_hash)')

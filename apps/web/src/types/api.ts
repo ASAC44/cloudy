@@ -75,6 +75,7 @@ export type ConnectionProvider =
   | "telegram"
   | "linear"
   | "stripe"
+  | "notion"
   | "custom_mcp";
 
 export type Connection = {

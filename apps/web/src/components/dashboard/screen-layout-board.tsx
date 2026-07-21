@@ -53,6 +53,7 @@ const appDefinitions: Array<{ provider: Connection["provider"] | "codex"; name: 
   { provider: "telegram", name: "Telegram", icon: Send },
   { provider: "linear", name: "Linear", icon: CircleDot },
   { provider: "stripe", name: "Stripe", icon: Server },
+  { provider: "notion", name: "Notion", icon: MoreHorizontal },
 ];
 
 export function ScreenLayoutBoard({

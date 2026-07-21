@@ -72,12 +72,12 @@ changing it makes existing encrypted values unreadable.
 ## Connections and dynamic rules
 
 The shipped connection providers are GitHub, Gmail, Google Calendar, Vercel,
-Telegram, Linear, Stripe, and a custom remote MCP endpoint. GitHub, Gmail, and
-Google Calendar use OAuth; Vercel, Linear, and Stripe accept encrypted bearer
+Telegram, Linear, Stripe, Notion, and a custom remote MCP endpoint. GitHub,
+Gmail, Google Calendar, and Notion use OAuth; Vercel, Linear, and Stripe accept encrypted bearer
 credentials; Telegram supports an authenticated bot webhook or user
 authorization; and custom MCP connections support configured authentication.
 Bot updates enter the API directly, while personal-account events are
-maintained by the worker. Linear and Stripe use fixed official Streamable HTTP
+maintained by the worker. Linear, Stripe, and Notion use fixed official Streamable HTTP
 endpoints. Google Calendar uses bounded REST reads plus approval-gated event
 creation and etag-guarded updates behind the same capability interface.
 Gmail requests `gmail.readonly` plus `gmail.send`; reply delivery is exposed only

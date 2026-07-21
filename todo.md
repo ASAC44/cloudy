@@ -3,6 +3,12 @@
 ## Complete local verification
 
 - [ ] Stop the active `next dev` process, run `cd apps/web && npm run build`, and verify `/home` displays the safe GitHub permission message in the production build before restarting the demo.
+- [ ] After every provider smoke test below, record provider, connection mode, UTC timestamp, read result, approval result, delivery result, rejection result, and cleanup result without storing tokens or private payloads; mark a provider certified only when every applicable result is verified.
+
+## Certify remaining connection providers
+
+- [ ] Connect a disposable Vercel account, verify project discovery and read-only polling, and record that no Vercel write action is currently exposed.
+- [ ] Connect a disposable public HTTPS Custom MCP exposing one annotated read and one non-destructive write; verify discovery, private-host rejection, Pod approval binding, duplicate suppression, one exact approved write, and cleanup of the test resource.
 
 ## Activate shared agent memory
 
@@ -32,6 +38,7 @@
 - [ ] Enable the Google Calendar API, add `/v1/connections/oauth/google_calendar/callback` to the production Google OAuth client, and approve `calendar.events` plus `calendar.calendarlist.readonly` on the consent screen.
 - [ ] Apply `supabase/migrations/20260720040000_google_calendar_connections.sql` before deploying the matching API, web, worker, and Pod builds; connect a disposable calendar and verify bounded event reads, one approved event creation, and one etag-guarded update.
 - [ ] Verify a rejected approval creates no event, a stale etag cannot overwrite a changed event, and rollback refuses while a Calendar connection, memory, OAuth state, or Pod screen assignment remains.
+- [ ] After deployment, run a disposable Gmail meeting-request workflow with complete dates and duration, a conflicting Calendar event, missing scheduling details, rejected approval, expired approval, and one approved exact reply; verify three real conflict-free slots are proposed and no unapproved or duplicate Gmail send occurs.
 
 ## Activate Gmail reply approvals
 
@@ -41,6 +48,7 @@
 
 - [ ] Add a Telegram application ID and hash from `my.telegram.org` to `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` in `apps/api/.env`, restart `./start.sh`, then connect a disposable personal account and verify QR login plus one generated-response approval. The narrow SQLite fallback does not store Telegram connections, so this test also needs the configured Supabase project and migrations.
 - [ ] Deploy the matching API before retesting every existing Telegram bot connection so `setWebhook` points to the production `PODEX_PUBLIC_API_URL`; send duplicate webhook deliveries and verify one rule event, reject one reply, approve one reply, then disconnect the bot and confirm `deleteWebhook` succeeds.
+- [ ] In staging, send a multi-turn Telegram DM, approve one reply, restart the API, and verify the next draft uses the prior delivered exchange; reject a draft and verify its text is excluded, then verify a second chat cannot see the first chat's context.
 
 ## Deploy Codex bridge schema safely
 
@@ -77,12 +85,20 @@
 - [ ] Add signed callbacks or configurable callback authentication before integrations that cannot treat the callback URL as a bearer secret.
 - [ ] Add MCP approval tools and provider-specific SDKs only when a real consumer requires them.
 
+## Activate Notion MCP
+
+- [ ] Create a public Notion OAuth connection and configure `NOTION_CLIENT_ID` and `NOTION_CLIENT_SECRET` in the API environment.
+- [ ] Register `${PODEX_PUBLIC_API_URL}/v1/connections/oauth/notion/callback` as an allowed Notion OAuth redirect URI.
+- [ ] Apply `supabase/migrations/20260721000000_notion_connections.sql` before deploying the matching API build.
+- [ ] Connect a staging Notion workspace, verify tool discovery and workspace labeling, then approve one read and one write action through the Pod.
+- [ ] Verify production Notion OAuth, token refresh/reconnection, screen assignment, and rollback safety before marking this section complete.
+
 ## Activate GitHub PR approval and merge
 
 - [ ] Apply `supabase/migrations/20260719080000_dynamic_ping_engine.sql` on staging before starting the API runtime; verify `next_attempt_at` claim ordering and run `supabase/rollback/20260719080000_dynamic_ping_engine.sql` on a disposable database.
 - [ ] Deploy one guarded `apps/api` Hono process with `PODEX_WORKER_ID`, the production Supabase credentials, connection encryption key, public API URL, and web URL; Telegram credentials are optional for GitHub-only deployments.
 - [ ] Reconnect a staging GitHub OAuth account with repository access and Contents write permission, then confirm repository discovery is limited to repositories that account can access.
-- [ ] In a disposable GitHub repository, activate a rule over one repository and verify an already-ready PR appears on the Pod within the first 60-second poll.
+- [ ] In a disposable GitHub repository, activate a rule over one repository, let the first poll establish its baseline, then push a new commit and verify the ready PR appears on its assigned Pod screen within the next 60-second poll.
 - [ ] Push a new commit while its earlier approval is pending; verify the old request becomes superseded and the new head SHA creates exactly one new approval.
 - [ ] Approve the replacement request on the Pod and verify rule activity first shows “merge queued,” then confirms only the reviewed SHA was merged with the selected squash/rebase/merge method.
 - [ ] Remove merge permission and separately simulate an uncertain GitHub response; verify permission failures mark the rule Needs attention and ambiguous outcomes pause it without issuing a second merge.

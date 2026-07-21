@@ -80,7 +80,7 @@ function textList(value: unknown, maxItems: number, maxLength: number) {
 }
 
 const SCREEN_DIRECTIONS = ['left', 'right', 'down'] as const
-const SCREEN_APPS = ['github', 'gmail', 'google_calendar', 'codex', 'vercel', 'telegram', 'linear', 'stripe']
+const SCREEN_APPS = ['github', 'gmail', 'google_calendar', 'codex', 'vercel', 'telegram', 'linear', 'stripe', 'notion']
 
 function validScreenLayout(value: unknown) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
@@ -96,7 +96,7 @@ function validScreenLayout(value: unknown) {
 function keychainItems(connections: Connection[], codex: Awaited<ReturnType<Store['listCodex']>>): ScreenItem[] {
   const definitions: Array<[Connection['provider'] | 'codex', string]> = [
     ['github', 'GitHub'], ['gmail', 'Gmail'], ['google_calendar', 'Google Calendar'], ['codex', 'Codex'], ['vercel', 'Vercel'],
-    ['telegram', 'Telegram'], ['linear', 'Linear'], ['stripe', 'Stripe'],
+    ['telegram', 'Telegram'], ['linear', 'Linear'], ['stripe', 'Stripe'], ['notion', 'Notion'],
   ]
   const items = definitions.map(([provider, name]): ScreenItem => {
     if (provider === 'codex') {
@@ -1017,7 +1017,7 @@ export function createApp(
     const name = text(body?.name, 80)
     const connectionId = body?.connection_id === undefined ? null : text(body.connection_id, 36)
     if (
-      !['github', 'gmail', 'google_calendar'].includes(provider) || !name ||
+      !['github', 'gmail', 'google_calendar', 'notion'].includes(provider) || !name ||
       (connectionId !== null && !UUID_PATTERN.test(connectionId))
     ) return c.json({ error: 'Invalid OAuth connection' }, 400)
     try {
@@ -1038,7 +1038,7 @@ export function createApp(
     const provider = c.req.param('provider')
     const state = c.req.query('state')
     const code = c.req.query('code')
-    if (!['github', 'gmail', 'google_calendar'].includes(provider) || !state || !code) {
+    if (!['github', 'gmail', 'google_calendar', 'notion'].includes(provider) || !state || !code) {
       return c.redirect(connectionService.redirectUrl({ error: 'oauth_failed' }))
     }
     try {
@@ -1228,7 +1228,7 @@ export function createApp(
     const providerValue = provider ?? undefined
     const memoryKey = text(body?.memory_key, 120)
     const content = text(body?.content, 2000)
-    if (!['user', 'workspace', 'provider'].includes(scope) || !memoryKey || !content || (scope === 'user' && scopeId) || (scope !== 'user' && !scopeId) || (scope !== 'provider' && providerValue) || (scope === 'provider' && !['github', 'gmail', 'google_calendar', 'vercel', 'telegram', 'linear', 'stripe', 'custom_mcp'].includes(providerValue))) {
+    if (!['user', 'workspace', 'provider'].includes(scope) || !memoryKey || !content || (scope === 'user' && scopeId) || (scope !== 'user' && !scopeId) || (scope !== 'provider' && providerValue) || (scope === 'provider' && !['github', 'gmail', 'google_calendar', 'vercel', 'telegram', 'linear', 'stripe', 'notion', 'custom_mcp'].includes(providerValue))) {
       return c.json({ error: 'Invalid memory' }, 400)
     }
     try {

@@ -97,6 +97,11 @@ export class GithubClient {
       rebase: repositoryInfo.allow_rebase_merge === true,
       merge: repositoryInfo.allow_merge_commit === true,
     })
+    const state = pull.state === 'open' ? 'open' : 'closed'
+    const merged = pull.merged === true
+    const mergeable = pull.mergeable === true
+    const mergeState = string(pull.mergeable_state)
+    const viewerCanMerge = record(repositoryInfo.permissions) && repositoryInfo.permissions.push === true
     return {
       event_identity: `${repository}#${number}@${headSha}`,
       conversation_key: `${repository}#${number}`,
@@ -116,11 +121,13 @@ export class GithubClient {
       checks_passed: passedRuns + passedContexts,
       checks_total: runs.length + contexts.length,
       approvals: [...latestReviews.values()].filter((state) => state === 'APPROVED').length,
-      mergeable: pull.mergeable === true,
-      merge_state: string(pull.mergeable_state),
+      mergeable,
+      merge_state: mergeState,
       merge_method: mergeMethod,
-      viewer_can_merge: record(repositoryInfo.permissions) && repositoryInfo.permissions.push === true,
-      merged: pull.merged === true,
+      viewer_can_merge: viewerCanMerge,
+      merged,
+      state,
+      ready_to_merge: state === 'open' && !merged && mergeable && mergeState === 'clean' && viewerCanMerge,
     }
   }
 
@@ -213,7 +220,11 @@ export function chooseMergeMethod(allowed: { squash: boolean; rebase: boolean; m
 }
 
 export function isReadyPullRequest(pull: GithubPullRequest) {
-  return !pull.merged && pull.mergeable && pull.merge_state === 'clean' && pull.viewer_can_merge
+  return pull.state === 'open'
+    && !pull.merged
+    && pull.mergeable
+    && pull.merge_state === 'clean'
+    && pull.viewer_can_merge
 }
 
 export function factOnlyPresentation(pull: GithubPullRequest, aiAvailable = false, expiresAt?: string): GithubPrPresentation {

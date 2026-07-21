@@ -11,6 +11,7 @@ export const PROVIDERS: ProviderDefinition[] = [
   { key: "telegram", label: "Telegram", description: "Connect your personal account by QR, or use a BotFather bot." },
   { key: "linear", label: "Linear", description: "Watch and update issues, projects, and comments through Linear’s official MCP." },
   { key: "stripe", label: "Stripe", description: "Inspect Stripe and run approved actions with a restricted API key." },
+  { key: "notion", label: "Notion", description: "Search and update your workspace through Notion’s official MCP." },
   { key: "custom_mcp", label: "Custom MCP", description: "Connect any public HTTPS Streamable HTTP MCP endpoint." },
 ];
 

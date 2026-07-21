@@ -27,7 +27,7 @@ export function ConnectionFormDialog({
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
   const definition = getProvider(provider);
-  const oauth = provider === "github" || provider === "gmail" || provider === "google_calendar";
+  const oauth = provider === "github" || provider === "gmail" || provider === "google_calendar" || provider === "notion";
   const asksForToken = provider === "vercel" || provider === "telegram" || provider === "linear" || provider === "stripe" || (provider === "custom_mcp" && authType === "bearer");
   const tokenLabel = provider === "telegram"
     ? "Bot token"

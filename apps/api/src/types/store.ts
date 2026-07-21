@@ -70,7 +70,7 @@ export type CallbackDelivery = {
   decidedAt: string | null
 }
 
-export type ConnectionProvider = 'github' | 'gmail' | 'google_calendar' | 'vercel' | 'telegram' | 'linear' | 'stripe' | 'custom_mcp'
+export type ConnectionProvider = 'github' | 'gmail' | 'google_calendar' | 'vercel' | 'telegram' | 'linear' | 'stripe' | 'notion' | 'custom_mcp'
 export type ConnectionStatus = 'untested' | 'connected' | 'failed'
 
 export type Connection = {
@@ -95,7 +95,7 @@ export type NewConnection = Pick<
 
 export type StoredConnection = Connection & { encrypted_payload: string }
 
-export type OAuthProvider = 'github' | 'gmail' | 'google_calendar'
+export type OAuthProvider = 'github' | 'gmail' | 'google_calendar' | 'notion'
 
 export type OAuthState = {
   ownerId: string
@@ -560,6 +560,7 @@ export interface RuntimeStore {
   enqueueRuleEvent(input: { ownerId: string; ruleId: string; identity: string; conversationKey?: string; providerEventId?: string; occurredAt: string; encryptedSource: string; telegramRandomId?: string }): Promise<{ eventId: string; inserted: boolean }>
   claimRuleEvent(): Promise<{ eventId: string; ownerId: string; ruleId: string; leaseToken: string } | null>
   getRuntimeEvent(ownerId: string, eventId: string): Promise<RuntimeEvent | null>
+  listConversationEvents(ownerId: string, ruleId: string, conversationKey: string, limit: number): Promise<RuntimeEvent[]>
   getEditableReply(ownerId: string, requestId: string): Promise<EditableReply | null>
   reviseReply(input: { ownerId: string; requestId: string; expectedHash: string; newHash: string; encryptedDraft: string; encryptedAction: string; memoryContent: string; memorySource: Record<string, unknown> }): Promise<ApprovalRequest>
   ignoreRuleEvent(eventId: string, leaseToken: string, reason: string): Promise<boolean>

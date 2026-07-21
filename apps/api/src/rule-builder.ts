@@ -79,7 +79,7 @@ const REPLY_SCHEMA = {
       required: ['needed', 'provider', 'label', 'reason'],
       properties: {
         needed: { type: 'boolean' },
-        provider: { type: 'string', enum: ['github', 'gmail', 'google_calendar', 'vercel', 'telegram', 'linear', 'stripe', 'custom_mcp', 'other'] },
+        provider: { type: 'string', enum: ['github', 'gmail', 'google_calendar', 'vercel', 'telegram', 'linear', 'stripe', 'notion', 'custom_mcp', 'other'] },
         label: { type: 'string' },
         reason: { type: 'string' },
       },
@@ -346,8 +346,9 @@ Return one focused question when information is missing. Use selection questions
 {"schema_version":2,"source":{"arguments":{},"result":{"collection_pointer":"/items","identity_pointers":["/id"],"occurred_at_pointer":null,"conversation_pointer":null}},"scope":"human-readable scope","match":{"instructions":"natural-language relevance condition"},"context":[{"capability_id":"exact catalog id","arguments":{"argument":{"from":"event","pointer":"/field"}}}],"action":null,"cadence":{"seconds":60},"approval":{"required":true,"expires_in_minutes":15},"assumptions":[]}.
 The action is optional. For a watch/notify request such as “Ping me when a new Gmail message arrives,” set action=null; the Pod approval notification is the action, and a missing external write capability must not block creating the Ping. Only select an action capability when the user explicitly asks Podex to perform an external write.
 For Gmail scope answers, use query="in:inbox" for all incoming messages; never use UI answer values such as "all_incoming" as Gmail search syntax.
+For Telegram DM reply requests, do not ask what “needs me” or “needs a reply” means. Default it to direct questions, explicit requests, mentions, and messages without a resolved answer, and record that assumption. When the user asks Podex to draft replies, select Send Telegram reply with peer_id bound from event /peer_id and message bound from decision /draft; Pod approval remains mandatory before delivery.
 
-Use at most one source, three context reads, and one action. For event sources, cadence.seconds is 60 and result pointers may use /id, /occurred_at, and /conversation_key. For polling sources, cadence.seconds must be at least 60, result.collection_pointer locates the result array, and identity_pointers are relative to each item. All pointers are RFC 6901 JSON Pointers. Every write requires Pod approval; never offer automatic sending. The server adds authoritative connection, capability, schema, delivery, and Pod IDs. Set draft.ready and phase=review only when the definition is complete and the source is verified.
+Use at most one source, three context reads, and one action. For event sources, cadence.seconds is 60 and result pointers may use /id, /occurred_at, and /conversation_key. For polling sources, cadence.seconds must be at least 60, result.collection_pointer locates the result array, and identity_pointers are relative to each item. All pointers are RFC 6901 JSON Pointers. Every write requires Pod approval; never offer automatic sending. The server adds authoritative connection, capability, schema, delivery, and Pod IDs. Set draft.ready and phase=review only when the definition is complete and the source is verified. For schedule-aware Gmail meeting replies, use Gmail as the source, Google Calendar list_events as context, optionally Google Calendar list_calendars for the account timezone, and Reply in Gmail as the approved action.
 
 Set lookup_request.enabled when a safe live read is useful to populate choices. A polling source must be sampled through that exact source capability before review so result pointers can be validated. The capability must have callable_during_setup=true and arguments conform to its input schema. ${allowLookup ? 'At most one lookup may be requested.' : 'Do not request another lookup.'}
 
@@ -646,7 +647,7 @@ function isReply(value: RuleBuilderSession['last_reply']): value is RuleBuilderR
 }
 
 function provider(value: unknown): ConnectionProvider | 'other' {
-  return ['github', 'gmail', 'google_calendar', 'vercel', 'telegram', 'linear', 'stripe', 'custom_mcp'].includes(String(value))
+  return ['github', 'gmail', 'google_calendar', 'vercel', 'telegram', 'linear', 'stripe', 'notion', 'custom_mcp'].includes(String(value))
     ? value as ConnectionProvider
     : 'other'
 }
