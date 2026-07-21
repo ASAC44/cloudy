@@ -3,7 +3,7 @@ title: Service connections
 description: Connect Google Calendar, Linear, Stripe, OAuth providers, and trusted remote MCP servers safely.
 ---
 
-Podex stores connection credentials encrypted with `CONNECTION_ENCRYPTION_KEY`.
+Cloudy stores connection credentials encrypted with `CONNECTION_ENCRYPTION_KEY`.
 The dashboard never receives a saved key after submission, and replacing a key
 runs a fresh connection test.
 
@@ -24,7 +24,7 @@ approval.
 
 ## Connect Gmail
 
-Gmail watch rules first receive stable message and thread IDs, then Podex reads
+Gmail watch rules first receive stable message and thread IDs, then Cloudy reads
 the matching thread through the same read-only OAuth connection before creating
 the encrypted Pod notification. The summary shows the sender and subject;
 swipe down on the Pod to read the complete email. Reply rules additionally show
@@ -66,11 +66,11 @@ exposed. Google Calendar uses the narrowly scoped `calendar.events` and
 ## Connect Linear
 
 1. In Linear, open **Settings → Account → Security & Access** and create an API
-   key for Podex. Prefer the narrowest access available for the workspace and
+   key for Cloudy. Prefer the narrowest access available for the workspace and
    actions you plan to use.
-2. In Podex, open **Connections**, choose **Linear**, name the connection, and
+2. In Cloudy, open **Connections**, choose **Linear**, name the connection, and
    paste the key.
-3. Select **Save & test**. Podex connects only to Linear's official Streamable
+3. Select **Save & test**. Cloudy connects only to Linear's official Streamable
    HTTP endpoint at `https://mcp.linear.app/mcp` and reports the number of tools
    it discovers.
 
@@ -83,8 +83,8 @@ Start in a Stripe sandbox. In **Developers → API keys**, create a restricted
 key that grants only the resources and operations required by the Ping. Do not
 use a publishable key, and avoid unrestricted or live keys during setup.
 
-Choose **Stripe** on the Podex Connections page and paste the restricted key.
-Podex connects only to `https://mcp.stripe.com`. Stripe controls which tools are
+Choose **Stripe** on the Cloudy Connections page and paste the restricted key.
+Cloudy connects only to `https://mcp.stripe.com`. Stripe controls which tools are
 available from the permissions on that key. See [Stripe's MCP documentation](https://docs.stripe.com/mcp)
 and [key security guidance](https://docs.stripe.com/keys-best-practices).
 
@@ -118,7 +118,7 @@ webhook updates.
 
 ## Capability safety
 
-Podex follows MCP tool annotations instead of guessing what a tool does:
+Cloudy follows MCP tool annotations instead of guessing what a tool does:
 
 - Tools explicitly marked read-only may provide source or context data.
 - Tools explicitly marked non-destructive writes may become rule actions, but
@@ -133,9 +133,9 @@ the access its rule needs even when Pod approval is enabled.
 
 Use **Replace token** on the connection, paste the new key, and let the smoke
 test finish. Then revoke the old key in Linear or Stripe. If a key might have
-been exposed, revoke it at the provider first and replace it in Podex
+been exposed, revoke it at the provider first and replace it in Cloudy
 immediately. Disconnecting a provider deletes its encrypted credential from
-Podex but does not revoke the key at the provider.
+Cloudy but does not revoke the key at the provider.
 
 GitHub, Gmail, and Google Calendar use OAuth. Vercel uses a token, while Telegram
 supports the bot webhook and personal-account flows above. **Custom MCP** uses

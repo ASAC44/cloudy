@@ -32,11 +32,11 @@ export class LocalPodLayoutStore {
     if (!row) return { layout: DEFAULT_SCREEN_LAYOUT, revision: 0 }
     const layout = JSON.parse(row.layout) as Record<string, unknown>
     const saved = 'left' in layout ? layout as ScreenLayout : DEFAULT_SCREEN_LAYOUT
-    return { layout: { left: saved.left.slice(0, 1), right: saved.right.slice(0, 1), down: saved.down.slice(0, 1) }, revision: row.revision }
+    return { layout: { left: saved.left.slice(0, 6), right: saved.right.slice(0, 6), down: saved.down.slice(0, 6) }, revision: row.revision }
   }
 
   update(podId: string, expectedRevision: number, layout: ScreenLayout) {
-    if (Object.values(layout).some((feeds) => feeds.length > 1)) throw new StoreError('invalid_pod_layout')
+    if (Object.values(layout).some((feeds) => feeds.length > 6)) throw new StoreError('invalid_pod_layout')
     this.db.exec('begin immediate')
     try {
       const current = this.get(podId)

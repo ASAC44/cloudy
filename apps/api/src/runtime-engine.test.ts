@@ -187,8 +187,8 @@ test('GitHub polling also establishes a baseline without alerting on existing pu
   }
   const enqueued: string[] = []
   const item = {
-    event_identity: `podex/api#42@${'a'.repeat(40)}`,
-    conversation_key: 'podex/api#42',
+    event_identity: `cloudy/api#42@${'a'.repeat(40)}`,
+    conversation_key: 'cloudy/api#42',
     updated_at: '2026-07-19T18:00:00Z',
   }
   const store = {

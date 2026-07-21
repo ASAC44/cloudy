@@ -1,25 +1,25 @@
 ---
-title: Podex documentation
+title: Cloudy documentation
 description: Build, run, and integrate the pocket-sized human-in-the-loop approval system.
 ---
 
-Podex gives AI agents and automated workflows a physical decision point. An agent proposes an action, the Pod shows the exact context that matters, and a person approves, rejects, or revises it.
+Cloudy gives AI agents and automated workflows a physical decision point. An agent proposes an action, the Pod shows the exact context that matters, and a person approves, rejects, or revises it.
 
 ## Start here
 
-- [Run Podex locally](/docs/getting-started) to start the web app, API, and Pod simulator.
-- [Understand how Podex works](/docs/product/overview) before connecting an agent or workflow.
+- [Run Cloudy locally](/docs/getting-started) to start the web app, API, and Pod simulator.
+- [Understand how Cloudy works](/docs/product/overview) before connecting an agent or workflow.
 - [Configure authentication](/docs/development/authentication) for local and hosted environments.
-- [Connect local Codex](/docs/development/codex-bridge) without sending repository credentials or paths to Podex.
+- [Connect local Codex](/docs/development/codex-bridge) without sending repository credentials or paths to Cloudy.
 - [Develop the Pod simulator](/docs/pod/development) before moving to Raspberry Pi hardware.
 
 ## System boundaries
 
 The Next.js service hosts this documentation and the dashboard. The Hono API owns authentication checks and state-changing endpoints, and its guarded runtime loop handles dynamic-rule polling, evaluation, approved delivery, callbacks, and Telegram sessions. Supabase is the canonical data store. The Pod holds only its scoped credential and the active request needed for offline reading.
 
-Podex never treats model output as authorization. Approval stays bound to the exact action and payload shown to the user.
+Cloudy never treats model output as authorization. Approval stays bound to the exact action and payload shown to the user.
 
-## Operate Podex
+## Operate Cloudy
 
 - [Deploy the web and API services on Railway](/docs/deployment/railway)
 - [Provision a Raspberry Pi Zero 2 W](/docs/pod/raspberry-pi)

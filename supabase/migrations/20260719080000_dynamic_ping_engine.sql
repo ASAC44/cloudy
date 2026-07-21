@@ -1133,10 +1133,10 @@ grant execute on function public.complete_telegram_auth_session(uuid, uuid, text
 grant execute on function public.purge_ping_runtime_data() to service_role;
 
 select cron.schedule(
-  'podex-purge-ping-runtime-data',
+  'cloudy-purge-ping-runtime-data',
   '43 3 * * *',
   'select public.purge_ping_runtime_data()'
 )
-where not exists (select 1 from cron.job where jobname = 'podex-purge-ping-runtime-data');
+where not exists (select 1 from cron.job where jobname = 'cloudy-purge-ping-runtime-data');
 
 commit;

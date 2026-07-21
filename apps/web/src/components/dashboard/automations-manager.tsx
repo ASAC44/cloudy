@@ -42,7 +42,7 @@ const requestBody = `{
 
 const workflowSteps = [
   { label: "n8n action", detail: "Prepare the write" },
-  { label: "Podex approval", detail: "Send the exact payload", active: true },
+  { label: "Cloudy approval", detail: "Send the exact payload", active: true },
   { label: "Wait", detail: "Pause on webhook" },
   { label: "Continue", detail: "Branch on status" },
 ];
@@ -127,7 +127,7 @@ export function AutomationsManager({
               One decision, four steps
             </h2>
             <p className="mt-2 text-muted-foreground">
-              n8n supplies a unique public resume URL; Podex calls it after your decision.
+              n8n supplies a private resume URL; Cloudy calls it after your decision.
             </p>
           </div>
           <span className="hidden font-mono text-caption text-muted-foreground sm:block">
@@ -229,15 +229,15 @@ export function AutomationsManager({
         <div className="divide-y divide-border border-y border-border">
           <SetupStep number="01" title="Create the credential">
             <p className="text-sm leading-6 text-muted-foreground">
-              Add a Header Auth credential. Name it Podex, set the header to <code className="font-mono text-foreground">Authorization</code>, and use <code className="font-mono text-foreground">Bearer YOUR_PODEX_KEY</code> as its value.
+              Add a Header Auth credential. Name it Cloudy, set the header to <code className="font-mono text-foreground">Authorization</code>, and use <code className="font-mono text-foreground">Bearer YOUR_CLOUDY_KEY</code> as its value.
             </p>
             <CopyRow label="Header name" value="Authorization" copied={copied === "header"} onCopy={() => copy("Authorization", "header")} />
-            <CopyRow label="Header value" value="Bearer YOUR_PODEX_KEY" copied={copied === "credential"} onCopy={() => copy("Bearer YOUR_PODEX_KEY", "credential")} />
+            <CopyRow label="Header value" value="Bearer YOUR_CLOUDY_KEY" copied={copied === "credential"} onCopy={() => copy("Bearer YOUR_CLOUDY_KEY", "credential")} />
           </SetupStep>
 
           <SetupStep number="02" title="Send the approval">
             <p className="text-sm leading-6 text-muted-foreground">
-              Add an HTTP Request node with POST, the Podex credential, JSON body mode, and an <code className="font-mono text-foreground">Idempotency-Key</code> header set to <code className="font-mono text-foreground">{"{{$execution.id}}"}</code>.
+              Add an HTTP Request node with POST, the Cloudy credential, JSON body mode, and an <code className="font-mono text-foreground">Idempotency-Key</code> header set to <code className="font-mono text-foreground">{"{{$execution.id}}"}</code>.
             </p>
             <CopyRow label="Endpoint" value={endpoint} copied={copied === "endpoint"} onCopy={() => copy(endpoint, "endpoint")} />
             <CodeBlock label="JSON body" value={requestBody} copied={copied === "body"} onCopy={() => copy(requestBody, "body")} />
@@ -258,7 +258,7 @@ export function AutomationsManager({
             <DialogTitle>{createdToken ? "Save your automation key" : "Generate an automation key"}</DialogTitle>
             <DialogDescription>
               {createdToken
-                ? "This is the only time Podex will show the complete key. Save it in n8n before closing."
+                ? "This is the only time Cloudy will show the complete key. Save it in n8n before closing."
                 : "Use a name that identifies the n8n environment or workflow group."}
             </DialogDescription>
           </DialogHeader>

@@ -1,14 +1,11 @@
 ---
 title: Getting started
-description: Install dependencies, configure local services, and run the complete Podex development environment.
+description: Install dependencies, configure local services, and run the complete Cloudy development environment.
 ---
 
 ## Prerequisites
 
-Install Node.js 22 or newer, pnpm 11, and Python 3.13. The normal `start.sh`
-workflow uses the Supabase project configured in `apps/api/.env` and does not
-use Docker. The Supabase CLI and a Docker-compatible runtime are needed only
-for `scripts/local.sh` or the optional ARM64 Pod compatibility check.
+Install Node.js 22 or newer, pnpm 11, Python 3.13, and the Supabase CLI. Link the repository to a hosted Supabase development project before applying migrations. Docker is optional and is used only by the ARM64 Pod compatibility check.
 
 ## Configure the environment
 
@@ -16,26 +13,12 @@ Copy the example files and replace their placeholder values:
 
 ```sh
 cp apps/api/.env.example apps/api/.env
-cp apps/web/.env.example apps/web/.env
-cp apps/pod/.env.example apps/pod/.env
-cp apps/bridge/.env.example apps/bridge/.env
+cp apps/web/.env.example apps/web/.env.local
 ```
 
-The bridge file is optional unless you run the Codex bridge. Set the Supabase
-URL and keys in the API and web files. Generate a stable
-`CONNECTION_ENCRYPTION_KEY` with `openssl rand -base64 32`; changing it makes
-saved provider credentials unreadable. GitHub, Google, and Telegram variables
-can remain blank until that provider is used. For provider-specific setup,
-follow [Authentication setup](/docs/development/authentication).
+Generate a stable API encryption key with `openssl rand -base64 32`. Keep that value server-side; changing it makes saved provider credentials unreadable.
 
-Each example is the complete variable list for its process:
-
-| File | Used by |
-| --- | --- |
-| `apps/api/.env` | Hono API and rule worker, including OAuth and Telegram |
-| `apps/web/.env` | Next.js dashboard |
-| `apps/pod/.env` | Simulator or Pod runtime; loaded by `start.sh` |
-| `apps/bridge/.env` | `npm start` in the optional local Codex bridge |
+For the complete Supabase and OAuth configuration, follow [Authentication setup](/docs/development/authentication).
 
 ## Install and run
 
@@ -43,39 +26,23 @@ From the repository root:
 
 ```sh
 ./scripts/setup.sh
+supabase link
+supabase db push
 ./start.sh
 ```
 
-The launcher starts the dashboard on port 3000, the Hono API on port 3001, the
-dedicated rule worker, and the desktop Pod simulator. It does not start the
-local Codex bridge. Pair the simulator from the dashboard with its
-eight-character code, then create a **New Ping**.
-
-To run a disposable Docker-backed Supabase stack instead, install its CLI and
-run:
-
-```sh
-./scripts/local.sh --reset
-```
-
-On later Docker-backed runs, omit `--reset` to preserve local data. The local
-launcher never changes the hosted environment files.
+The script starts the dashboard on port 3000, the Hono API on port 3001, the dedicated rule worker, and the desktop Pod simulator. It does not start the local Codex bridge. Pair the simulator from the dashboard with its eight-character code, then create a **New Ping**.
 
 The first worker poll records existing provider items as its baseline without creating approvals. New items, or changed identities such as a new commit on a watched pull request, can create approvals on later polls.
 
-For development, `scripts/dev.sh` enables a narrow SQLite fallback at
-`apps/api/.state/podex.sqlite`. It stores directional app layouts and local
-Google Calendar OAuth test connections, including encrypted credentials and
-one-use OAuth state. Pairing, rules, approvals, and other connections continue
-to use Supabase, so Calendar Pings still require the tracked hosted migration.
-Production does not enable this fallback. The script passes the database as an absolute
-`PODEX_LOCAL_LAYOUT_DB` path so startup does not depend on the caller's working
+For local development, `scripts/dev.sh` enables a SQLite fallback at
+`apps/api/.state/cloudy.sqlite` when the hosted project does not yet have the
+Pod keychain-layout migration. The fallback stores only directional app layouts; all
+pairing, requests, decisions, and credentials continue to use Supabase. Apply
+the tracked migrations before deploying because production does not enable
+this fallback. The script passes the database as an absolute
+`CLOUDY_LOCAL_LAYOUT_DB` path so startup does not depend on the caller's working
 directory.
-
-The SQLite fallback is deliberately narrow: Telegram connections, rules,
-approvals, pairing, and active Calendar Pings still require Supabase. Personal
-Telegram connections also require `TELEGRAM_API_ID` and `TELEGRAM_API_HASH`;
-bot connections require a public HTTPS `PODEX_PUBLIC_API_URL` for webhooks.
 
 ## Verify the workspace
 

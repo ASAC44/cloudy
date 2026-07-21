@@ -1,6 +1,6 @@
 ---
 title: Architecture and technology
-description: The shipped hardware, services, data flows, and security boundaries that make up Podex.
+description: The shipped hardware, services, data flows, and security boundaries that make up Cloudy.
 ---
 
 This page describes the current implementation. Future context, memory, and
@@ -11,8 +11,8 @@ integration ideas belong in [Product vision](/docs/product/vision).
 | Component | Runtime | Responsibility |
 | --- | --- | --- |
 | Web | Next.js 16, React 19, Tailwind CSS 4 | Public site, Fumadocs pages, Supabase login, and authenticated dashboard |
-| API | Hono on Node.js | Authenticated HTTP endpoints, Pod and bridge protocols, OAuth callbacks, AI settings, rule polling and evaluation, approved delivery, and atomic approval transitions |
-| Pod | Python 3.13, pygame-ce, gpiozero | Pairing, request display, physical decisions, cached active request, audio capture, and polling |
+| API | Hono on Node.js | Authenticated HTTP and SSE endpoints, Pod and bridge protocols, OAuth callbacks, AI settings, rule polling and evaluation, approved delivery, and atomic approval transitions |
+| Pod | Python 3.13, pygame-ce, gpiozero | Pairing, request display, physical decisions, cached active request, audio capture, and realtime invalidation handling |
 | Codex bridge | Local Node.js process | Local `codex app-server` session, selected workspace access, and approval exchange |
 | Data store | Supabase Postgres and Auth | Canonical users, credentials, Pods, requests, decisions, integrations, rules, Codex state, and audit records |
 
@@ -31,19 +31,47 @@ The hardware target is a Raspberry Pi Zero 2 W with a 640×480 touchscreen,
 Approve and Reject buttons, a microphone, Wi-Fi, and no speaker. Raspberry Pi
 OS Lite launches pygame under Cage as a systemd service.
 
-The Pod polls the API every two seconds using a revocable Pod-scoped bearer
-token. Each response includes the saved three-screen layout; the dashboard
-autosaves drag-and-drop changes, and the Pod applies them on its next poll.
+The Pod opens an authenticated SSE stream using a revocable Pod-scoped bearer
+token. PostgreSQL triggers publish metadata-only invalidations through a private
+Supabase Realtime channel after the surrounding transaction commits. Each API
+replica fans matching invalidations into its connected Pod streams. Events are
+only wake-up signals: on connect, invalidation, or reconnect, the Pod fetches
+`/v1/pod/requests/current` as the authoritative snapshot. It polls every 10
+seconds while realtime is degraded and performs a 90-second safety refresh
+while connected. Each snapshot includes the saved three-screen layout; the
+dashboard autosaves drag-and-drop changes, and the Pod applies the next
+snapshot.
 Screen 2 is the default, with horizontal swipes opening Screens 1 and 3. Each
-screen holds one official app or Custom MCP feed. A new notification opens its
-assigned screen, swipe-down opens its details, and swipe-up returns to its
-summary. Screen 2 remains the default idle view; after the configurable
-`PODEX_IDLE_ANIMATION_SECONDS` delay without interaction, the mascot replaces
-it until the next input. Feed labels, connection health, and provider symbols
-mirror the dashboard. The Pod stores its token and active request in its state
-directory with mode `0600`; Supabase, OAuth, AI, and integration credentials
-never reach the device. If the network drops, the cached request remains
-readable but decisions stay disabled until the API is reachable.
+screen subscribes to up to six official apps or Custom MCP feeds. Attachments
+only route Pings: they are not rendered as rows or grouped by provider. The
+active queue selects one Ping at a time, and each Ping opens its assigned
+screen. Swipe-up opens its details, and swipe-down returns to its summary. Any
+screen without an active Ping renders Cloudy immediately. The Pod stores its
+token and active request in its state directory with mode `0600`; Supabase,
+OAuth, AI, and integration credentials never reach the device. If the network
+drops, the cached request remains readable but decisions stay disabled until
+the API is reachable.
+
+Home mascot controls queue one ephemeral Blink, Yawn, Sleep, or Jump command
+for the paired Pod. A local invalidation wakes the paired Pod, whose next
+authenticated snapshot consumes that command once, and
+the pygame renderer temporarily overlays the animation without changing the
+active request. These playful commands are intentionally process-local: a
+server restart may drop an undelivered animation, but cannot affect approval
+state or user data.
+
+After a dashboard decision commits, the API queues the approved or rejected
+outcome as one-shot Pod metadata and publishes a realtime invalidation. The Pod
+consumes that outcome from its authoritative snapshot, plays the matching
+animation, and returns to idle. The database decision remains authoritative if
+the ephemeral animation is missed.
+
+Development mock Pings store only their selected provider type and screen with
+the ordinary request. The API adds fixed, credential-free GitHub, Gmail,
+general-alert, or Codex-plan presentation data to the authenticated Pod
+snapshot. A dictated revision to the Codex mock stays local to the Pod; it
+exercises recording and transcription without impersonating a real bridge
+command.
 
 The microphone is captured with ALSA `arecord` as mono 16 kHz, 16-bit PCM WAV,
 limited to 30 seconds. Holding both buttons records; releasing either stops.
@@ -55,7 +83,10 @@ a Codex prompt.
 Browser authentication terminates at Supabase Auth. Next.js server actions
 forward the user's Supabase access token to Hono; the API validates signature,
 expiry, issuer, and audience before using the user identity. Dashboard pages do
-not receive the Supabase secret key or decrypted provider credentials.
+not receive the Supabase secret key or decrypted provider credentials. A
+dashboard Approve or Reject action resolves only the current owner-scoped Ping
+through the active Pod and the same transactional `decide_approval` operation
+used by physical Pod decisions.
 
 The public API also has separate authentication boundaries:
 
@@ -87,7 +118,7 @@ response on the Pod.
 The rule builder uses the chosen AI provider to turn a conversation into a
 reviewable rule definition. Supported providers are OpenAI, Anthropic,
 Cerebras, OpenRouter, and an OpenAI-compatible custom endpoint. Model names are
-user-configured; Podex does not assume a default text model.
+user-configured; Cloudy does not assume a default text model.
 
 After activation, the API runtime polls or listens to the source connection,
 deduplicates events in Postgres, evaluates the saved rule, and creates an exact
@@ -100,7 +131,7 @@ deliveries.
 
 The bridge runs beside local repositories and talks to `codex app-server` over
 local standard input and output. Local paths and Codex credentials remain on
-that computer; Podex stores only opaque workspace identifiers, display labels,
+that computer; Cloudy stores only opaque workspace identifiers, display labels,
 thread state, and encrypted approval payloads.
 
 1. The Pod records audio and uploads the WAV file over HTTPS.
@@ -121,7 +152,7 @@ OpenAI's audio API directly.
 
 ## Shared agent memory
 
-Podex stores small, user-owned memories in Supabase so the rule builder,
+Cloudy stores small, user-owned memories in Supabase so the rule builder,
 integration runtime, and Codex prompts can reuse relevant context across
 sessions. Memories may be scoped to a user, workspace, or provider and can
 include a source pointer. They are bounded context only: they never authorize
@@ -159,7 +190,8 @@ so examples from separate accounts do not mix.
 Browser ───────────────> Next.js web/docs ────────┐
                                                   v
 Automation client ───────────────────────────> Hono API <────> Supabase
-Pod ─────────────────────────────────────────────> ^              ^
+Pod <════════ authenticated SSE invalidations ═══> ^              ^
+Pod ───────── snapshots, decisions, audio ────────> ^              ^
 Codex bridge <──── local stdio ────> Codex CLI ───┘              |
                                                                  |
 Telegram / integrations <──────── Hono runtime ──────────────────┘

@@ -18,65 +18,89 @@ The repository setup script installs the web and API dependencies and creates
 
 Create the documented environment files before starting all three apps:
 
-- `apps/api/.env`: the connection variables from `.env.example`. Generate the
-  local encryption value with `openssl rand -base64 32` and keep it stable.
-- `apps/web/.env`: copy `.env.example`; the Docker-backed local launcher overrides its
-  Supabase placeholders and API URL.
-- `apps/pod/.env`: copy `.env.example`; the root script loads it before
-  launching the simulator. It defaults to the local API and `.state` directory.
+- `apps/api/.env`: `SUPABASE_URL`, the server-only `SUPABASE_SECRET_KEY`, and
+  the connection variables from `.env.example`. Generate the local encryption
+  value with `openssl rand -base64 32` and keep it stable.
+- `apps/web/.env.local`: the two `NEXT_PUBLIC_SUPABASE_*` values and
+  `CLOUDY_API_URL=http://localhost:3001`.
+- The Pod defaults to the local API and stores simulator state under
+  `apps/pod/.state` when launched through the root script.
 
-Run the complete environment against the Supabase project in the env files:
+Apply the tracked migration to the linked hosted development project:
+
+```sh
+supabase link
+supabase db push
+```
+
+Do not edit the hosted schema manually after adopting migrations.
+
+## Run
 
 ```sh
 ./start.sh
 ```
 
-To start local Supabase in Docker and rebuild it from tracked migrations, run:
-
-```sh
-./scripts/local.sh --reset
-```
-
-On later runs, use `./scripts/local.sh` without `--reset` to keep local data.
-Do not edit either schema manually after adopting migrations.
-
-## Run
-
-The Docker-backed local launcher starts the same processes as `./start.sh`
-after Supabase is ready.
-
 The root script also starts the dedicated rule worker, so active Pings are polled while the simulator is running.
 
 The virtual Pod displays an eight-character code. Sign in to the dashboard,
-enter that code, and create a **New Ping**. The Pod polls every two seconds.
-When a request is active, the Pod opens the screen assigned to that request;
-changing the screen layout while it is pending moves the Pod there on the next
-poll.
+enter that code, and create a **New Ping**. After pairing, the Pod holds an
+authenticated Server-Sent Events connection. An event wakes the Pod to fetch
+the authoritative screen snapshot; decisions and voice uploads remain ordinary
+HTTP requests. If realtime delivery is unavailable, the Pod polls every 10
+seconds until it reconnects, with a 90-second safety refresh while connected.
+The dashboard can send realistic General, GitHub, Deployment, Gmail, or Codex mock reviews
+to any of the three Pod screens. GitHub includes checks, review evidence, and
+rollback facts; Gmail shows the original message and exact drafted reply; Codex
+shows a brief plan summary, with the numbered implementation plan available in
+Details. On the Codex mock, hold both Pod buttons
+to dictate a revision, confirm the transcript, and return to the plan before
+approving or rejecting it. The revision is demo-only and stays on the Pod; real
+Codex work continues to require a paired bridge and selected target.
+The dashboard control strip can approve or reject its oldest pending Ping next
+to the screen navigation buttons; it uses the same atomic, hash-bound decision
+path as the Pod controls.
+Both dashboard and Pod decisions play distinct approval or rejection animations
+on the physical display before Cloudy returns to idle.
+
+## Pitch console
+
+Open `/demo` after signing in to run a presentation from one page. The console
+shows Pod connectivity and the pending count, sends any realistic mock to a
+chosen screen, triggers Cloudy’s four mascot moves, navigates between screens
+or notification details, scrolls long details up or down in visible steps, and approves
+or rejects the current Ping. These
+controls call the same authenticated actions as Home; there is no separate
+demo-only API or decision path. Rapid navigation presses are delivered to the
+Pod in order. Swipe Up and Swipe Down enter and leave notification details;
+the separate Scroll Up and Scroll Down controls only move content while the
+details page is open. Notification summaries use large decision text and keep warnings
+on the scrollable details page so the primary action stays readable at a glance.
 
 Simulator controls:
 
 - Drag inside the screen to scroll. The simulator renders the Pod screen at
-  its native 640×480 resolution for a sharp preview.
+its native 640×480 resolution for a sharp preview.
+
+For a browser-only walkthrough, open **Settings → Presentation → Demo mode**.
+Home then adds a Sentry and Datadog example to the Ping chat. Selecting it shows
+both observability sources as already connected and walks through anomaly
+detection to review; it does not call the API or create a real Ping.
 - Click the illustrated buttons or press `A` and `R` to decide.
 - Press `V` once to start voice recording and again to stop it. On hardware,
   press both physical buttons within 250 ms and release either button to stop.
 - Press `O` to simulate a disconnection. Cached content remains readable, but
   decisions stay disabled until the connection returns.
 - Screen 2 is the default feed. Swipe left for Screen 1 and right for Screen 3;
-  each screen holds one feed configured from the dashboard Kanban board.
-  Dropping a feed onto an occupied screen swaps the two feeds.
+  each screen receives Pings from up to six apps configured on the dashboard
+  Kanban board. Apps route Pings but are not grouped or shown as feed rows.
 - Swipe up from a feed to open Quick Settings. Drag or tap the brightness and
-  volume sliders; tap the other rows to toggle connectivity, reduced motion,
-  or cycle the idle-animation timeout. Settings persist locally; swipe down to
-  return to the feed.
+  volume sliders; tap the other rows to toggle connectivity or reduced motion.
+  Settings persist locally; swipe down to return to the feed.
 - A new notification opens its assigned screen. Swipe down to see its details
   and swipe up to return to the summary. Reject removes the notification.
 - Pairing, approval, voice, result, and error states keep their dedicated
-  screens. Screen 2 remains visible when the queue becomes idle. After 30 seconds with
-  no interaction, the mascot replaces it until the next touch or button press.
-  Set `PODEX_IDLE_ANIMATION_SECONDS` to tune that hardware inactivity delay.
-- If another client resolves an approval first, the Pod discards its stale
-  cached request and returns to the current queue instead of retrying it.
+  screens. Any screen without an active Ping shows Cloudy's ambient animation.
 - Press the down and up arrow keys to move between a notification summary and
   its details, or to close and open Quick Settings from a feed.
 - Press Escape to close the simulator.

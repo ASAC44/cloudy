@@ -47,14 +47,14 @@ export default async function LoginPage({
           href="/"
           className="mx-auto mb-6 flex w-fit items-center gap-2 text-foreground"
         >
-          <Image src="/podex-mascot.png" alt="" width={40} height={40} />
-          <span className="font-heading text-heading-sm">Podex</span>
+          <Image src="/cloudy-mascot.png" alt="" width={40} height={40} />
+          <span className="font-heading text-heading-sm">Cloudy</span>
         </Link>
 
         <Card>
           <CardHeader className="text-center">
             <CardTitle className="font-heading text-heading-sm">
-              Sign in to Podex
+              Sign in to Cloudy
             </CardTitle>
             <CardDescription>
               Approve agent actions from your trusted Pod.

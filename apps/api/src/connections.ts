@@ -701,7 +701,7 @@ export class ConnectionService {
       if (response.status === 401 || response.status === 403) throw new ConnectionError('authentication_failed')
       return response
     }
-    const client = new Client({ name: 'podex', version: '0.1.0' })
+    const client = new Client({ name: 'cloudy', version: '0.1.0' })
     const transport = new StreamableHTTPClientTransport(new URL(endpoint), {
       requestInit: token ? { headers: providerHeaders(token) } : undefined,
       fetch: guardedFetch,
@@ -1202,7 +1202,7 @@ export function gmailReplyRaw(threadId: string, message: string, thread: Record<
   const inReplyTo = header('Message-ID')
   if (!recipient || !inReplyTo) throw new ConnectionError('capability_changed', 'The Gmail thread no longer has reply headers.')
   const subject = /^re:/i.test(originalSubject) ? originalSubject : `Re: ${originalSubject || 'Your message'}`
-  const messageId = `<podex-${createHash('sha256').update(`${threadId}:${message}`).digest('hex').slice(0, 32)}@podex.local>`
+  const messageId = `<cloudy-${createHash('sha256').update(`${threadId}:${message}`).digest('hex').slice(0, 32)}@cloudy.local>`
   return [
     `To: ${recipient}`, `Subject: ${subject}`, `Message-ID: ${messageId}`,
     `In-Reply-To: ${inReplyTo}`, `References: ${[header('References'), inReplyTo].filter(Boolean).join(' ')}`,

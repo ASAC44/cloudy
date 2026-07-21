@@ -1,5 +1,21 @@
 # Final Deployment TODO
 
+## Demo mode follow-up
+
+- [ ] If demos need to follow a user across browsers or devices, replace the browser-local demo flag with an authenticated account preference and verify it cannot affect real automation creation.
+
+## Complete the Cloudy production rename
+
+- [ ] Apply `supabase/migrations/20260721000000_cloudy_rebrand.sql` on staging and production, then verify only the two `cloudy-purge-*` cron jobs remain and each still uses its original schedule and command.
+- [ ] Replace every deployed `PODEX_*` environment variable with its documented `CLOUDY_*` equivalent, move Pod hosts from `/opt/podex-pod`, `/etc/podex-pod.env`, and the `podex` service account to the Cloudy paths/account, reinstall `cloudy-pod.service`, and verify API, worker, web, bridge, and Pod startup.
+- [ ] Re-pair installed Codex bridges with `cloudy-bridge` after moving any needed workspace registrations out of `~/.config/podex`; remove the legacy launchd/systemd service only after the Cloudy bridge survives a restart.
+
+## Finish SPI display and touch deployment
+
+- [ ] Deploy the current API at a stable HTTPS URL, point the installed `/etc/cloudy-pod.env` at it, restart `cloudy-pod.service`, then reboot the Pi and verify authenticated updates resume without the development Mac running.
+- [ ] Restore network access to the `minillm` Pi at `10.166.208.89`, verify the XPT2046 `T_IRQ` wire reaches GPIO17 (physical pin 11) and increments the `ads7846` interrupt counter, then sync the framebuffer/touch runtime and persist both overlays in `/boot/firmware/config.txt`.
+- [ ] Launch the GitHub review demo with `/dev/fb0` and the detected ADS7846 input, calibrate swap/invert settings, and verify the cursor stays hidden while swipe-down opens details, vertical motion scrolls them, and swipe-up returns to the summary.
+
 ## Complete local verification
 
 - [ ] Stop the active `next dev` process, run `cd apps/web && npm run build`, and verify `/home` displays the safe GitHub permission message in the production build before restarting the demo.
@@ -21,7 +37,9 @@
 - [ ] Apply `supabase/migrations/20260720010000_pod_screen_layout.sql` before deploying the matching API, web, and Pod builds; verify existing Pods receive the default layout and retain pairing.
 - [ ] Before applying `supabase/migrations/20260720030000_single_feed_screens.sql`, export any screen containing multiple feeds because the migration intentionally keeps only the first feed in each slot; deploy the API, web, and Pod builds together, then verify Screen 2 is default, incoming notifications open their assigned screen, and swipe-down/up moves between summary/details.
 - [ ] Run `supabase/rollback/20260720030000_single_feed_screens.sql` on a disposable database and verify it safely widens each screen back to six feeds; note that rollback cannot reconstruct assignments trimmed during the forward migration.
-- [ ] If `apps/api/.state/podex.sqlite` contains customized local layouts, record them before applying the migration, re-save them from the dashboard afterward, and verify the revision starts from the persisted Supabase value.
+- [ ] Apply `supabase/migrations/20260721020000_multi_feed_screens.sql` with the matching API, web, and Pod builds; attach GitHub and Gmail to one screen, verify both route there without grouping, then verify every screen without an active Ping shows Cloudy's ambient animation immediately.
+- [ ] Run `supabase/rollback/20260721020000_multi_feed_screens.sql` on a disposable database; verify it refuses while any screen has multiple feeds, then reduce every screen to one feed or fewer and verify rollback succeeds without data loss.
+- [ ] If `apps/api/.state/cloudy.sqlite` contains customized local layouts, record them before applying the migration, re-save them from the dashboard afterward, and verify the revision starts from the persisted Supabase value.
 - [ ] Preserve the current local Pod `e86a829d-37f8-487e-ae43-7fb1c7ba70ea` revision-3 legacy layout before its first directional save, then verify it starts from the GitHub-left, Gmail-right, Codex-down default without losing pairing.
 - [ ] Attach and reorder apps across Swipe left, Swipe right, and Swipe down in staging; verify autosave survives reload, then confirm the paired Pod applies each layout within one polling interval and rejects a stale revision without overwriting newer changes.
 - [ ] On Raspberry Pi hardware, replace Quick Settings software dimming with the approved display-backlight control and verify ALSA `Master` volume changes plus local persistence after reboot; add restart and unpair actions only with confirmation and recovery testing.
@@ -69,7 +87,7 @@
 ## Activate automation approvals
 
 - [ ] Apply `supabase/migrations/20260719050000_automations.sql` to the production Supabase project.
-- [ ] Set `PODEX_PUBLIC_API_URL` to the production HTTPS API origin.
+- [ ] Set `CLOUDY_PUBLIC_API_URL` to the production HTTPS API origin.
 - [ ] Restart the API and web dashboard after the migration and environment changes.
 - [ ] Configure n8n with a public HTTPS `WEBHOOK_URL`; private and localhost callback URLs are intentionally rejected.
 - [ ] Run a live create → Pod decision → callback resume test and verify approved, rejected, expired, and cancelled outcomes.
@@ -96,7 +114,7 @@
 ## Activate GitHub PR approval and merge
 
 - [ ] Apply `supabase/migrations/20260719080000_dynamic_ping_engine.sql` on staging before starting the API runtime; verify `next_attempt_at` claim ordering and run `supabase/rollback/20260719080000_dynamic_ping_engine.sql` on a disposable database.
-- [ ] Deploy one guarded `apps/api` Hono process with `PODEX_WORKER_ID`, the production Supabase credentials, connection encryption key, public API URL, and web URL; Telegram credentials are optional for GitHub-only deployments.
+- [ ] Deploy one guarded `apps/api` Hono process with `CLOUDY_WORKER_ID`, the production Supabase credentials, connection encryption key, public API URL, and web URL; Telegram credentials are optional for GitHub-only deployments.
 - [ ] Reconnect a staging GitHub OAuth account with repository access and Contents write permission, then confirm repository discovery is limited to repositories that account can access.
 - [ ] In a disposable GitHub repository, activate a rule over one repository, let the first poll establish its baseline, then push a new commit and verify the ready PR appears on its assigned Pod screen within the next 60-second poll.
 - [ ] Push a new commit while its earlier approval is pending; verify the old request becomes superseded and the new head SHA creates exactly one new approval.

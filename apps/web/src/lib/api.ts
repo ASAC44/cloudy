@@ -11,7 +11,7 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   if (!token) throw new Error("Your session has expired. Sign in again.");
 
   const response = await fetch(
-    `${process.env.PODEX_API_URL ?? "http://localhost:3001"}${path}`,
+    `${process.env.CLOUDY_API_URL ?? "http://localhost:3001"}${path}`,
     {
       ...init,
       cache: "no-store",
@@ -24,6 +24,6 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   );
   if (response.status === 204) return undefined as T;
   const body = await response.json();
-  if (!response.ok) throw new Error(body.error ?? "Podex API request failed");
+  if (!response.ok) throw new Error(body.error ?? "Cloudy API request failed");
   return body as T;
 }

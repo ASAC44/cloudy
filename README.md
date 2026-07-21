@@ -1,12 +1,12 @@
-# Podex
+# Cloudy
 
-Podex is a handheld human-in-the-loop approval system and a monorepo with
+Cloudy is a handheld human-in-the-loop approval system and a monorepo with
 four independently managed applications:
 
 - `apps/web`: Next.js dashboard and its own `package.json`/lockfile.
 - `apps/api`: Hono API and its own `package.json`/lockfile.
 - `apps/pod`: Python 3.13 Pod runtime and its own `pyproject.toml`/virtual environment.
-- `apps/bridge`: local Node.js bridge between Podex and `codex app-server`.
+- `apps/bridge`: local Node.js bridge between Cloudy and `codex app-server`.
 
 Keeping Python beside TypeScript is normal in a monorepo. Each application
 owns its dependencies and direct commands; the root scripts only coordinate

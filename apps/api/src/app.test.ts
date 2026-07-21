@@ -9,6 +9,7 @@ import { createAiModel, type AiTester } from './ai.js'
 import { ConnectionService } from './connections.js'
 import { GithubApiError } from './github-pr.js'
 import { RuleBuilderService, RuleBuilderError } from './rule-builder.js'
+import type { PodEvent, PodEventSource } from './pod-events.js'
 import type {
   AutomationKey,
   AgentMemory,
@@ -92,6 +93,7 @@ class FakeStore implements Store {
       ? { id: podId, ownerId: 'user-1', screenLayout: this.pod.screen_layout }
       : null
   }
+  async touchPod(podId: string) { return !this.revoked && podId === this.pod.id }
   async listPods() { return [this.pod] }
   async updatePodScreenLayout(_ownerId: string, podId: string, expectedRevision: number, layout: Pod['screen_layout']) {
     if (podId !== this.pod.id) throw new StoreError('pod_not_found')
@@ -320,6 +322,33 @@ class FakeStore implements Store {
   async listActiveRulesForConnection() { return [] }
 }
 
+class FakePodEvents implements PodEventSource {
+  ready = true
+  private listeners = new Map<string, Set<(event: PodEvent) => void>>()
+  private status = new Set<(ready: boolean) => void>()
+
+  subscribe(ownerId: string, listener: (event: PodEvent) => void) {
+    const listeners = this.listeners.get(ownerId) ?? new Set()
+    listeners.add(listener)
+    this.listeners.set(ownerId, listeners)
+    return () => listeners.delete(listener)
+  }
+
+  subscribeStatus(listener: (ready: boolean) => void) {
+    this.status.add(listener)
+    return () => this.status.delete(listener)
+  }
+
+  publish(event: PodEvent) {
+    for (const listener of this.listeners.get(event.ownerId) ?? []) listener(event)
+  }
+
+  degrade() {
+    this.ready = false
+    for (const listener of this.status) listener(false)
+  }
+}
+
 function randomTestId(value: number) {
   return `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`
 }
@@ -340,6 +369,7 @@ function app(
   } = {},
   aiTester: AiTester = async () => undefined,
   ruleBuilder?: RuleBuilderService,
+  podEvents?: PodEventSource,
 ) {
   const connections = new ConnectionService(store, {
     encryptionKey: Buffer.alloc(32, 1).toString('base64'),
@@ -350,14 +380,14 @@ function app(
   return {
     store,
     connections,
-    app: createApp('https://example.supabase.co', store, authenticated, connections, aiTester, ruleBuilder, fetcher, store as unknown as RuntimeStore),
+    app: createApp('https://example.supabase.co', store, authenticated, connections, aiTester, ruleBuilder, fetcher, store as unknown as RuntimeStore, podEvents),
   }
 }
 
 test('health route is public', async () => {
   const response = await app().app.request('/')
   assert.equal(response.status, 200)
-  assert.deepEqual(await response.json(), { name: 'podex-api', status: 'ok' })
+  assert.deepEqual(await response.json(), { name: 'cloudy-api', status: 'ok' })
 })
 
 test('Telegram personal setup fails before creating a session when app credentials are missing', async () => {
@@ -637,12 +667,61 @@ test('pairing creates a valid code and scoped Pod token', async () => {
   assert.match(body.pod_token, /^pod_[0-9a-f-]{36}\.[A-Za-z0-9_-]{43}$/)
 })
 
+test('Pod realtime stream authenticates, isolates owners, invalidates, and revokes', async () => {
+  const events = new FakePodEvents()
+  const setup = app(new FakeStore(), fetch, {}, async () => undefined, undefined, events)
+  const paired = await (await setup.app.request('/v1/pod/pairing-sessions', { method: 'POST' })).json()
+  const response = await setup.app.request('/v1/pod/events', {
+    headers: { Authorization: `Bearer ${paired.pod_token}` },
+  })
+  assert.equal(response.status, 200)
+  assert.equal(response.headers.get('content-type'), 'text/event-stream')
+  const reader = response.body!.getReader()
+  const decoder = new TextDecoder()
+  const read = async () => decoder.decode((await Promise.race([
+    reader.read(),
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error('SSE read timed out')), 1_000)),
+  ])).value)
+
+  assert.match(await read(), /event: sync\ndata: {}/)
+  events.publish({ ownerId: 'user-2', podId: null, scope: 'request' })
+  events.publish({ ownerId: 'user-1', podId: null, scope: 'layout' })
+  assert.match(await read(), /event: invalidate\ndata: {"scope":"layout"}/)
+  events.publish({ ownerId: 'user-1', podId: setup.store.pod.id, scope: 'revoked' })
+  assert.match(await read(), /event: revoked\ndata: {}/)
+})
+
+test('Pod realtime stream returns 503 while its relay is degraded and closes if it degrades', async () => {
+  const unavailable = new FakePodEvents()
+  unavailable.ready = false
+  const unavailableSetup = app(new FakeStore(), fetch, {}, async () => undefined, undefined, unavailable)
+  const unavailablePairing = await (await unavailableSetup.app.request('/v1/pod/pairing-sessions', { method: 'POST' })).json()
+  const rejected = await unavailableSetup.app.request('/v1/pod/events', { headers: { Authorization: `Bearer ${unavailablePairing.pod_token}` } })
+  assert.equal(rejected.status, 503)
+
+  const events = new FakePodEvents()
+  const setup = app(new FakeStore(), fetch, {}, async () => undefined, undefined, events)
+  const paired = await (await setup.app.request('/v1/pod/pairing-sessions', { method: 'POST' })).json()
+  const response = await setup.app.request('/v1/pod/events', { headers: { Authorization: `Bearer ${paired.pod_token}` } })
+  const reader = response.body!.getReader()
+  await reader.read()
+  events.degrade()
+  assert.equal((await reader.read()).done, true)
+})
+
+test('Pod realtime stream rejects malformed credentials', async () => {
+  const response = await app(new FakeStore(), fetch, {}, async () => undefined, undefined, new FakePodEvents()).app.request('/v1/pod/events', {
+    headers: { Authorization: 'Bearer invalid' },
+  })
+  assert.equal(response.status, 401)
+})
+
 test('Codex bridge authentication requires a process instance for command claims', async () => {
   const { app: api } = app()
   const paired = await (await api.request('/v1/codex/bridge/pairing-sessions', { method: 'POST' })).json()
   const withoutInstance = await api.request('/v1/codex/bridge/commands', { headers: { Authorization: `Bearer ${paired.bridge_token}` } })
   assert.equal(withoutInstance.status, 400)
-  const claimed = await api.request('/v1/codex/bridge/commands', { headers: { Authorization: `Bearer ${paired.bridge_token}`, 'X-Podex-Bridge-Instance': randomTestId(86) } })
+  const claimed = await api.request('/v1/codex/bridge/commands', { headers: { Authorization: `Bearer ${paired.bridge_token}`, 'X-Cloudy-Bridge-Instance': randomTestId(86) } })
   assert.equal(claimed.status, 200)
   assert.deepEqual(await claimed.json(), { command: null })
 })
@@ -780,7 +859,7 @@ test('claim rejects a second active Pod', async () => {
 
 test('screen layouts persist once and reject invalid or stale writes', async () => {
   const setup = app()
-  const layout = { left: ['app:vercel'], right: ['app:gmail'], down: ['app:codex'] }
+  const layout = { left: ['app:vercel', 'app:github'], right: ['app:gmail'], down: ['app:codex'] }
   const saved = await setup.app.request(`/v1/pods/${setup.store.pod.id}/screen-layout`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
@@ -796,9 +875,67 @@ test('screen layouts persist once and reject invalid or stale writes', async () 
   assert.equal(stale.status, 409)
 
   const invalid = await setup.app.request(`/v1/pods/${setup.store.pod.id}/screen-layout`, {
-    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ layout: { ...layout, left: ['app:github', 'app:gmail'] }, revision: 1 }),
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ layout: { left: ['app:github', 'app:gmail', 'app:codex', 'app:vercel', 'app:telegram', 'app:linear', 'app:stripe'], right: [], down: [] }, revision: 1 }),
   })
   assert.equal(invalid.status, 400)
+})
+
+test('mascot actions validate ownership and are consumed by one Pod poll', async () => {
+  const setup = app()
+  const pairing = await setup.app.request('/v1/pod/pairing-sessions', { method: 'POST' })
+  const { pod_token: token } = await pairing.json()
+  const route = `/v1/pods/${setup.store.pod.id}/mascot-action`
+
+  const invalid = await setup.app.request(route, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'dance' }),
+  })
+  assert.equal(invalid.status, 400)
+
+  const queued = await setup.app.request(route, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'jump' }),
+  })
+  assert.equal(queued.status, 202)
+
+  const first = await setup.app.request('/v1/pod/requests/current', { headers: { Authorization: `Bearer ${token}` } })
+  const second = await setup.app.request('/v1/pod/requests/current', { headers: { Authorization: `Bearer ${token}` } })
+  assert.equal((await first.json()).mascot_action, 'jump')
+  assert.equal((await second.json()).mascot_action, null)
+
+  const missing = await setup.app.request(`/v1/pods/${randomTestId(99)}/mascot-action`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'blink' }),
+  })
+  assert.equal(missing.status, 404)
+})
+
+test('screen navigation validates ownership and delivers rapid commands in order', async () => {
+  const setup = app()
+  const pairing = await setup.app.request('/v1/pod/pairing-sessions', { method: 'POST' })
+  const { pod_token: token } = await pairing.json()
+  const route = `/v1/pods/${setup.store.pod.id}/screen-navigation`
+
+  const invalid = await setup.app.request(route, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ direction: 'diagonal' }),
+  })
+  assert.equal(invalid.status, 400)
+
+  const queued = await setup.app.request(route, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ direction: 'up' }),
+  })
+  assert.equal(queued.status, 202)
+  await setup.app.request(route, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ direction: 'right' }),
+  })
+  await setup.app.request(route, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ direction: 'scroll_down' }),
+  })
+  await setup.app.request(route, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ direction: 'scroll_up' }),
+  })
+
+  const first = await setup.app.request('/v1/pod/requests/current', { headers: { Authorization: `Bearer ${token}` } })
+  const second = await setup.app.request('/v1/pod/requests/current', { headers: { Authorization: `Bearer ${token}` } })
+  assert.deepEqual((await first.json()).screen_navigation, ['up', 'right', 'scroll_down', 'scroll_up'])
+  assert.deepEqual((await second.json()).screen_navigation, [])
 })
 
 test('test Ping validation rejects incomplete input', async () => {
@@ -841,10 +978,67 @@ test('valid test Ping is persisted', async () => {
       risk: 'medium',
       warnings: [],
       expires_in_minutes: 15,
+      mock_type: 'github',
+      screen: 'left',
     }),
   })
   assert.equal(response.status, 201)
-  assert.equal((await response.json()).request.status, 'pending')
+  const created = (await response.json()).request
+  assert.equal(created.status, 'pending')
+  assert.equal(created.action_payload.mock_type, 'github')
+  assert.equal(created.action_payload.screen, 'left')
+})
+
+test('mock Ping screen overrides its app layout', async () => {
+  const setup = app()
+  setup.store.current = { ...request, action_payload: { kind: 'test_ping', mock_type: 'gmail', screen: 'left' } }
+  const pairing = await setup.app.request('/v1/pod/pairing-sessions', { method: 'POST' })
+  const { pod_token: token } = await pairing.json()
+
+  const response = await setup.app.request('/v1/pod/requests/current', {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+
+  assert.equal(response.status, 200)
+  assert.equal((await response.json()).request_screen, 'left')
+})
+
+test('mock Pings receive realistic provider presentations in the Pod snapshot', async () => {
+  const setup = app()
+  const pairing = await setup.app.request('/v1/pod/pairing-sessions', { method: 'POST' })
+  const { pod_token: token } = await pairing.json()
+
+  for (const [mockType, kind] of [['general', 'notification_v1'], ['github', 'github_pr_v1'], ['deployment', 'notification_v1'], ['gmail', 'email_reply_v1'], ['codex', 'codex_plan_v1']]) {
+    setup.store.current = { ...request, action_payload: { kind: 'test_ping', mock_type: mockType, screen: 'down' } }
+    const response = await setup.app.request('/v1/pod/requests/current', { headers: { Authorization: `Bearer ${token}` } })
+    const body = await response.json()
+    assert.equal(body.request.presentation.kind, kind)
+    if (mockType === 'deployment') assert.match(body.request.presentation.recommended_action, /Rollback traffic/)
+    if (mockType === 'gmail') assert.doesNotMatch(body.request.presentation.response, /—/)
+    if (mockType === 'codex') assert.match(body.request.codex_payload.plan, /workspace_members/)
+  }
+})
+
+test('dashboard resolves the authoritative pending Ping through the active Pod', async () => {
+  const setup = app()
+  const pairing = await setup.app.request('/v1/pod/pairing-sessions', { method: 'POST' })
+  const { pod_token: token } = await pairing.json()
+  const response = await setup.app.request(`/v1/requests/${request.id}/decision`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      outcome: 'approved',
+      idempotency_key: '00000000-0000-4000-8000-000000000003',
+    }),
+  })
+
+  assert.equal(response.status, 200)
+  assert.equal((await response.json()).decision.outcome, 'approved')
+  assert.equal(setup.store.decision?.outcome, 'approved')
+  const first = await setup.app.request('/v1/pod/requests/current', { headers: { Authorization: `Bearer ${token}` } })
+  const second = await setup.app.request('/v1/pod/requests/current', { headers: { Authorization: `Bearer ${token}` } })
+  assert.equal((await first.json()).decision_animation, 'approved')
+  assert.equal((await second.json()).decision_animation, null)
 })
 
 test('Pod polls and resolves the exact current request', async () => {
@@ -862,6 +1056,7 @@ test('Pod polls and resolves the exact current request', async () => {
     left: ['app:github'], right: ['app:gmail'], down: ['app:codex'],
   })
   assert.equal(currentBody.request_screen, 'down')
+  assert.equal('screen_items' in currentBody, false)
 
   const decision = await api.request(`/v1/pod/requests/${request.id}/decision`, {
     method: 'POST',
@@ -897,7 +1092,7 @@ test('Pod receives an authenticated hash-bound GitHub presentation', async () =>
   setup.store.pingPresentation = {
     actionHash: request.payload_hash,
     encryptedDraft: setup.connections.encryptPrivatePayload({
-      kind: 'github_pr_v1', context: 'podex/api · feature → main', facts: [['MERGE', 'Squash']],
+      kind: 'github_pr_v1', context: 'cloudy/api · feature → main', facts: [['MERGE', 'Squash']],
       summary: 'Verified GitHub facts.', glance_details: [], details: [], ai_available: false,
     }),
   }

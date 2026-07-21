@@ -1,4 +1,5 @@
 import { AiSettingsForm } from "@/components/dashboard/ai-settings-form";
+import { DemoModeToggle } from "@/components/dashboard/demo-mode-toggle";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { apiFetch } from "@/lib/api";
 import type { AiSettings } from "@/types/api";
@@ -16,7 +17,7 @@ export default async function SettingsPage() {
     <div className="mx-auto w-full max-w-5xl px-6 py-12 md:px-10 md:py-16">
       <header className="max-w-3xl border-b border-border pb-10">
         <h1 className="text-[clamp(2.5rem,6vw,4.5rem)] leading-none tracking-[-0.04em]">
-          Choose the model behind Podex.
+          Choose the model behind Cloudy.
         </h1>
         <p className="mt-5 max-w-2xl text-base leading-7 text-muted-foreground">
           Use OpenAI, Cerebras, OpenRouter, Anthropic, or another compatible API.
@@ -57,6 +58,16 @@ export default async function SettingsPage() {
           </div>
           <ThemeToggle />
         </div>
+      </section>
+
+      <section className="grid gap-8 border-t border-border py-10 md:grid-cols-[minmax(0,0.7fr)_minmax(22rem,1.3fr)] md:gap-16">
+        <div>
+          <h2 className="font-sans text-lg font-medium">Presentation</h2>
+          <p className="mt-2 max-w-sm leading-6 text-muted-foreground">
+            Turn on a safe, local walkthrough for showing Cloudy to someone else.
+          </p>
+        </div>
+        <DemoModeToggle />
       </section>
     </div>
   );

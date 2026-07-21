@@ -8,7 +8,7 @@ export function startRuntimeLoop(
   store: Store & RuntimeStore,
   connections: ConnectionService,
   telegramConfig?: { apiId: number; apiHash: string },
-  workerId = process.env.PODEX_WORKER_ID?.slice(0, 160) || telegramWorkerId(),
+  workerId = process.env.CLOUDY_WORKER_ID?.slice(0, 160) || telegramWorkerId(),
 ) {
   const engine = new RuntimeEngine(store, connections)
   const telegram = telegramConfig

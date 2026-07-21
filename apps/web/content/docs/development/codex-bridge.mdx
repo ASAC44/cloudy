@@ -3,8 +3,8 @@ title: Codex bridge
 description: Pair a local Codex installation, expose selected workspaces, and send voice tasks from the Pod.
 ---
 
-The bridge connects Podex to a local Codex installation without uploading
-repository paths, Codex credentials, or source files to Podex. It talks to
+The bridge connects Cloudy to a local Codex installation without uploading
+repository paths, Codex credentials, or source files to Cloudy. It talks to
 `codex app-server` over local standard input and output, while the hosted API
 receives opaque workspace identifiers, labels, session status, and approval
 requests.
@@ -13,32 +13,31 @@ requests.
 
 - Node.js 20 or newer
 - Codex CLI 0.144.5 or newer, already signed in on the local computer
-- A running Podex API and access to the authenticated **Codex** dashboard page
+- A running Cloudy API and access to the authenticated **Codex** dashboard page
 
 ## Install and pair
 
 From the repository root:
 
 ```sh
-cp apps/bridge/.env.example apps/bridge/.env
 cd apps/bridge
 npm link
-podex-bridge pair http://localhost:3001
+cloudy-bridge pair http://localhost:3001
 ```
 
-For a hosted deployment, replace the local URL with the public Podex API
+For a hosted deployment, replace the local URL with the public Cloudy API
 origin. Enter the eight-character code printed by the command on the
 dashboard's **Codex → Pair bridge** dialog.
 
 The bridge stores its token and local workspace paths in
-`~/.config/podex/bridge.json` with mode `0600`. The token is scoped to that
+`~/.config/cloudy/bridge.json` with mode `0600`. The token is scoped to that
 bridge and can be revoked from the dashboard.
 
 ## Add a workspace
 
 ```sh
-podex-bridge add-workspace /absolute/path/to/repository
-podex-bridge status
+cloudy-bridge add-workspace /absolute/path/to/repository
+cloudy-bridge status
 ```
 
 Choose the workspace and an existing or new session on the Codex dashboard.
@@ -47,17 +46,13 @@ The selected target is where the Pod sends its next dictated task.
 Run the bridge in the foreground while testing:
 
 ```sh
-npm start
+cloudy-bridge run
 ```
-
-`npm start` loads `PODEX_API_URL` and the optional `PODEX_BRIDGE_HOME` from
-`apps/bridge/.env`. Direct `podex-bridge` commands accept the API URL as shown
-above and otherwise use the process environment.
 
 Once it is working, install the current user service on macOS or Linux:
 
 ```sh
-podex-bridge install-service
+cloudy-bridge install-service
 ```
 
 `uninstall-service` removes the background service but keeps the bridge
@@ -65,7 +60,7 @@ configuration. `remove-workspace` stops exposing one local repository.
 
 ## Pod workflow
 
-Hold both Pod buttons, speak a task, and release them. Podex uploads a mono
+Hold both Pod buttons, speak a task, and release them. Cloudy uploads a mono
 16 kHz WAV recording to the API, shows the transcript, and sends it only after
 you approve the transcript. Codex first plans in a read-only sandbox. The plan
 returns to the Pod for approval; implementation starts with workspace write
@@ -79,7 +74,7 @@ Voice transcription requires the official OpenAI provider and API base URL in
 **Settings**. Other supported AI providers can be used by the rule builder,
 but they do not enable Pod voice transcription.
 
-Codex prompts may also receive relevant Podex memory. Memory is user-owned
+Codex prompts may also receive relevant Cloudy memory. Memory is user-owned
 context shared with other integrations; it is not treated as instructions and
 does not bypass Codex or Pod approvals.
 
@@ -88,7 +83,7 @@ does not bypass Codex or Pod approvals.
 - `Codex CLI is not installed`: ensure `codex --version` works for the same
   user that runs the bridge.
 - `Codex 0.144.5 or newer is required`: update the local Codex CLI.
-- Bridge shown as offline: run `podex-bridge run` and inspect its error, then
+- Bridge shown as offline: run `cloudy-bridge run` and inspect its error, then
   verify the API URL and the bridge has not been revoked.
 - No workspace on the dashboard: add an absolute repository path and allow the
   next two-second bridge sync to complete.

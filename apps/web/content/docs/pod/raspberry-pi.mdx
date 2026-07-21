@@ -6,15 +6,15 @@ description: Provision, install, and verify the Pod runtime on a Raspberry Pi Ze
 ## Provision the Pi
 
 Flash Raspberry Pi OS Lite 64-bit with Raspberry Pi Imager. Configure Wi-Fi,
-hostname, a `podex` user, and public-key SSH access in Imager. After boot:
+hostname, a `cloudy` user, and public-key SSH access in Imager. After boot:
 
 ```sh
 sudo apt update
 sudo apt full-upgrade
 sudo apt install alsa-utils cage python3-venv python3-pip
-sudo usermod -a -G input,render,video,gpio podex
-sudo mkdir -p /opt/podex-pod /var/lib/podex-pod
-sudo chown -R podex:podex /opt/podex-pod /var/lib/podex-pod
+sudo usermod -a -G input,render,video,gpio cloudy
+sudo mkdir -p /opt/cloudy-pod /var/lib/cloudy-pod
+sudo chown -R cloudy:cloudy /opt/cloudy-pod /var/lib/cloudy-pod
 python3 --version # must report Python 3.13.x
 ```
 
@@ -25,55 +25,128 @@ Configure the selected HDMI/KMS display and I²C capacitive touch controller
 using its current Raspberry Pi OS instructions. Do not install a vendor OS
 image or legacy framebuffer-copy stack when a KMS/DRM driver is available.
 
+### SPI ILI9341 and XPT2046 prototype
+
+For a write-only 320×240 ILI9341-compatible panel that has no usable DRM
+overlay, Cloudy can scale its native 640×480 renderer directly into the Linux
+RGB565 framebuffer. With LCD CS on SPI0 CE0, D/C on GPIO25, reset on GPIO24,
+touch CS on SPI0 CE1, and touch IRQ on GPIO17, add:
+
+```ini title="/boot/firmware/config.txt"
+dtparam=spi=on
+dtoverlay=fbtft,spi0-0,ili9341,reset_pin=24,dc_pin=25,rotate=90,speed=16000000
+dtoverlay=ads7846,cs=1,penirq=17,penirq_pull=2,xohms=100,pmax=255
+```
+
+Then run the Pod without Cage:
+
+```sh
+sudo sh -c 'TERM=linux setterm --cursor off < /dev/tty1 > /dev/tty1'
+CLOUDY_SIMULATOR=0 \
+CLOUDY_FRAMEBUFFER=auto \
+CLOUDY_TOUCH_DEVICE=auto \
+CLOUDY_BUTTONS=0 \
+.venv/bin/python -m cloudy_pod
+```
+
+For a persistent SPI deployment, install the direct framebuffer service
+override during the service setup below.
+
+Touch coordinates come from the kernel-reported axis ranges. If the physical
+orientation differs, set `CLOUDY_TOUCH_SWAP_XY=1`, `CLOUDY_TOUCH_INVERT_X=1`, or
+`CLOUDY_TOUCH_INVERT_Y=1` as needed. The XPT2046 interrupt wire is required;
+without `T_IRQ` connected to GPIO17, Linux exposes the device but reports no
+touches. Omit `CLOUDY_BUTTONS=0` after wiring the GPIO5/6 approval buttons and
+installing a supported gpiozero pin backend.
+
 ## Copy and install
+
+For an already-provisioned Pod, deploy runtime updates from the repository root
+with one command:
+
+```sh
+./scripts/deploy-pod.sh
+```
+
+Pass a different SSH destination when needed:
+
+```sh
+./scripts/deploy-pod.sh cloudy@192.168.1.50
+```
+
+The script syncs only the Pod runtime and dependency manifests, reinstalls the
+Python package only when those manifests change, restarts `cloudy-pod`, and
+fails if the service does not return to an active state. It does not overwrite
+the Pod token, settings, or `/etc/cloudy-pod.env`.
+
+Use the manual steps below for the first installation.
 
 From the development computer:
 
 ```sh
-rsync -az apps/pod/ podex@podex.local:/opt/podex-pod/
-ssh podex@podex.local '
-  cd /opt/podex-pod &&
+rsync -az apps/pod/ cloudy@cloudy.local:/opt/cloudy-pod/
+ssh cloudy@cloudy.local '
+  cd /opt/cloudy-pod &&
   python3 -m venv .venv &&
   .venv/bin/python -m pip install -c requirements.lock .
 '
-scp apps/pod/deploy/podex-pod.service podex@podex.local:/tmp/
+scp apps/pod/deploy/cloudy-pod.service cloudy@cloudy.local:/tmp/
+scp apps/pod/deploy/cloudy-pod-spi.conf cloudy@cloudy.local:/tmp/
 ```
 
-On the Pi, create `/etc/podex-pod.env`:
+On the Pi, create `/etc/cloudy-pod.env`:
 
 ```dotenv
-PODEX_API_URL=https://your-api-domain.example
-PODEX_STATE_DIR=/var/lib/podex-pod
-PODEX_APPROVE_PIN=5
-PODEX_REJECT_PIN=6
-PODEX_IDLE_ANIMATION_SECONDS=30
+CLOUDY_API_URL=https://your-api-domain.example
+CLOUDY_STATE_DIR=/var/lib/cloudy-pod
+CLOUDY_APPROVE_PIN=5
+CLOUDY_REJECT_PIN=6
 ```
 
 Then install and start the kiosk service:
 
 ```sh
-sudo install -m 0644 /tmp/podex-pod.service /etc/systemd/system/podex-pod.service
-sudo chmod 0600 /etc/podex-pod.env
+sudo install -m 0644 /tmp/cloudy-pod.service /etc/systemd/system/cloudy-pod.service
+sudo chmod 0600 /etc/cloudy-pod.env
+```
+
+SPI framebuffer installations additionally run:
+
+```sh
+sudo mkdir -p /etc/systemd/system/cloudy-pod.service.d
+sudo install -m 0644 /tmp/cloudy-pod-spi.conf \
+  /etc/systemd/system/cloudy-pod.service.d/spi.conf
+```
+
+Finish the installation and start the service:
+
+```sh
 sudo systemctl daemon-reload
-sudo systemctl enable --now podex-pod
-journalctl -u podex-pod -f
+sudo systemctl enable --now cloudy-pod
+journalctl -u cloudy-pod -f
 ```
 
 The service runs Cage directly on tty1, restarts after failures, and launches
 the same pygame code used by the simulator. The Pod API token remains on the
 Pi; Supabase and integration secrets never do.
 
+The SPI override replaces Cage with direct RGB565 framebuffer output. Omit the
+override for a KMS/DRM display. Paired Pods receive metadata-only realtime
+invalidations over SSE and then fetch a complete authenticated snapshot. A
+10-second degraded poll and 90-second connected safety refresh cover proxy,
+Wi-Fi, or Realtime interruptions.
+
 Swipe up from a feed to open Quick Settings. Changes persist in
-`PODEX_STATE_DIR/settings.json`. Brightness currently dims the rendered UI;
+`CLOUDY_STATE_DIR/settings.json`. Brightness currently dims the rendered UI;
 volume uses the native ALSA `Master` control through `amixer`. Connectivity,
-reduced motion, and the idle-animation timeout are configurable from the same
-touchscreen list.
+and reduced motion are configurable from the same touchscreen list.
 
 ## Hardware acceptance
 
 Before treating the image as production-ready, verify:
 
-- 640×480 landscape output, color, brightness, rotation, and screen blanking.
+- Native 640×480 KMS output or scaled 320×240 SPI output, including color,
+  brightness, rotation, and screen blanking.
 - Touch coordinates, swipe direction, and physical text/button legibility.
 - GPIO5 Approve and GPIO6 Reject wiring, pull-ups, debounce, and enclosure fit.
 - Microphone capture with `arecord`: mono, 16 kHz, 16-bit PCM WAV, including

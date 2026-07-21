@@ -19,7 +19,7 @@ const DEFAULT_NAV_ITEMS: Record<string, NavItem> = {
   "#use-cases": { name: "Use cases" },
   "#features": { name: "Features" },
   "/docs": { name: "Docs" },
-  "https://github.com/ASAC44/podex": { name: "GitHub" },
+  "https://github.com/ASAC44/cloudy": { name: "GitHub" },
 };
 
 export function MorphicNavbar({

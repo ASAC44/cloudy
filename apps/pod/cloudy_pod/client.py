@@ -41,7 +41,7 @@ class ApiClient:
                 message = "API request failed"
             raise ApiError(error.code, message) from error
         except (URLError, TimeoutError, OSError) as error:
-            raise ApiError(0, "Podex is unreachable") from error
+            raise ApiError(0, "Cloudy is unreachable") from error
 
     def start_pairing(self) -> dict[str, Any]:
         return self._request("POST", "/v1/pod/pairing-sessions")
@@ -51,6 +51,33 @@ class ApiClient:
 
     def current_request(self, token: str) -> dict[str, Any]:
         return self._request("GET", "/v1/pod/requests/current", token)
+
+    def pod_events(self, token: str):
+        request = Request(
+            f"{self.base_url}/v1/pod/events",
+            headers={"Accept": "text/event-stream", "Authorization": f"Bearer {token}"},
+            method="GET",
+        )
+        try:
+            with urlopen(request, timeout=35) as response:
+                event = None
+                for raw_line in response:
+                    line = raw_line.decode("utf-8").rstrip("\r\n")
+                    if line.startswith(":"):
+                        continue
+                    if line.startswith("event:"):
+                        event = line[6:].strip()
+                    elif not line and event:
+                        yield event
+                        event = None
+        except HTTPError as error:
+            try:
+                message = json.loads(error.read()).get("error", "Pod events unavailable")
+            except (json.JSONDecodeError, AttributeError):
+                message = "Pod events unavailable"
+            raise ApiError(error.code, message) from error
+        except (URLError, TimeoutError, OSError) as error:
+            raise ApiError(0, "Cloudy is unreachable") from error
 
     def decide(
         self,
@@ -72,11 +99,11 @@ class ApiClient:
         )
 
     def transcribe(self, token: str, path: str) -> dict[str, Any]:
-        boundary = f"----podex{uuid.uuid4().hex}"
+        boundary = f"----cloudy{uuid.uuid4().hex}"
         with open(path, "rb") as recording:
             audio = recording.read()
         body = (
-            f"--{boundary}\r\nContent-Disposition: form-data; name=\"audio\"; filename=\"podex.wav\"\r\n"
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"audio\"; filename=\"cloudy.wav\"\r\n"
             "Content-Type: audio/wav\r\n\r\n"
         ).encode() + audio + f"\r\n--{boundary}--\r\n".encode()
         request = Request(
@@ -95,7 +122,7 @@ class ApiClient:
                 message = "Transcription failed"
             raise ApiError(error.code, message) from error
         except (URLError, TimeoutError, OSError) as error:
-            raise ApiError(0, "Podex is unreachable") from error
+            raise ApiError(0, "Cloudy is unreachable") from error
 
     def prompt(self, token: str, prompt: str, target_revision: int, idempotency_key: str, replace_request: dict[str, Any] | None = None, decision_idempotency_key: str | None = None) -> dict[str, Any]:
         body = {

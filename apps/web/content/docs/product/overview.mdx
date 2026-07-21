@@ -1,19 +1,19 @@
 ---
-title: How Podex works
+title: How Cloudy works
 description: The core human-in-the-loop interaction, hardware, and product principle.
 ---
 
-Podex is a pocket-sized human-in-the-loop Pod for approving, rejecting, or responding to actions proposed by AI agents and automated workflows without opening a phone or computer.
+Cloudy is a pocket-sized human-in-the-loop Pod for approving, rejecting, or responding to actions proposed by AI agents and automated workflows without opening a phone or computer.
 
 ## Core interaction
 
-An agent prepares an action and sends a decision request to Podex. The Pod shows the relevant context on its 2.8-inch screen. The user can:
+An agent prepares an action and sends a decision request to Cloudy. The Pod shows the relevant context on its 2.8-inch screen. The user can:
 
 - Press **Approve** to authorize the action.
 - Press **Reject** to stop the action.
 - Hold both buttons to dictate a response or instruction through the microphone.
 
-After approval, either the connected agent resumes or Podex's guarded API runtime delivers the exact configured provider action or workflow callback. Podex remains the authorization boundary: model output alone never permits execution.
+After approval, either the connected agent resumes or Cloudy's guarded API runtime delivers the exact configured provider action or workflow callback. Cloudy remains the authorization boundary: model output alone never permits execution.
 
 ## Pod hardware
 
@@ -69,13 +69,20 @@ profiles and broader context.
 ## Dashboard
 
 The web dashboard pairs Pods and Codex bridges, manages connections and AI
-settings, assigns one feed to each of three screens with a drag-and-drop Kanban
-board, builds dynamic Ping rules, issues automation keys, and shows decisions
-and rule activity. Screen 2 is the default; horizontal swipes open Screens 1
-and 3. A new notification opens its assigned feed and swipe-down reveals its
-details. Screen 2 remains visible by default; the mascot appears only after an
-inactivity delay.
+settings, assigns up to six feeds to each of three screens with a drag-and-drop
+Kanban board, builds dynamic Ping rules, issues automation keys, and shows
+decisions and rule activity. Moving an app attaches it to the destination
+without replacing its existing app subscriptions. Screen 2 is the default;
+horizontal swipes open Screens 1 and 3. Pings from all apps attached to a screen
+share the same queue instead of being grouped by app, so GitHub, Gmail, and
+GitHub arrivals appear in that sequence. Swipe-down reveals the active Ping's
+details. Any screen without an active Ping shows Cloudy immediately.
+
+When the paired Pod is online, **Play with Cloudy** on Home can trigger a
+one-shot Blink, Yawn, Sleep, or Jump mascot animation. The animation briefly
+takes over the display, then returns to the current screen without clearing a
+pending approval.
 
 ## Product principle
 
-Agents do the work. Podex keeps the user in control at the moment a decision matters.
+Agents do the work. Cloudy keeps the user in control at the moment a decision matters.

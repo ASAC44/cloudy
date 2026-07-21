@@ -14,7 +14,7 @@ export function compatibleVersion(value) {
   return true
 }
 
-export class PodexApi {
+export class CloudyApi {
   constructor(baseUrl, token = null, fetcher = fetch) {
     this.baseUrl = baseUrl.replace(/\/$/, '')
     this.token = token
@@ -29,7 +29,7 @@ export class PodexApi {
       signal: AbortSignal.timeout(30_000),
     })
     const result = response.status === 204 ? {} : await response.json()
-    if (!response.ok) throw new Error(result.error || `Podex returned ${response.status}`)
+    if (!response.ok) throw new Error(result.error || `Cloudy returned ${response.status}`)
     return result
   }
 }
@@ -53,7 +53,7 @@ export class AppServer {
       if (!this.stopping) this.onExit(error)
     })
     createInterface({ input: this.process.stdout }).on('line', (line) => this.receive(line))
-    await this.call('initialize', { clientInfo: { name: 'podex_bridge', title: 'Podex Bridge', version: '0.1.0' } })
+    await this.call('initialize', { clientInfo: { name: 'cloudy_bridge', title: 'Cloudy Bridge', version: '0.1.0' } })
     this.notify('initialized', {})
   }
 
@@ -90,7 +90,7 @@ export class Bridge {
     this.config = config
     this.config.threads ||= []
     this.onConfigChange = options.onConfigChange || (async () => {})
-    this.api = options.api || new PodexApi(config.apiUrl, config.token)
+    this.api = options.api || new CloudyApi(config.apiUrl, config.token)
     this.processInstanceId = randomUUID()
     this.pendingApprovals = new Map()
     this.pendingInteractions = new Map()
@@ -198,7 +198,7 @@ export class Bridge {
 
   async poll() {
     this.expireLocalInteractions()
-    const instanceHeader = { 'X-Podex-Bridge-Instance': this.processInstanceId }
+    const instanceHeader = { 'X-Cloudy-Bridge-Instance': this.processInstanceId }
     const { command } = await this.api.request('GET', '/v1/codex/bridge/commands', undefined, instanceHeader)
     if (!command) return
     try {
@@ -341,7 +341,7 @@ export class Bridge {
     const protocolId = `plan:${turnId}`
     this.plans.set(protocolId, { threadId, cwd, planText, repositoryState, expiresAt: Date.now() + 15 * 60_000 })
     local.status = 'waiting'
-    local.milestone = 'Plan ready for approval on Podex'
+    local.milestone = 'Plan ready for approval on Cloudy'
     await this.queueInteraction(`${this.processInstanceId}:${protocolId}`, {
       workspace_id: workspace.id, thread_id: remoteThread?.id || null, process_instance_id: this.processInstanceId,
       protocol_request_id: protocolId, kind: 'plan_review', payload: { plan: planText, codex_thread_id: threadId, turn_id: turnId, repository_state: repositoryState },

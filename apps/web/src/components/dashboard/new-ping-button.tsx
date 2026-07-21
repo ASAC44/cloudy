@@ -31,6 +31,7 @@ import {
   startConnectionOAuth,
 } from "@/app/(dashboard)/actions";
 import { ProviderLogo } from "@/components/dashboard/connections/provider-logo";
+import { DEMO_MODE_STORAGE_KEY } from "@/components/dashboard/demo-mode-toggle";
 import { humanizeRuleError, toggleValue } from "@/components/dashboard/rule-builder-chat-state";
 import {
   Attachment,
@@ -81,9 +82,64 @@ import type {
   RuleQuestion,
 } from "@/types/api";
 
-export const RULE_CHAT_SESSION_KEY = "podex:rule-builder:v2";
+export const RULE_CHAT_SESSION_KEY = "cloudy:rule-builder:v2";
 
 const noStoreSubscription = () => () => undefined;
+
+function readDemoMode() {
+  return typeof window !== "undefined" && localStorage.getItem(DEMO_MODE_STORAGE_KEY) === "on";
+}
+
+function subscribeDemoMode(onStoreChange: () => void) {
+  window.addEventListener("storage", onStoreChange);
+  return () => window.removeEventListener("storage", onStoreChange);
+}
+
+function demoSession(message?: string): RuleBuilderSession {
+  return {
+    id: "demo-sentry-datadog",
+    editing_rule_id: null,
+    completed_rule_id: null,
+    status: "open",
+    revision: 1,
+    expires_at: "2099-01-01T00:00:00.000Z",
+    messages: [
+      ...(message ? [{ role: "user" as const, content: message }] : []),
+      {
+        role: "assistant",
+        content: message
+          ? "I found Sentry and Datadog already connected. I’ll watch error rate, latency, and new exception patterns, then ping you when the signals look anomalous. Here’s the reviewable setup."
+          : "Demo mode is ready. Pick the Sentry and Datadog example below to preview a connected monitoring conversation.",
+      },
+    ],
+    reply: {
+      phase: message ? "review" : "needs_input",
+      message: message
+        ? "Sentry + Datadog are connected and ready to monitor production anomalies."
+        : "Choose a demo example to see how Cloudy handles connected observability data.",
+      questions: [],
+      connection_requirement: null,
+      draft: {
+        title: "Watch Sentry and Datadog for anomalies",
+        intent_summary: "Alert me when production error or latency signals look unusual.",
+        source_connection_id: "demo-observability",
+        capability_id: "demo-sentry-datadog-logs",
+        capability_name: "Sentry + Datadog logs",
+        capability_schema_hash: "demo",
+        capability_safety: "verified_read",
+        definition: {
+          scope: "production services",
+          match: "error spikes, latency regressions, or unusual exception patterns",
+          context: "Sentry issues and Datadog logs",
+          action: "send a Ping with the anomaly, likely cause, and supporting events",
+          cadence: "Every 10 minutes",
+        },
+        ready: Boolean(message),
+      },
+    },
+    capability_count: 2,
+  };
+}
 
 export function NewPingChat({
   podName,
@@ -107,6 +163,7 @@ export function NewPingChat({
     readStoredSession,
     () => "",
   );
+  const demoMode = useSyncExternalStore(subscribeDemoMode, readDemoMode, () => false);
   const resumeId = initialSessionId ?? (storedSessionId || undefined);
 
   return (
@@ -119,6 +176,7 @@ export function NewPingChat({
       resumeId={resumeId}
       editingRuleId={editingRuleId}
       resumeError={resumeError}
+      demoMode={demoMode}
     />
   );
 }
@@ -141,6 +199,7 @@ function RuleChatDialog({
   resumeId,
   editingRuleId,
   resumeError,
+  demoMode,
 }: {
   podName: string;
   userName: string;
@@ -149,6 +208,7 @@ function RuleChatDialog({
   resumeId?: string;
   editingRuleId?: string;
   resumeError: boolean;
+  demoMode: boolean;
 }) {
   const [open, setOpen] = useState(initialOpen);
   const [session, setSession] = useState<RuleBuilderSession | null>(null);
@@ -166,6 +226,10 @@ function RuleChatDialog({
 
   useEffect(() => {
     if (!open || session || loading.current) return;
+    if (demoMode) {
+      startTransition(() => setSession(demoSession()));
+      return;
+    }
     const currentGeneration = generation.current;
     const sessionId = resumeOnce.current;
     const ruleId = editingRuleOnce.current;
@@ -189,7 +253,7 @@ function RuleChatDialog({
       if (sessionId) sessionStorage.removeItem(RULE_CHAT_SESSION_KEY);
       if (initialOpen) window.history.replaceState(null, "", "/home");
     });
-  }, [initialOpen, loadAttempt, open, session]);
+  }, [demoMode, initialOpen, loadAttempt, open, session]);
 
   function sendTurn(inputValue?: string, answers?: Array<{ question_id: string; value: string | string[] }>) {
     if (!session || pending) return;
@@ -198,6 +262,10 @@ function RuleChatDialog({
     const optimistic = message ?? answers?.flatMap(({ value }) => Array.isArray(value) ? value : [value]).join(", ") ?? "";
     setError("");
     setInput("");
+    if (demoMode && message) {
+      setSession(demoSession(message));
+      return;
+    }
     setOutgoingMessage(optimistic);
     const currentGeneration = generation.current;
     startTransition(async () => {
@@ -234,6 +302,10 @@ function RuleChatDialog({
 
   function startWatching() {
     if (!session || pending) return;
+    if (demoMode) {
+      setComplete(true);
+      return;
+    }
     setError("");
     const currentGeneration = generation.current;
     startTransition(async () => {
@@ -305,7 +377,7 @@ function RuleChatDialog({
     && reply.phase !== "review",
   );
   const announcement = pending
-    ? session ? "Podex is thinking." : "Discovering connected capabilities."
+    ? session ? "Cloudy is thinking." : "Discovering connected capabilities."
     : complete
       ? `Your Ping is active and will ask ${podName} before any write.`
       : error || reply?.message || "Create a Ping.";
@@ -322,7 +394,7 @@ function RuleChatDialog({
       >
         <DialogTitle className="sr-only">Create a Ping</DialogTitle>
         <DialogDescription className="sr-only">
-          Describe what Podex should watch, answer clarifying questions, and start a reviewed automation.
+          Describe what Cloudy should watch, answer clarifying questions, and start a reviewed automation.
         </DialogDescription>
         <p className="sr-only" aria-live="polite">{announcement}</p>
 
@@ -334,7 +406,7 @@ function RuleChatDialog({
               </span>
               <div className="min-w-0">
                 <p className="truncate font-medium">{session?.editing_rule_id ? "Edit Ping" : "New Ping"}</p>
-                <p className="truncate text-caption text-muted-foreground">Tell Podex what to watch across your connections</p>
+                <p className="truncate text-caption text-muted-foreground">Tell Cloudy what to watch across your connections</p>
               </div>
             </div>
             <div className="flex items-center gap-1">
@@ -419,7 +491,7 @@ function RuleChatDialog({
                             onSend={(value) => sendTurn(undefined, [{ question_id: question.id, value }])}
                           />
                         ))}
-                        {showPingStarters ? <PingStarterPrompts disabled={pending} onSelect={sendTurn} /> : null}
+                        {showPingStarters ? <PingStarterPrompts demoMode={demoMode} disabled={pending} onSelect={sendTurn} /> : null}
                         {reply.connection_requirement ? (
                           <ConnectionRequirement
                             requirement={reply.connection_requirement}
@@ -452,7 +524,7 @@ function RuleChatDialog({
                           <Attachment state="processing" className="max-w-sm bg-background/60 motion-reduce:[&_.shimmer]:animate-none">
                             <AttachmentMedia><Spinner className="motion-reduce:animate-none" /></AttachmentMedia>
                             <AttachmentContent>
-                              <AttachmentTitle>Podex is thinking</AttachmentTitle>
+                              <AttachmentTitle>Cloudy is thinking</AttachmentTitle>
                               <AttachmentDescription>Turning your request into a safe, reviewable automation</AttachmentDescription>
                             </AttachmentContent>
                           </Attachment>
@@ -476,7 +548,7 @@ function RuleChatDialog({
                     onChange={(event) => setInput(event.target.value)}
                     onKeyDown={handleComposerKeyDown}
                     placeholder={reply?.questions.some(({ kind }) => kind === "text") ? "Type your answer…" : "Describe what should trigger a Ping…"}
-                    aria-label="Message Podex"
+                    aria-label="Message Cloudy"
                     autoFocus
                     rows={2}
                     disabled={!session || pending}
@@ -504,12 +576,15 @@ const PING_STARTERS = [
   "Watch for important emails from OpenAI",
 ];
 
-function PingStarterPrompts({ disabled, onSelect }: { disabled: boolean; onSelect: (message: string) => void }) {
+const DEMO_PING_STARTER = "Watch out for our Sentry and Datadog logs and let me know if you spot any anomaly";
+
+function PingStarterPrompts({ demoMode, disabled, onSelect }: { demoMode: boolean; disabled: boolean; onSelect: (message: string) => void }) {
+  const prompts = demoMode ? [...PING_STARTERS, DEMO_PING_STARTER] : PING_STARTERS;
   return (
     <div className="mt-6 border-y border-border py-4">
       <p className="mb-3 text-caption font-medium uppercase tracking-[0.12em] text-muted-foreground">Try an example</p>
       <div className="flex flex-col items-start gap-2">
-        {PING_STARTERS.map((prompt) => (
+        {prompts.map((prompt) => (
           <Button key={prompt} variant="ghost" className="h-auto w-full min-w-0 justify-start whitespace-normal px-0 py-1 text-left font-normal hover:bg-transparent hover:text-clay" disabled={disabled} onClick={() => onSelect(prompt)}>
             <ArrowUp className="size-3.5 rotate-45" aria-hidden="true" />
             {prompt}
@@ -532,7 +607,7 @@ function CapabilityEvidence({ session }: { session: RuleBuilderSession }) {
       {draft.capability_safety === "unannotated" ? (
         <div className="mt-2 flex items-start gap-2 text-amber-700 dark:text-amber-300">
           <CircleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-          This MCP does not declare the tool read-only. The definition can be saved, but Podex will not call it during setup.
+          This MCP does not declare the tool read-only. The definition can be saved, but Cloudy will not call it during setup.
         </div>
       ) : null}
     </div>
@@ -698,12 +773,12 @@ function AssistantMessage({ children }: { children: React.ReactNode }) {
     <Message className="items-start gap-3">
       <MessageAvatar className="self-start bg-transparent">
         <Avatar size="sm" className="size-7">
-          <AvatarImage src="/podex-mascot.png" alt="" />
+          <AvatarImage src="/cloudy-mascot.png" alt="" />
           <AvatarFallback>P</AvatarFallback>
         </Avatar>
       </MessageAvatar>
       <MessageContent className="min-w-0 max-w-2xl flex-1">
-        <MessageHeader className="px-0">Podex</MessageHeader>
+        <MessageHeader className="px-0">Cloudy</MessageHeader>
         <div className="text-sm leading-6">{children}</div>
       </MessageContent>
     </Message>

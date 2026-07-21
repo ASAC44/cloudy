@@ -16,7 +16,6 @@ export type Pod = {
 
 export type ScreenDirection = 'left' | 'right' | 'down'
 export type ScreenLayout = Record<ScreenDirection, string[]>
-
 export type ScreenItem = {
   id: string
   name: string
@@ -432,6 +431,7 @@ export interface Store {
   ): Promise<PairingStatus | null>
   claimPairing(codeHash: string, ownerId: string, name: string): Promise<Pod>
   authenticatePod(podId: string, tokenHash: string): Promise<{ id: string; ownerId: string; screenLayout: ScreenLayout } | null>
+  touchPod(podId: string): Promise<boolean>
   listPods(ownerId: string): Promise<Pod[]>
   updatePodScreenLayout(ownerId: string, podId: string, expectedRevision: number, layout: ScreenLayout): Promise<Pod>
   revokePod(ownerId: string, podId: string): Promise<boolean>

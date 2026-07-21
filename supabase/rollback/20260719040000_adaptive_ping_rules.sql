@@ -1,6 +1,6 @@
 select cron.unschedule(jobid)
 from cron.job
-where jobname = 'podex-purge-expired-rule-builder-sessions';
+where jobname = 'cloudy-purge-expired-rule-builder-sessions';
 
 drop function if exists public.purge_expired_rule_builder_sessions();
 drop function if exists public.commit_ping_rule_session(

@@ -1,4 +1,4 @@
-# Podex Web
+# Cloudy Web
 
 Setup-only Next.js application with Tailwind CSS v4 and the complete shadcn Base UI component set.
 

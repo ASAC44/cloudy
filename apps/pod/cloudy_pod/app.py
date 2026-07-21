@@ -7,10 +7,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+if os.getenv("CLOUDY_FRAMEBUFFER"):
+    os.environ.setdefault("SDL_VIDEODRIVER", "offscreen")
+
 import pygame
 
 from .client import ApiClient
 from .audio import ButtonChord, Recorder
+from .hardware import FramebufferOutput, TouchInput
 from .storage import Storage
 from .worker import PodWorker
 
@@ -25,20 +29,28 @@ GREEN = pygame.Color("#71c49b")
 AMBER = pygame.Color("#d9a45b")
 MASCOT_TOP = pygame.Color("#a991ff")
 MASCOT_BOTTOM = pygame.Color("#4f6dff")
-FONT_PATH = Path(__file__).with_name("fonts") / "GeistMono-Regular.ttf"
+FONT_DIR = Path(__file__).with_name("fonts")
+FONT_PATH = FONT_DIR / "Geist-Medium.ttf"
+MONO_FONT_PATH = FONT_DIR / "GeistMono-Regular.ttf"
 POD_TYPE_SCALE = {
-    "label": 14,
-    "body": 15,
-    "title": 26,
-    "idle": 32,
-    "display": 38,
-    "code": 52,
+    "label": 16,
+    "body": 19,
+    "review_body": 25,
+    "title": 28,
+    "notification_label": 22,
+    "notification_body": 29,
+    "notification_title": 34,
+    "detail_label": 22,
+    "detail_body": 29,
+    "idle": 34,
+    "display": 40,
+    "code": 54,
 }
 GITHUB_DEMO_REQUEST = {
     "id": "demo-github-pr",
     "title": "#482 · Add payment retries",
     "source": "GitHub · PR merge",
-    "context": "podex/api · feature/payment-retries → main",
+    "context": "cloudy/api · feature/payment-retries → main",
     "summary": (
         "Replaces 30-second retries with backoff at 1, 5, and 30 minutes. "
         "Successful retries restore the order immediately. After a fourth failure, "
@@ -107,16 +119,16 @@ GITHUB_DEMO_REQUEST = {
     "expires_at": "2099-01-01T00:00:00+00:00",
 }
 EMAIL_CHAT_DEMO = {
-    "sender": "ava@northstar.studio",
+    "sender": "aniketyadav982@gmail.com",
     "time": "09:42",
     "subject": "Tomorrow's project review",
-    "summary": "Ava wants to move tomorrow's project review to 3:30 PM and needs a new calendar invite.",
+    "summary": "Aniket wants to move tomorrow's project review to 3:30 PM and needs a new calendar invite.",
     "email": (
         "Hi Vansh,\n\nCould we move tomorrow's project review to the afternoon? "
-        "3:30 PM works for me. If that works for you, please send an updated calendar invite.\n\nThanks,\nAva"
+        "3:30 PM works for me. If that works for you, please send an updated calendar invite.\n\nThanks,\nAniket"
     ),
     "response": (
-        "Absolutely — 3:30 PM works for me. I've moved the project review and sent an updated invite. "
+        "Absolutely, 3:30 PM works for me. I've moved the project review and sent an updated invite. "
         "See you tomorrow."
     ),
 }
@@ -126,6 +138,10 @@ DEFAULT_SCREEN_LAYOUT = {
     "right": ["app:gmail"],
     "down": ["app:codex"],
 }
+MASCOT_ACTION_DURATIONS = {"blink": 2.0, "yawn": 2.0, "sleep": 5.0, "jump": 2.4}
+DECISION_ANIMATION_SECONDS = 3.4
+
+
 def idle_pose(elapsed_seconds: float) -> tuple[float, float, bool]:
     """Return the idle mascot's vertical offset, size, and blink state."""
     float_offset = 7 * math.sin(elapsed_seconds * math.tau / 5)
@@ -135,7 +151,19 @@ def idle_pose(elapsed_seconds: float) -> tuple[float, float, bool]:
 
 
 def yawn_openness(elapsed_seconds: float) -> float:
-    return math.sin(math.pi * elapsed_seconds) if 0 <= elapsed_seconds < 1 else 0.0
+    return math.sin(math.pi * elapsed_seconds / 2) if 0 <= elapsed_seconds < 2 else 0.0
+
+
+def mascot_action_pose(action: str, elapsed_seconds: float) -> tuple[float, float, bool, float]:
+    if action == "blink":
+        return 0, 248, 0.3 <= elapsed_seconds < 1.5, 0
+    if action == "yawn":
+        return 0, 248, False, yawn_openness(elapsed_seconds)
+    if action == "sleep":
+        return 3 * math.sin(elapsed_seconds * math.tau / 2), 248, True, 0
+    progress = min(1, elapsed_seconds / MASCOT_ACTION_DURATIONS["jump"])
+    arc = math.sin(math.pi * progress)
+    return -70 * arc, 248 - 10 * arc, False, 0
 
 
 def high_res_mascot(blinking: bool) -> pygame.Surface:
@@ -196,10 +224,12 @@ class PodApp:
         self.worker = worker
         self.storage = storage
         self.simulator = simulator
+        self.framebuffer = FramebufferOutput.from_env()
+        self.touch = TouchInput.from_env()
         self.native_window: pygame.Window | None = None
         if simulator and pygame.display.get_driver() != "dummy":
             self.native_window = pygame.Window(
-                title="Podex · Virtual Pod",
+                title="Cloudy · Virtual Pod",
                 size=SIMULATOR_SIZE,
                 borderless=True,
                 allow_high_dpi=True,
@@ -208,25 +238,29 @@ class PodApp:
             self.window_size = self.native_window.size
         else:
             self.window = pygame.display.set_mode(
-                SIMULATOR_SIZE if simulator else LOGICAL_SIZE,
-                pygame.NOFRAME if simulator else pygame.FULLSCREEN,
+                SIMULATOR_SIZE if simulator else self.framebuffer.size if self.framebuffer else LOGICAL_SIZE,
+                pygame.NOFRAME if simulator or self.framebuffer else pygame.FULLSCREEN,
             )
             self.window_size = self.window.get_size()
-            pygame.display.set_caption("Podex · Virtual Pod")
-        self.render_scale = max(1, round(self.window.get_width() / LOGICAL_SIZE[0]))
+            pygame.display.set_caption("Cloudy · Virtual Pod")
+        self.render_scale = self.window.get_width() / LOGICAL_SIZE[0]
         self.surface = pygame.Surface(
-            (LOGICAL_SIZE[0] * self.render_scale, LOGICAL_SIZE[1] * self.render_scale)
+            self.window_size
         )
         self.font = self._font(POD_TYPE_SCALE["body"])
-        self.small = self._font(POD_TYPE_SCALE["label"])
+        self.small = self._font(POD_TYPE_SCALE["label"], MONO_FONT_PATH)
         self.heading = self._font(POD_TYPE_SCALE["display"])
         self.idle_font = self._font(POD_TYPE_SCALE["idle"])
         self.review_title = self._font(POD_TYPE_SCALE["title"])
-        self.review_body = self.font
-        self.review_detail = self.font
+        self.review_body = self._font(POD_TYPE_SCALE["review_body"])
+        self.review_detail = self._font(POD_TYPE_SCALE["detail_body"])
         self.review_label = self.small
-        self.code_font = self._font(POD_TYPE_SCALE["code"])
-        self.demo_mode = os.getenv("PODEX_DEMO", "")
+        self.notification_title = self._font(POD_TYPE_SCALE["notification_title"])
+        self.notification_body = self._font(POD_TYPE_SCALE["notification_body"])
+        self.notification_label = self._font(POD_TYPE_SCALE["notification_label"], MONO_FONT_PATH)
+        self.detail_label = self._font(POD_TYPE_SCALE["detail_label"], MONO_FONT_PATH)
+        self.code_font = self._font(POD_TYPE_SCALE["code"], MONO_FONT_PATH)
+        self.demo_mode = os.getenv("CLOUDY_DEMO", "")
         self.demo = self.demo_mode in ("github-pr", "email-chat")
         saved_request = storage.request()
         if self.demo_mode == "email-chat":
@@ -249,24 +283,21 @@ class PodApp:
         saved_settings = storage.settings() or {}
         brightness = saved_settings.get("brightness", 100)
         volume = saved_settings.get("volume", 50)
-        idle_seconds = saved_settings.get("idle_animation_seconds", os.getenv("PODEX_IDLE_ANIMATION_SECONDS", "30"))
         self.brightness = brightness if isinstance(brightness, int) and 10 <= brightness <= 100 else 100
         self.volume = volume if isinstance(volume, int) and 0 <= volume <= 100 else 50
-        self.reduce_motion = saved_settings.get("reduce_motion") if isinstance(saved_settings.get("reduce_motion"), bool) else os.getenv("PODEX_REDUCED_MOTION") == "1"
-        try:
-            parsed_idle_seconds = float(idle_seconds)
-            self.idle_animation_seconds = parsed_idle_seconds if math.isfinite(parsed_idle_seconds) and parsed_idle_seconds >= 0 else 30
-        except (TypeError, ValueError):
-            self.idle_animation_seconds = 30
+        self.reduce_motion = saved_settings.get("reduce_motion") if isinstance(saved_settings.get("reduce_motion"), bool) else os.getenv("CLOUDY_REDUCED_MOTION") == "1"
         self.last_interaction_at = time.monotonic()
         self.dragging = False
+        self.needs_render = True
         self.offline = False
         self.result_until = 0.0
-        self.yawn_started: float | None = None
+        self.result_started = 0.0
+        self.pending_request_event: dict[str, Any] | None = None
+        self.mascot_action: str | None = None
+        self.mascot_action_started = 0.0
         self.buttons: list[Any] = []
         self.codex: dict[str, Any] = {}
         self.screen_layout = DEFAULT_SCREEN_LAYOUT
-        self.screen_items: dict[str, dict[str, Any]] = {}
         self.screen = "home"
         self.notification_screen = "home"
         self.quick_settings = False
@@ -277,13 +308,13 @@ class PodApp:
         self.chord = ButtonChord(self.choose, self.start_recording, self.stop_recording)
         self.wrap_cache: dict[tuple[int, str, int, int | None], list[str]] = {}
         self.idle_mascots = (high_res_mascot(False), high_res_mascot(True))
-        self.idle_stage = pygame.Surface((280 * self.render_scale,) * 2, pygame.SRCALPHA)
+        self.idle_stage = pygame.Surface((round(280 * self.render_scale),) * 2, pygame.SRCALPHA)
         self.yawn_mouth = pygame.Surface((128, 128), pygame.SRCALPHA)
         pygame.draw.ellipse(self.yawn_mouth, BACKGROUND, self.yawn_mouth.get_rect())
         self._apply_volume()
 
-    def _font(self, size: int) -> pygame.font.Font:
-        return pygame.font.Font(FONT_PATH, size * self.render_scale)
+    def _font(self, size: int, path: Path = FONT_PATH) -> pygame.font.Font:
+        return pygame.font.Font(path, max(1, round(size * self.render_scale)))
 
     def _point(self, x: float, y: float) -> tuple[int, int]:
         return round(x * self.render_scale), round(y * self.render_scale)
@@ -295,14 +326,14 @@ class PodApp:
         self.surface.blit(image, self._point(x, y))
 
     def _line(self, color: pygame.Color, start: tuple[float, float], end: tuple[float, float]) -> None:
-        pygame.draw.line(self.surface, color, self._point(*start), self._point(*end), self.render_scale)
+        pygame.draw.line(self.surface, color, self._point(*start), self._point(*end), max(1, round(self.render_scale)))
 
     def _circle(self, color: pygame.Color, center: tuple[float, float], radius: float) -> None:
         pygame.draw.circle(self.surface, color, self._point(*center), round(radius * self.render_scale))
 
     def _feed_icon(self, feed_id: str, x: int, y: int) -> None:
         color = MUTED
-        width = self.render_scale
+        width = max(1, round(self.render_scale))
         rect = lambda left, top, wide, high: self._rect(x + left, y + top, wide, high)
         point = lambda left, top: self._point(x + left, y + top)
         line = lambda start, end: pygame.draw.line(self.surface, color, point(*start), point(*end), width)
@@ -341,12 +372,12 @@ class PodApp:
                 self._circle(color, (x + center[0], y + center[1]), 2)
 
     def start_gpio(self) -> None:
-        if self.simulator:
+        if self.simulator or os.getenv("CLOUDY_BUTTONS", "1") == "0":
             return
         from gpiozero import Button
 
-        approve = Button(int(os.getenv("PODEX_APPROVE_PIN", "5")), pull_up=True, bounce_time=0.05)
-        reject = Button(int(os.getenv("PODEX_REJECT_PIN", "6")), pull_up=True, bounce_time=0.05)
+        approve = Button(int(os.getenv("CLOUDY_APPROVE_PIN", "5")), pull_up=True, bounce_time=0.05)
+        reject = Button(int(os.getenv("CLOUDY_REJECT_PIN", "6")), pull_up=True, bounce_time=0.05)
         approve.when_pressed = lambda: self.chord.press("approve")
         approve.when_released = lambda: self.chord.release("approve")
         reject.when_pressed = lambda: self.chord.press("reject")
@@ -354,6 +385,7 @@ class PodApp:
         self.buttons = [approve, reject]
 
     def choose(self, outcome: str) -> None:
+        self.needs_render = True
         self.last_interaction_at = time.monotonic()
         if self.demo_mode == "email-chat":
             if self.state == "email_chat":
@@ -368,6 +400,16 @@ class PodApp:
             return
         if self.state == "transcript":
             if outcome == "approved":
+                revision_request = self.voice_revision_request
+                if revision_request and revision_request.get("action_payload", {}).get("mock_type") == "codex":
+                    codex_payload = {**revision_request.get("codex_payload", {}), "revision_note": self.transcript}
+                    self.request = {**revision_request, "codex_payload": codex_payload}
+                    self.transcript = ""
+                    self.voice_revision_request = None
+                    self.review_page = 1
+                    self.detail_scroll = 0
+                    self.state = "request"
+                    return
                 target = self.codex.get("target") or {}
                 revision = target.get("revision")
                 if not revision:
@@ -383,7 +425,7 @@ class PodApp:
                 self.voice_revision_request = None
             return
         if self.state == "idle" and outcome == "approved":
-            self.yawn_started = time.monotonic()
+            self.play_mascot_action("yawn")
             return
         if self.state != "request" or self.offline or not self.request:
             return
@@ -395,6 +437,7 @@ class PodApp:
         self.worker.decide(self.request, outcome)
 
     def start_recording(self) -> None:
+        self.needs_render = True
         self.last_interaction_at = time.monotonic()
         if self.demo or self.offline or self.state in ("pairing", "startup", "submitting", "transcribing"):
             return
@@ -408,6 +451,7 @@ class PodApp:
             self.message = "Microphone unavailable"
 
     def stop_recording(self) -> None:
+        self.needs_render = True
         if self.state != "recording":
             return
         path = self.recorder.stop()
@@ -416,6 +460,7 @@ class PodApp:
             self.state = "transcribing"
 
     def toggle_offline(self) -> None:
+        self.needs_render = True
         self.offline = not self.offline
         self.worker.set_offline(self.offline)
         if self.offline:
@@ -427,6 +472,7 @@ class PodApp:
                 event = self.worker.events.get_nowait()
             except queue.Empty:
                 return
+            self.needs_render = True
             kind = event["event"]
             if kind == "pairing":
                 self.pairing_code = event["pairing_code"]
@@ -439,6 +485,9 @@ class PodApp:
                 self.settings_slider = None
                 self.last_interaction_at = time.monotonic()
             elif kind == "request":
+                if self.state in ("approved", "rejected") and time.monotonic() < self.result_until:
+                    self.pending_request_event = event
+                    continue
                 self.request = event["request"]
                 direction = event.get("request_screen", "down")
                 self.notification_screen = "home" if direction == "down" else direction
@@ -454,13 +503,18 @@ class PodApp:
                 self.state = "request"
             elif kind == "decided":
                 self.state = event["outcome"]
+                self.request = None
                 self.screen = "home"
-                self.result_until = time.monotonic() + 1.3
+                self.result_started = time.monotonic()
+                self.result_until = self.result_started + DECISION_ANIMATION_SECONDS
             elif kind == "codex":
                 self.codex = event["codex"]
             elif kind == "screen_layout":
                 self.screen_layout = event["screen_layout"]
-                self.screen_items = {item["id"]: item for item in event.get("screen_items", [])}
+            elif kind == "mascot_action":
+                self.play_mascot_action(event["action"])
+            elif kind == "screen_navigation":
+                self.navigate_screen(event["direction"])
             elif kind == "transcript":
                 self.transcript = event["transcript"]
                 self.wrap_cache.clear()
@@ -473,6 +527,7 @@ class PodApp:
             elif kind == "reconnecting":
                 self.state = "startup"
                 self.message = "Reconnecting…"
+
             elif kind == "revoked":
                 self.request = None
                 self.state = "revoked"
@@ -481,10 +536,47 @@ class PodApp:
                 self.state = "error"
                 self.message = event["message"]
 
+    def _complete_decision_result(self) -> None:
+        self.result_until = 0
+        self.state = "idle"
+        if self.pending_request_event:
+            self.worker.events.put(self.pending_request_event)
+            self.pending_request_event = None
+        self.needs_render = True
+
+    def navigate_screen(self, direction: str) -> None:
+        if self.state not in ("idle", "request") or self.quick_settings:
+            if direction == "down" and self.quick_settings:
+                self.quick_settings = False
+                self.last_interaction_at = time.monotonic()
+            return
+        active_notification = self.state == "request" and self.screen == self.notification_screen
+        details_open = self.review_page == 1 or bool(self.review_transition and self.review_transition[2] == 1)
+        if direction == "left":
+            self.screen = "home" if self.screen == "right" else "left" if self.screen == "home" else self.screen
+        elif direction == "right":
+            self.screen = "home" if self.screen == "left" else "right" if self.screen == "home" else self.screen
+        elif direction == "up":
+            if active_notification:
+                if self.review_page == 0:
+                    self._show_review_page(1)
+            else:
+                self.quick_settings = True
+        elif direction == "down":
+            if active_notification and self.review_page == 1:
+                self._show_review_page(0)
+            else:
+                self.quick_settings = False
+        elif direction == "scroll_up" and active_notification and details_open:
+            self._scroll_detail_by(-240)
+        elif direction == "scroll_down" and active_notification and details_open:
+            self._scroll_detail_by(240)
+        self.last_interaction_at = time.monotonic()
+
     def _text(self, value: str, x: int, y: int, font: pygame.font.Font | None = None, color: pygame.Color = INK) -> int:
         selected = font or self.font
         image = selected.render(value, True, color)
-        self._blit(image, x, y)
+        self._blit(image, x - 20 if x <= 46 else x, y)
         return y + round(selected.get_linesize() / self.render_scale)
 
     def _wrapped(
@@ -498,6 +590,7 @@ class PodApp:
         max_lines: int | None = None,
     ) -> int:
         selected = font or self.font
+        width = width + 40 if x <= 46 else width
         key = (id(selected), value, width, max_lines)
         lines = self.wrap_cache.setdefault(
             key,
@@ -507,17 +600,84 @@ class PodApp:
             y = self._text(line, x, y, selected, color)
         return y
 
-    def _status(self, label: str, color: pygame.Color) -> None:
-        self._circle(color, (32, 27), 5)
-        self._text(label.upper(), 46, 15, self.small, MUTED)
-        self._line(DIVIDER, (24, 50), (616, 50))
+    def _status(self, label: str, color: pygame.Color, font: pygame.font.Font | None = None) -> None:
+        self._circle(color, (12, 27), 5)
+        self._text(label.upper(), 46, 13, font or self.small, MUTED)
+        self._line(DIVIDER, (6, 50), (634, 50))
+
+    def _render_decision_result(self, accepted: bool) -> None:
+        elapsed = time.monotonic() - self.result_started
+        progress = 1.0 if self.reduce_motion else min(1.0, elapsed / 0.75)
+        eased = 1 - (1 - progress) ** 3
+        color = GREEN if accepted else CLAY
+        flash = 0 if self.reduce_motion else max(0.0, 1 - elapsed / 0.28)
+        self.surface.fill(BACKGROUND.lerp(color, flash * 0.16))
+        self._status("Decision saved", color)
+        stroke = lambda start, end: pygame.draw.line(
+            self.surface,
+            color,
+            self._point(*start),
+            self._point(*end),
+            max(2, round(6 * self.render_scale)),
+        )
+
+        shake = 0 if accepted or self.reduce_motion else math.sin(elapsed * 38) * 12 * max(0, 1 - elapsed / 0.8)
+        center = (320 + shake, 190)
+        radius = 22 + 42 * eased
+        pygame.draw.circle(
+            self.surface,
+            color,
+            self._point(*center),
+            round(radius * self.render_scale),
+            max(2, round(5 * self.render_scale)),
+        )
+        if accepted:
+            if not self.reduce_motion:
+                for index in range(8):
+                    angle = index * math.tau / 8
+                    distance = 70 + 18 * eased
+                    self._circle(
+                        color,
+                        (center[0] + math.cos(angle) * distance, center[1] + math.sin(angle) * distance),
+                        2.5,
+                    )
+            check = min(1.0, max(0.0, (progress - 0.25) / 0.55))
+            start = (center[0] - 28, center[1])
+            middle = (center[0] - 8, center[1] + 20)
+            end = (center[0] + 32, center[1] - 25)
+            if check <= 0.34:
+                amount = check / 0.34
+                target = (
+                    start[0] + (middle[0] - start[0]) * amount,
+                    start[1] + (middle[1] - start[1]) * amount,
+                )
+                stroke(start, target)
+            else:
+                stroke(start, middle)
+                amount = (check - 0.34) / 0.66
+                target = (
+                    middle[0] + (end[0] - middle[0]) * amount,
+                    middle[1] + (end[1] - middle[1]) * amount,
+                )
+                stroke(middle, target)
+        else:
+            cross = 34 * min(1.0, max(0.0, (progress - 0.18) / 0.5))
+            stroke((center[0] - cross, center[1] - cross), (center[0] + cross, center[1] + cross))
+            stroke((center[0] + cross, center[1] - cross), (center[0] - cross, center[1] + cross))
+
+        title = self.heading.render("Approved" if accepted else "Rejected", True, color)
+        self.surface.blit(title, title.get_rect(center=self._point(320, 312)))
+        detail = self.small.render("Ready for the next Ping" if accepted else "Nothing was sent", True, MUTED)
+        self.surface.blit(detail, detail.get_rect(center=self._point(320, 362)))
 
     def render(self) -> pygame.Surface:
         self.surface.fill(BACKGROUND)
-        if self.state == "pairing":
+        if self._mascot_action_active():
+            self._render_idle(self.mascot_action)
+        elif self.state == "pairing":
             self._status("Ready to pair", AMBER)
             self._text("Pair your Pod", 36, 130, self.heading)
-            self._wrapped("Enter the code shown here in the Podex dashboard.", 36, 188, 270, self.font, MUTED)
+            self._wrapped("Enter the code shown here in the Cloudy dashboard.", 36, 188, 270, self.font, MUTED)
             code_image = self.code_font.render(self.pairing_code, True, INK)
             self.surface.blit(code_image, code_image.get_rect(center=self._point(480, 190)))
             self._wrapped("Expires after 10 minutes.", 386, 245, 200, self.small, MUTED)
@@ -534,7 +694,7 @@ class PodApp:
         elif self.state == "target_unavailable":
             self._status("Codex target unavailable", CLAY)
             self._text("Choose another session", 36, 180, self.heading)
-            self._wrapped("Open the Codex page in Podex and select an online workspace and session.", 38, 238, 560, self.font, MUTED)
+            self._wrapped("Open the Codex page in Cloudy and select an online workspace and session.", 38, 238, 560, self.font, MUTED)
         elif self.state in ("recording", "transcribing", "queued"):
             labels = {"recording": ("Listening", "Release both buttons to stop."), "transcribing": ("Transcribing", "Turning your voice into a Codex prompt."), "queued": ("Prompt queued", "Codex will prepare a plan first.")}
             title, detail = labels[self.state]
@@ -550,21 +710,7 @@ class PodApp:
             self._line(DIVIDER, (24, 420), (616, 420))
             self._text("Approve sends · Reject discards", 30, 438, self.small, MUTED)
         elif self.state in ("approved", "rejected"):
-            accepted = self.state == "approved"
-            self._status("Decision saved", GREEN if accepted else CLAY)
-            presentation = (self.request or {}).get("presentation") or {}
-            runtime_ping = bool(presentation)
-            self._text("Approved" if accepted else "Rejected", 36, 188, self.heading, GREEN if accepted else CLAY)
-            self._wrapped(
-                ("Merge queued for the exact reviewed commit." if accepted and presentation.get("kind") == "github_pr_v1"
-                 else "Approved for exact delivery." if accepted else "Nothing will be sent.")
-                if runtime_ping else "This was a test Ping. No external action was executed.",
-                38,
-                246,
-                560,
-                self.font,
-                MUTED,
-            )
+            self._render_decision_result(self.state == "approved")
         elif self.state == "revoked":
             self._status("Unpaired", CLAY)
             self._text("Pod access revoked", 36, 188, self.heading)
@@ -595,7 +741,7 @@ class PodApp:
         self._circle(CLAY if offline or expired else AMBER, (32, 27), 4)
         sender = presentation.get("sender") or "Unknown sender"
         time_label = presentation.get("time") or "Unknown time"
-        self._wrapped(f"{sender} · {time_label}", 46, 17, 560, self.review_label, MUTED, max_lines=1)
+        self._wrapped(f"{sender} · {time_label}", 46, 17, 560, self.notification_label, MUTED, max_lines=1)
         self._line(DIVIDER, (24, 50), (616, 50))
         self.surface.set_clip(self._rect(0, 52, 640, 428))
         glance_y, detail_y = self._review_page_offsets()
@@ -610,16 +756,14 @@ class PodApp:
         self._line(DIVIDER, (28, y), (612, y))
         response = presentation.get("response")
         self._wrapped(str(response or presentation.get("email") or "The email is unavailable."), 30, y + 24, 580, self.review_body, max_lines=6)
-        self._line(DIVIDER, (24, 410 + offset), (616, 410 + offset))
-        self._text("↓  Full email" + (" & response" if response else ""), 30, 432 + offset, self.review_label, MUTED)
 
     def _render_email_detail(self, presentation: dict[str, Any], offset: int) -> None:
-        y = self._text("Details", 30, 62 + offset - self.detail_scroll, self.review_label, MUTED)
-        y = self._wrapped(str(presentation.get("email") or "The original email is unavailable."), 30, y + 4, 580, self.review_detail)
+        y = self._text("Details", 46, 62 + offset - self.detail_scroll, self.notification_title)
+        y = self._wrapped(str(presentation.get("email") or "The original email is unavailable."), 46, y + 4, 560, self.review_detail)
         if presentation.get("response"):
             y += 20
             self._line(DIVIDER, (28, y), (612, y))
-            y = self._wrapped(str(presentation["response"]), 30, y + 20, 580, self.review_detail)
+            y = self._wrapped(str(presentation["response"]), 46, y + 20, 560, self.review_detail)
         content_bottom = y - offset + self.detail_scroll
         self.detail_scroll_limit = max(0, content_bottom + 18 - 474)
 
@@ -628,7 +772,7 @@ class PodApp:
         self._status("Reply sent" if sent else "Draft discarded", GREEN if sent else CLAY)
         self._text("Reply sent" if sent else "Nothing sent", 36, 174, self.heading, GREEN if sent else INK)
         self._wrapped(
-            "Ava received the reply and updated invite." if sent else "The draft was discarded. Ava did not receive a reply.",
+            "Aniket received the reply and updated invite." if sent else "The draft was discarded. Aniket did not receive a reply.",
             38,
             232,
             560,
@@ -638,61 +782,49 @@ class PodApp:
         self._line(DIVIDER, (24, 410), (616, 410))
         self._text("Press either button to replay", 30, 432, self.small, MUTED)
 
-    def _render_idle(self) -> None:
-        float_offset, size, blinking = idle_pose(pygame.time.get_ticks() / 1000)
+    def play_mascot_action(self, action: str) -> None:
+        self.mascot_action = action
+        self.mascot_action_started = time.monotonic()
+        self.needs_render = True
+
+    def _mascot_action_active(self) -> bool:
+        if not self.mascot_action:
+            return False
+        if time.monotonic() - self.mascot_action_started < MASCOT_ACTION_DURATIONS[self.mascot_action]:
+            return True
+        self.mascot_action = None
+        return False
+
+    def _render_idle(self, action: str | None = None) -> None:
+        mouth_openness = 0.0
+        if action:
+            elapsed = time.monotonic() - self.mascot_action_started
+            float_offset, size, blinking, mouth_openness = mascot_action_pose(action, elapsed)
+        else:
+            float_offset, size, blinking = idle_pose(pygame.time.get_ticks() / 1000)
         render_size = round(size * self.render_scale)
         mascot = pygame.transform.smoothscale(self.idle_mascots[blinking], (render_size, render_size))
-        if self.yawn_started is not None:
-            elapsed = time.monotonic() - self.yawn_started
-            openness = yawn_openness(elapsed)
-            if openness:
-                mouth_size = (round(render_size * 0.14), max(2, round(render_size * 0.15 * openness)))
-                mouth = pygame.transform.smoothscale(self.yawn_mouth, mouth_size)
-                mascot.blit(mouth, mouth.get_rect(center=(render_size // 2, round(render_size * 0.69))))
-            if elapsed >= 1:
-                self.yawn_started = None
+        if mouth_openness:
+            mouth_size = (round(render_size * 0.14), max(2, round(render_size * 0.15 * mouth_openness)))
+            mouth = pygame.transform.smoothscale(self.yawn_mouth, mouth_size)
+            mascot.blit(mouth, mouth.get_rect(center=(render_size // 2, round(render_size * 0.69))))
         self.idle_stage.fill((0, 0, 0, 0))
-        stage_center = self._point(140, 140 + float_offset)
+        stage_center = self._point(140, 140)
         self.idle_stage.blit(mascot, mascot.get_rect(center=stage_center))
-        self.surface.blit(self.idle_stage, self.idle_stage.get_rect(center=self._point(320, 202)))
+        self.surface.blit(self.idle_stage, self.idle_stage.get_rect(center=self._point(320, 202 + float_offset)))
 
-        label = self.idle_font.render("All caught up", True, INK)
+        if action == "sleep":
+            for label, x, y in (("z", 428, 172), ("Z", 464, 128), ("Z", 505, 78)):
+                self._text(label, x, y, self.heading if label == "Z" else self.font, MASCOT_TOP)
+
+        labels = {"blink": "Blink!", "yawn": "Big yawn", "sleep": "Shhh…", "jump": "Boing!"}
+        label = self.idle_font.render(labels.get(action, "All caught up"), True, INK)
         self.surface.blit(label, label.get_rect(center=self._point(320, 420)))
         hint = self.small.render("Swipe left or right", True, MUTED)
         self.surface.blit(hint, hint.get_rect(center=self._point(320, 460)))
 
     def _render_screen_layout(self) -> None:
-        if self.state == "idle" and self.idle_animation_seconds and time.monotonic() - self.last_interaction_at >= self.idle_animation_seconds:
-            self._render_idle()
-            return
-        direction = "down" if self.screen == "home" else self.screen
-        item_ids = self.screen_layout.get(direction, [])
-        labels = {
-            "left": "Screen 1 · Swipe left",
-            "down": "Screen 2 · Default",
-            "right": "Screen 3 · Swipe right",
-        }
-        inverse = {"left": "Swipe right for Screen 2", "right": "Swipe left for Screen 2", "down": "Waiting for a notification"}
-        self._status(labels[direction], GREEN)
-        self._text("Notification feed", 28, 72, self.review_title)
-        count = self.small.render(str(len(item_ids)), True, MUTED)
-        self.surface.blit(count, count.get_rect(topright=self._point(610, 78)))
-        if not item_ids:
-            self._text("Nothing attached", 30, 180, self.heading)
-            self._wrapped("Attach an app or MCP from the Podex dashboard.", 32, 238, 560, self.font, MUTED)
-        else:
-            y = 122
-            for item_id in item_ids[:1]:
-                item = self.screen_items.get(item_id, {})
-                provider = str(item.get("provider") or item_id.removeprefix("app:"))
-                name = str(item.get("name") or provider.replace("_", " ").title())
-                detail = str(item.get("detail") or "Setup required")
-                self._feed_icon(provider, 32, y + 1)
-                self._text(name, 64, y, self.font)
-                self._wrapped(detail, 300, y, 300, self.small, MUTED, 1)
-                self._line(DIVIDER, (28, y + 30), (612, y + 30))
-                y += 40
-        self._text(inverse[direction], 30, 448, self.small, MUTED)
+        self._render_idle()
 
     def _render_quick_settings(self) -> None:
         self._status("Quick settings", GREEN)
@@ -702,7 +834,6 @@ class PodApp:
             ("BRIGHTNESS", f"{self.brightness}%"),
             ("VOLUME", f"{self.volume}%"),
             ("MOTION", "Reduced" if self.reduce_motion else "Full"),
-            ("IDLE ANIMATION", "Off" if not self.idle_animation_seconds else f"After {self.idle_animation_seconds:g} seconds"),
         )
         y = 116
         for label, value in rows:
@@ -728,8 +859,6 @@ class PodApp:
             return
         if row == 3:
             self.reduce_motion = not self.reduce_motion
-        elif row == 4:
-            self.idle_animation_seconds = {0: 15, 15: 30, 30: 60, 60: 120, 120: 0}.get(self.idle_animation_seconds, 30)
         else:
             return
         self._save_settings()
@@ -751,7 +880,6 @@ class PodApp:
             "brightness": self.brightness,
             "volume": self.volume,
             "reduce_motion": self.reduce_motion,
-            "idle_animation_seconds": self.idle_animation_seconds,
         })
 
     def _apply_volume(self) -> None:
@@ -797,6 +925,12 @@ class PodApp:
         if presentation.get("kind") in ("email_reply_v1", "gmail_notification_v1"):
             self._render_email_review(presentation, offline, expired)
             return
+        if presentation.get("kind") == "codex_plan_v1":
+            if self.review_page == 1:
+                self._render_notification_details(offline, expired)
+            else:
+                self._render_codex_plan_request(presentation, offline, expired)
+            return
         if presentation:
             if self.review_page == 1:
                 self._render_notification_details(offline, expired)
@@ -822,14 +956,12 @@ class PodApp:
             self.surface,
             CLAY if risk == "HIGH" else AMBER,
             self._rect(30, y + 18, badge_width, 28),
-            border_radius=14 * self.render_scale,
+            border_radius=round(14 * self.render_scale),
         )
         self._blit(badge, 43, y + 23)
         y += 72
         y = self._wrapped(self.request["summary"], 30, y, 580)
         self.surface.set_clip(None)
-        self._line(DIVIDER, (24, 410), (616, 410))
-        self._text("Swipe down for details · Reject removes", 30, 432, self.small, MUTED)
 
         if offline or expired:
             pygame.draw.rect(self.surface, BACKGROUND, self._rect(0, 418, 640, 62))
@@ -839,30 +971,23 @@ class PodApp:
     def _render_ping_action_request(self, offline: bool, expired: bool) -> None:
         assert self.request is not None
         payload = self.request.get("presentation") or {}
-        label = "Expired" if expired else "Offline · read only" if offline else f"Ping 1 of {max(self.queue_size, 1)}"
-        self._status(label, CLAY if offline or expired else AMBER)
-        self.surface.set_clip(self._rect(0, 52, 640, 364))
-        y = 68 - self.scroll
-        y = self._wrapped(self.request.get("title", "Message needs you"), 30, y, 580, self.review_title)
-        y = self._wrapped(f"{payload.get('sender', self.request.get('source', 'Connected service'))} · {payload.get('destination', 'Approval')}", 30, y + 4, 580, self.review_label, MUTED)
-        self._line(DIVIDER, (30, y + 18), (610, y + 18))
-        y = self._text("INCOMING", 30, y + 34, self.review_label, MUTED)
-        y = self._wrapped(str(payload.get("excerpt", "A new event matched this Ping.")), 30, y + 8, 580, self.review_body)
-        draft = payload.get("proposed_reply")
-        if draft:
-            y = self._text("EXACT PROPOSED REPLY", 30, y + 26, self.review_label, CLAY)
-            y = self._wrapped(str(draft), 30, y + 8, 580, self.review_body)
+        accent = CLAY if offline or expired or self.request.get("risk") == "high" else AMBER
+        self.surface.set_clip(self._rect(0, 0, 640, 480))
+        self._circle(accent, (13, 35), 5)
+        y = self._wrapped(self.request.get("title", "Message needs you"), 46, 18, 560, self.notification_title, max_lines=2)
+        y = self._wrapped(f"{payload.get('sender', self.request.get('source', 'Connected service'))} · {payload.get('destination', 'Approval')}", 46, y + 2, 560, self.notification_label, MUTED, max_lines=1)
+        self._line(DIVIDER, (26, y + 14), (614, y + 14))
+        y = self._text("INCOMING", 46, y + 30, self.notification_label, MUTED)
+        y = self._wrapped(str(payload.get("excerpt", "A new event matched this Ping.")), 46, y + 6, 560, self.notification_body, max_lines=3)
+        action = payload.get("proposed_reply") or payload.get("recommended_action")
+        if action:
+            label = "EXACT PROPOSED REPLY" if payload.get("proposed_reply") else "RECOMMENDED ACTION"
+            y = self._text(label, 46, y + 20, self.notification_label, CLAY)
+            self._wrapped(str(action), 46, y + 6, 560, self.notification_body, max_lines=3)
         else:
-            y = self._text("NOTIFICATION ONLY", 30, y + 26, self.review_label, GREEN)
-            y = self._wrapped(str(payload.get("summary", "No external write will run.")), 30, y + 8, 580, self.review_body)
-        warnings = payload.get("warnings") or self.request.get("warnings") or []
-        if warnings:
-            y = self._text("WARNINGS", 30, y + 26, self.review_label, MUTED)
-            self._wrapped(" · ".join(map(str, warnings)), 30, y + 8, 580, self.small, MUTED)
+            y = self._text("WHAT APPROVAL DOES", 46, y + 20, self.notification_label, GREEN)
+            self._wrapped(str(payload.get("summary", "No external write will run.")), 46, y + 6, 560, self.notification_body, max_lines=3)
         self.surface.set_clip(None)
-        pygame.draw.rect(self.surface, BACKGROUND, self._rect(0, 410, 640, 70))
-        self._line(DIVIDER, (24, 410), (616, 410))
-        self._text("Swipe down for details · Reject removes", 30, 432, self.small, MUTED)
         if offline or expired:
             pygame.draw.rect(self.surface, BACKGROUND, self._rect(0, 410, 640, 70))
             self._line(DIVIDER, (24, 410), (616, 410))
@@ -871,9 +996,9 @@ class PodApp:
     def _render_notification_details(self, offline: bool, expired: bool) -> None:
         assert self.request is not None
         presentation = self.request.get("presentation") or {}
-        self._status("Notification details", CLAY if offline or expired else GREEN)
-        self.surface.set_clip(self._rect(0, 52, 640, 358))
-        y = self._text("Details", 30, 70 - self.detail_scroll, self.review_title)
+        self._status("Notification details", CLAY if offline or expired else GREEN, self.detail_label)
+        self.surface.set_clip(self._rect(0, 52, 640, 428))
+        y = self._text("Details", 46, 66 - self.detail_scroll, self.notification_title)
         for heading, value in (
             ("SUMMARY", self.request.get("summary", "")),
             ("DETAILS", self.request.get("details", "")),
@@ -883,14 +1008,29 @@ class PodApp:
             ("PROPOSED REPLY", presentation.get("proposed_reply", "")),
             ("WARNINGS", " · ".join(map(str, presentation.get("warnings") or self.request.get("warnings", [])))),
             ("FULL PLAN", (self.request.get("codex_payload") or {}).get("plan", "")),
+            ("DICTATED REVISION", (self.request.get("codex_payload") or {}).get("revision_note", "")),
         ):
             if value:
-                y = self._text(heading, 30, y + 18, self.small, MUTED)
-                y = self._wrapped(str(value), 30, y + 6, 580, self.review_body)
-        self.detail_scroll_limit = max(0, y + self.detail_scroll - 392)
+                y = self._text(heading, 46, y + 16, self.detail_label, MUTED)
+                y = self._wrapped(str(value), 46, y + 6, 560, self.review_detail)
+        self.detail_scroll_limit = max(0, y + self.detail_scroll - 462)
         self.surface.set_clip(None)
-        self._line(DIVIDER, (24, 410), (616, 410))
-        self._text("Swipe up for summary · Reject removes", 30, 432, self.small, MUTED)
+
+    def _render_codex_plan_request(self, presentation: dict[str, Any], offline: bool, expired: bool) -> None:
+        self._status("Codex plan", CLAY if offline or expired else GREEN)
+        self.surface.set_clip(self._rect(0, 52, 640, 386))
+        y = self._wrapped(str(presentation.get("title") or self.request["title"]), 28, 68, 584, self.review_title, max_lines=2)
+        y = self._wrapped(str(presentation.get("workspace") or "Cloudy workspace"), 30, y + 4, 580, self.small, MUTED)
+        self._line(DIVIDER, (30, y + 16), (610, y + 16))
+        y = self._text("SUMMARY", 30, y + 32, self.small, GREEN)
+        y = self._wrapped(str(presentation.get("summary") or self.request.get("summary") or "Codex prepared a plan for review."), 30, y + 8, 580, self.review_body, max_lines=6)
+        note = (self.request.get("codex_payload") or {}).get("revision_note")
+        if note:
+            y = self._text("DICTATED REVISION", 30, y + 14, self.small, CLAY)
+            self._wrapped(str(note), 30, y + 6, 580, self.review_body, max_lines=2)
+        self.surface.set_clip(None)
+        if not offline and not expired:
+            self._text("Hold both buttons to dictate a revision", 30, 450, self.small, MUTED)
 
     def _render_fact_request(self, offline: bool, expired: bool) -> None:
         assert self.request is not None
@@ -906,7 +1046,7 @@ class PodApp:
             self.surface,
             AMBER,
             self._rect(badge_x, 13, badge_width, 26),
-            border_radius=13 * self.render_scale,
+            border_radius=round(13 * self.render_scale),
         )
         self._blit(badge, badge_x + 10, 18)
 
@@ -952,13 +1092,13 @@ class PodApp:
 
     def _render_detail_page(self, offset: int) -> None:
         assert self.request is not None
-        y = self._text("Full review", 28, 70 + offset - self.detail_scroll, self.review_title)
-        y = self._text("#482 · podex/api", 30, y + 4, self.review_label, MUTED)
+        y = self._text("Full review", 46, 66 + offset - self.detail_scroll, self.notification_title)
+        y = self._text("#482 · cloudy/api", 46, y + 4, self.detail_label, MUTED)
         y += 14
         self._line(DIVIDER, (28, y), (612, y))
         for label, value in self.request.get("details", ()):
-            y = self._text(label, 30, y + 13, self.review_label, MUTED)
-            y = self._wrapped(value, 30, y + 4, 580, self.review_detail)
+            y = self._text(label, 46, y + 13, self.detail_label, MUTED)
+            y = self._wrapped(value, 46, y + 4, 560, self.review_detail)
         content_bottom = y - offset + self.detail_scroll
         self.detail_scroll_limit = max(0, content_bottom + 18 - 474)
 
@@ -1032,9 +1172,9 @@ class PodApp:
                     self.screen = "right" if delta_x > 0 else "left"
                 elif self.screen == "left" and delta_x > 0 or self.screen == "right" and delta_x < 0:
                     self.screen = "home"
-            elif active_notification and vertical and self.review_page == 0 and delta_y > 0:
+            elif active_notification and vertical and self.review_page == 0 and delta_y < 0:
                 self._show_review_page(1)
-            elif active_notification and vertical and self.review_page == 1 and self.detail_scroll == 0 and delta_y < 0:
+            elif active_notification and vertical and self.review_page == 1 and self.detail_scroll == 0 and delta_y > 0:
                 self._show_review_page(0)
         self.swipe_start = None
 
@@ -1056,6 +1196,7 @@ class PodApp:
             self._change_quick_setting(point)
 
     def handle_event(self, event: pygame.event.Event) -> bool:
+        self.needs_render = True
         if event.type == pygame.QUIT or event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
             return False
         if event.type in (pygame.KEYDOWN, pygame.MOUSEBUTTONDOWN, pygame.FINGERDOWN):
@@ -1156,28 +1297,40 @@ class PodApp:
                 self.apply_worker_events()
             if self.state == "request" and self._expired():
                 self.state = "expired"
+                self.needs_render = True
             if self.result_until and time.monotonic() >= self.result_until:
-                self.result_until = 0
-                self.state = "startup"
-                self.message = "Checking for Pings…"
+                self._complete_decision_result()
             for event in pygame.event.get():
                 running = self.handle_event(event)
-            self.draw_window()
-            if self.native_window:
-                self.native_window.flip()
-            else:
-                pygame.display.flip()
-            clock.tick(30 if self.dragging or self.state in ("idle", "startup", "submitting", "request") else 10)
+            if self.touch:
+                event_types = {"down": pygame.FINGERDOWN, "motion": pygame.FINGERMOTION, "up": pygame.FINGERUP}
+                for kind, x, y, dx, dy in self.touch.poll():
+                    running = self.handle_event(pygame.event.Event(event_types[kind], x=x, y=y, dx=dx, dy=dy, finger_id=0, touch_id=0))
+            animated = self.state in ("idle", "approved", "rejected") or self.mascot_action is not None or self.review_transition is not None
+            if self.needs_render or animated:
+                self.draw_window()
+                if self.framebuffer:
+                    self.framebuffer.present(self.window)
+                elif self.native_window:
+                    self.native_window.flip()
+                else:
+                    pygame.display.flip()
+                self.needs_render = False
+            clock.tick(30 if self.dragging or animated else 10)
         if not self.demo:
             self.worker.close()
         self.recorder.cancel()
         for button in self.buttons:
             button.close()
+        if self.touch:
+            self.touch.close()
+        if self.framebuffer:
+            self.framebuffer.close()
         pygame.quit()
 
 
 def main() -> None:
-    root = Path(os.getenv("PODEX_STATE_DIR", Path.home() / ".local/state/podex-pod")).expanduser()
+    root = Path(os.getenv("CLOUDY_STATE_DIR", Path.home() / ".local/state/cloudy-pod")).expanduser()
     storage = Storage(root)
-    worker = PodWorker(ApiClient(os.getenv("PODEX_API_URL", "http://localhost:3001")), storage)
-    PodApp(worker, storage, simulator=os.getenv("PODEX_SIMULATOR", "1") != "0").run()
+    worker = PodWorker(ApiClient(os.getenv("CLOUDY_API_URL", "http://localhost:3001")), storage)
+    PodApp(worker, storage, simulator=os.getenv("CLOUDY_SIMULATOR", "1") != "0").run()
