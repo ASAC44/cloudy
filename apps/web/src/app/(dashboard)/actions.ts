@@ -373,6 +373,7 @@ export async function createAutomationKey(
       method: "POST",
       body: JSON.stringify({ name: name.trim() }),
     });
+    revalidatePath("/automations");
     revalidatePath("/automations/n8n");
     return result;
   } catch (error) {
@@ -383,6 +384,7 @@ export async function createAutomationKey(
 export async function revokeAutomationKey(id: string): Promise<{ error?: string }> {
   try {
     await apiFetch(`/v1/automation-keys/${id}`, { method: "DELETE" });
+    revalidatePath("/automations");
     revalidatePath("/automations/n8n");
     return {};
   } catch (error) {

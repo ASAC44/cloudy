@@ -22,7 +22,7 @@ from gpiozero.pins.mock import MockFactory
 from cloudy_pod.app import BACKGROUND, INK, PodApp, idle_pose, mascot_action_pose, wrap, yawn_openness
 from cloudy_pod.audio import ButtonChord, Recorder
 from cloudy_pod.client import ApiClient, ApiError
-from cloudy_pod.hardware import ABS_PRESSURE, ABS_X, ABS_Y, EV_ABS, EV_SYN, INPUT_EVENT, SYN_REPORT, FramebufferOutput, TouchInput
+from cloudy_pod.hardware import ABS_PRESSURE, ABS_X, ABS_Y, EV_ABS, EV_SYN, INPUT_EVENT, SYN_REPORT, Backlight, FramebufferOutput, TouchInput
 from cloudy_pod.storage import Storage
 from cloudy_pod.worker import PodWorker
 
@@ -131,6 +131,14 @@ def write_test_wav(path: Path) -> None:
         recording.writeframes(b"\0\0")
 
 
+def write_test_backlight(root: Path, maximum: str = "255") -> Path:
+    device = root / "display"
+    device.mkdir(parents=True)
+    (device / "brightness").write_text(maximum)
+    (device / "max_brightness").write_text(maximum)
+    return device
+
+
 class PodTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -224,12 +232,87 @@ class PodTests(unittest.TestCase):
 
         initialize.assert_called_once_with(Path("/dev/fb1"))
 
+    def test_backlight_explicit_path_scales_to_the_native_range(self):
+        device = write_test_backlight(Path(self.temp.name))
+        with patch.dict(os.environ, {"CLOUDY_BACKLIGHT": str(device)}):
+            backlight = Backlight.from_env()
+
+        backlight.set(10)
+        self.assertEqual((device / "brightness").read_text(), "26")
+        backlight.set(100)
+        self.assertEqual((device / "brightness").read_text(), "255")
+
+    def test_backlight_auto_skips_invalid_devices(self):
+        root = Path(self.temp.name)
+        invalid = write_test_backlight(root / "invalid", "0")
+        valid = write_test_backlight(root / "valid", "100")
+        with (
+            patch.dict(os.environ, {"CLOUDY_BACKLIGHT": "auto"}),
+            patch.object(Path, "glob", return_value=[invalid, valid]),
+        ):
+            backlight = Backlight.from_env()
+
+        self.assertEqual(backlight.brightness_path, valid / "brightness")
+
+    def test_backlight_rejects_missing_and_malformed_devices(self):
+        missing = Path(self.temp.name) / "missing"
+        with patch.dict(os.environ, {"CLOUDY_BACKLIGHT": str(missing)}):
+            with self.assertRaisesRegex(FileNotFoundError, "not writable"):
+                Backlight.from_env()
+
+        device = write_test_backlight(Path(self.temp.name))
+        (device / "max_brightness").write_text("invalid")
+        with patch.dict(os.environ, {"CLOUDY_BACKLIGHT": str(device)}):
+            with self.assertRaises(ValueError):
+                Backlight.from_env()
+
     def test_hardware_renders_at_native_framebuffer_resolution(self):
         framebuffer = Mock(size=(320, 240))
         with patch("cloudy_pod.app.FramebufferOutput.from_env", return_value=framebuffer):
             app = PodApp(self.worker, self.storage, simulator=False)
 
         self.assertEqual(app.render().get_size(), (320, 240))
+
+    def test_hardware_applies_persisted_and_live_backlight_brightness(self):
+        self.storage.save_settings({"brightness": 50, "volume": 75, "reduce_motion": True})
+        framebuffer = Mock(size=(320, 240))
+        backlight = Mock()
+        with (
+            patch("cloudy_pod.app.FramebufferOutput.from_env", return_value=framebuffer),
+            patch("cloudy_pod.app.TouchInput.from_env", return_value=None),
+            patch("cloudy_pod.app.Backlight.from_env", return_value=backlight),
+        ):
+            app = PodApp(self.worker, self.storage, simulator=False)
+
+        backlight.set.assert_called_once_with(50)
+        app.settings_slider = "brightness"
+        app._set_slider((540, 170))
+        backlight.set.assert_called_with(75)
+        self.assertEqual(self.storage.settings()["brightness"], 50)
+        app._set_slider((552, 170), persist=True)
+        backlight.set.assert_called_with(80)
+        self.assertEqual(self.storage.settings()["brightness"], 80)
+
+    def test_backlight_write_failure_uses_software_dimming_until_restart(self):
+        self.app.simulator = False
+        self.app.backlight = Mock()
+        self.app.backlight.set.side_effect = PermissionError
+        self.app._apply_brightness()
+        self.assertIsNone(self.app.backlight)
+
+    def test_physical_backlight_prevents_double_dimming(self):
+        self.app.state = "startup"
+        with patch("pygame.time.get_ticks", return_value=0):
+            self.app.brightness = 100
+            full = pygame.image.tobytes(self.app.render(), "RGB")
+            self.app.brightness = 50
+            self.app.backlight = Mock()
+            physical = pygame.image.tobytes(self.app.render(), "RGB")
+            self.app.backlight = None
+            software = pygame.image.tobytes(self.app.render(), "RGB")
+
+        self.assertEqual(physical, full)
+        self.assertNotEqual(software, full)
 
     def test_touch_input_emits_calibrated_press_motion_and_release(self):
         touch = object.__new__(TouchInput)
@@ -965,7 +1048,7 @@ class PodTests(unittest.TestCase):
                     "request": REQUEST,
                     "queue_size": 1,
                     "codex": {},
-                    "screen_navigation": "up" if self.calls > 1 else None,
+                    "screen_navigation": "up" if self.calls == 2 else None,
                 }
 
             def pod_events(self, _token):

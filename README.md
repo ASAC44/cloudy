@@ -2,18 +2,10 @@
   <img src="apps/web/public/cloudy-mascot.png" alt="Cloudy" width="104" />
 </p>
 
-<h1 align="center">Cloudy</h1>
-
-<p align="center">
-  <strong>Your agents keep working. Cloudy brings the decisions to you.</strong>
-</p>
+<h1 align="center">Cloudy: Keychain companion AI that works on your behalf.</h1>
 
 <p align="center">
   An AI-powered keychain companion for reviewing, revising, approving, and rejecting important actions without opening your laptop or phone.
-</p>
-
-<p align="center">
-  <img src="apps/web/public/cloudy-product-flow.jpg" alt="Cloudy flow from agent request to keychain decision and approved action" width="1100" />
 </p>
 
 ## The idea
@@ -44,6 +36,10 @@ human in control of anything important.
 Cloudy is not another notification screen. It is a compact decision surface for
 human-in-the-loop work.
 
+<p align="center">
+  <img src="apps/web/public/cloudy-product-flow.jpg" alt="Cloudy flow from agent request to keychain decision and approved action" width="1100" />
+</p>
+
 ## Demo moments
 
 | Moment | What Cloudy shows | What the user can do |
@@ -73,19 +69,6 @@ Distinct animations confirm approved and rejected decisions before Cloudy
 returns to idle.
 
 ## How a decision moves through Cloudy
-
-```mermaid
-flowchart LR
-    A[Agent or connected service] -->|Important event| B[Cloudy API]
-    B -->|Realtime invalidation| C[Keychain Pod]
-    C -->|Fetch authoritative snapshot| B
-    C --> D[Summary]
-    D --> E[Scrollable Details]
-    D --> F{Human decision}
-    E --> F
-    F -->|Approve, reject, or revise| B
-    B -->|Authenticated action| A
-```
 
 Events are wake-up signals only. The Pod always fetches the authoritative
 snapshot before rendering a decision. Approvals and rejections travel over

@@ -1,37 +1,349 @@
 ---
-title: n8n automations
-description: Pause an n8n workflow until its action is approved or rejected on a Pod.
+title: Automation approvals
+description: Pause any workflow, CI job, agent, or internal tool until its exact action is approved on a Pod.
 ---
 
-Open `/automations/n8n` in Podex to create a revocable automation key and copy
-the API endpoint and request body.
+Open `/automations` in Cloudy to create a revocable automation key. Each caller
+should have its own key so it can be revoked without interrupting other systems.
+The legacy `/automations/n8n` page remains an alias.
 
-## Configure n8n
+## Approval API
 
-1. Create a Header Auth credential with the header `Authorization` and value
-   `Bearer YOUR_PODEX_KEY`.
-2. Add an HTTP Request node that sends `POST /v1/automation/approvals` using
-   JSON body mode. Set `Idempotency-Key` to `{{$execution.id}}`.
-3. Add a Wait node configured for **On Webhook Call**, `POST`, and an immediate
-   response. Send its `{{$execution.resumeUrl}}` value as `callback_url` in the
-   approval request.
-4. After the Wait node, branch on `{{$json.body.status}}`. Terminal statuses are
-   `approved`, `rejected`, `expired`, and `cancelled`.
+Send `POST /v1/automation/approvals` with these headers:
 
-The HTTP Request node and Wait node must run in the same execution because n8n
-generates a unique resume URL for each execution. For self-hosted n8n behind a
-reverse proxy, configure `WEBHOOK_URL` with the public HTTPS origin and set
-`N8N_PROXY_HOPS=1`. Podex rejects localhost, private-network, non-HTTPS, and
-redirecting callback URLs.
+```http
+Authorization: Bearer YOUR_CLOUDY_KEY
+Content-Type: application/json
+Idempotency-Key: stable-execution-id
+```
 
-## API behavior
+The idempotency key must identify one logical action. Retrying the same key and
+payload returns the existing approval. Reusing the key for a different action
+returns `409`.
 
-The automation key is shown once and stored by Podex only as a hash. Reusing an
-idempotency key with the same action returns the existing approval; reusing it
-with a different action returns `409`. Podex encrypts the resume URL, queues one
-callback after the request reaches a terminal state, and retries failed delivery
-with a bounded backoff.
+```json
+{
+  "title": "Approve production deploy",
+  "source": "CI pipeline",
+  "summary": "Deploy revision abc123 to production.",
+  "details": "The staging deployment and smoke tests passed.",
+  "affected_context": "checkout-api · production",
+  "risk": "high",
+  "warnings": ["Customer-facing change"],
+  "expires_in_minutes": 15,
+  "callback_url": "https://example.com/cloudy/callbacks/run-123",
+  "action": {
+    "type": "deploy",
+    "environment": "production",
+    "revision": "abc123"
+  }
+}
+```
 
-Use `GET /v1/automation/approvals/:id` to inspect a request or
-`DELETE /v1/automation/approvals/:id` to cancel a pending request. Both use the
-same bearer automation key.
+`title`, `summary`, `risk`, `expires_in_minutes`, `callback_url`, and `action`
+are required. `risk` is `low`, `medium`, or `high`; expiry is 5, 15, 30, or 60
+minutes. `source` defaults to `Automation`. The action must be a JSON object and
+should contain the complete immutable arguments the caller will execute.
+
+A successful create returns `202`:
+
+```json
+{
+  "request": {
+    "id": "00000000-0000-4000-8000-000000000001",
+    "title": "Approve production deploy",
+    "status": "pending",
+    "created_at": "2026-07-22T10:00:00.000Z",
+    "expires_at": "2026-07-22T10:15:00.000Z",
+    "decided_at": null
+  }
+}
+```
+
+When the request becomes terminal, Cloudy posts this JSON to the callback URL:
+
+```json
+{
+  "request_id": "00000000-0000-4000-8000-000000000001",
+  "status": "approved",
+  "decided_at": "2026-07-22T10:03:00.000Z"
+}
+```
+
+Terminal statuses are `approved`, `rejected`, `expired`, and `cancelled`.
+Continue only for `approved`. Cloudy validates the callback as public HTTPS,
+does not follow redirects, encrypts it at rest, and retries failed terminal
+delivery with bounded backoff. Treat the callback URL as a bearer secret.
+
+Use `GET /v1/automation/approvals/:id` to inspect status or
+`DELETE /v1/automation/approvals/:id` to cancel a pending request. Both require
+the same automation key that created it.
+
+## Shell
+
+```bash
+payload=$(jq -n \
+  --arg callback "$CLOUDY_CALLBACK_URL" \
+  --arg revision "abc123" \
+  '{
+    title: "Approve production deploy",
+    source: "Release script",
+    summary: ("Deploy revision " + $revision + " to production."),
+    risk: "high",
+    warnings: ["Customer-facing change"],
+    expires_in_minutes: 15,
+    callback_url: $callback,
+    action: {type: "deploy", environment: "production", revision: $revision}
+  }')
+
+curl --fail-with-body \
+  -H "Authorization: Bearer $CLOUDY_AUTOMATION_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: release-abc123-production" \
+  -d "$payload" \
+  "$CLOUDY_API_URL/v1/automation/approvals"
+```
+
+Keep the key and callback URL in environment secrets, not command history or
+source control.
+
+## JavaScript
+
+This example uses the built-in `fetch` available in current Node.js runtimes:
+
+```js
+const action = { type: "restart_service", service: "worker", region: "iad" };
+const response = await fetch(`${process.env.CLOUDY_API_URL}/v1/automation/approvals`, {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.CLOUDY_AUTOMATION_KEY}`,
+    "Content-Type": "application/json",
+    "Idempotency-Key": `restart-${action.service}-${action.region}-42`,
+  },
+  body: JSON.stringify({
+    title: "Restart production worker",
+    source: "Operations tool",
+    summary: "Restart the worker service in iad.",
+    risk: "medium",
+    warnings: ["Brief capacity reduction"],
+    expires_in_minutes: 15,
+    callback_url: process.env.CLOUDY_CALLBACK_URL,
+    action,
+  }),
+});
+
+if (!response.ok) throw new Error(`Cloudy returned ${response.status}`);
+const { request } = await response.json();
+console.log(request.id);
+```
+
+## Python agent gate
+
+An agent may propose the action, but application code must hold the exact tool
+name and arguments until Cloudy returns `approved`:
+
+```python
+import json
+import os
+import time
+import urllib.request
+
+
+def cloudy(path, *, method="GET", body=None, idempotency_key=None):
+    headers = {"Authorization": f"Bearer {os.environ['CLOUDY_AUTOMATION_KEY']}"}
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    if idempotency_key:
+        headers["Idempotency-Key"] = idempotency_key
+    request = urllib.request.Request(
+        f"{os.environ['CLOUDY_API_URL']}{path}",
+        data=json.dumps(body).encode() if body is not None else None,
+        headers=headers,
+        method=method,
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        return json.load(response)
+
+
+proposed_action = {
+    "tool": "send_email",
+    "arguments": {"to": "ops@example.com", "subject": "Incident update"},
+}
+created = cloudy(
+    "/v1/automation/approvals",
+    method="POST",
+    idempotency_key="agent-run-42-tool-3",
+    body={
+        "title": "Send incident email",
+        "source": "Support agent",
+        "summary": "Send the reviewed incident update to operations.",
+        "risk": "medium",
+        "warnings": ["External communication"],
+        "expires_in_minutes": 15,
+        "callback_url": os.environ["CLOUDY_CALLBACK_URL"],
+        "action": proposed_action,
+    },
+)
+
+request_id = created["request"]["id"]
+while True:
+    status = cloudy(f"/v1/automation/approvals/{request_id}")["request"]["status"]
+    if status == "approved":
+        break
+    if status in {"rejected", "expired", "cancelled"}:
+        raise SystemExit(f"Action stopped: {status}")
+    time.sleep(5)
+
+# Call the tool with proposed_action exactly as approved. Do not regenerate it.
+```
+
+## n8n recipe
+
+Download the [ready-to-import Cloudy approval workflow](/examples/cloudy-n8n-approval.json).
+It contains the HTTP Request, Wait, approved-only branch, and safe-stop branch.
+The approved branch exposes the exact saved action but does not execute a real
+provider action until you replace the placeholder node.
+
+After importing it:
+
+1. Replace `YOUR-CLOUDY-API.example` with the public Cloudy API hostname.
+2. Create a Header Auth credential named `Cloudy API key` with `Authorization`
+   set to `Bearer YOUR_CLOUDY_KEY`, then select it on **Request Cloudy approval**.
+3. Keep **Wait for Cloudy decision** on **On Webhook Call**, `POST`, immediate
+   response, and no additional authentication. Its unique URL is already sent
+   as `callback_url` and must be treated as a bearer secret.
+4. Run the workflow and decide on the Pod. Confirm `approved` reaches
+   **Approved exact action**, while `rejected`, `expired`, `cancelled`, and the
+   Wait timeout reach **Stopped safely**.
+5. Replace **Approved exact action** with the real action node, reading the
+   immutable arguments from `Prepare exact action`. Do not ask an agent to
+   regenerate arguments after approval.
+
+```js
+={{ {
+  title: $json.title,
+  source: "n8n",
+  summary: $json.summary,
+  risk: "medium",
+  warnings: [],
+  expires_in_minutes: 15,
+  callback_url: $execution.resumeUrl,
+  action: $json.action
+} }}
+```
+
+The HTTP Request and Wait nodes must run in the same execution because n8n makes
+the resume URL unique per execution. Self-hosted n8n behind a reverse proxy must
+set `WEBHOOK_URL` to its public HTTPS origin and `N8N_PROXY_HOPS=1` on every n8n
+process that creates executions. See n8n's official [Wait node documentation](https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-base.wait/)
+and [reverse-proxy webhook configuration](https://docs.n8n.io/hosting/configuration/configuration-examples/webhook-url/).
+
+Cloudy's dedicated worker must also be running. The API creates approvals, but
+the worker expires requests and delivers terminal callbacks. Local `scripts/dev.sh`
+starts both processes; Railway needs the separate `worker` service described in
+[Deploy on Railway](/docs/deployment/railway).
+
+## Zapier and Make
+
+Zapier and Make use stable webhook triggers instead of an execution-specific
+resume URL, so use two workflows and a small data-store record:
+
+1. The initiating workflow creates the Cloudy approval and stores the returned
+   request ID beside the exact pending action.
+2. Set a Zapier **Catch Hook** or Make **Custom webhook** URL as `callback_url`.
+3. The callback workflow looks up the stored request ID, continues only for
+   `approved`, executes the stored action exactly once, and deletes the record.
+
+Do not expose the webhook URL in browser code or logs. Zapier documents that a
+[Catch Hook receives POST requests](https://help.zapier.com/hc/en-us/articles/8496288690317-Trigger-Zap-workflows-from-webhooks),
+and Make documents its [Custom webhook behavior](https://help.make.com/webhooks).
+
+## GitHub Actions and CI/CD
+
+Store `CLOUDY_AUTOMATION_KEY` and `CLOUDY_CALLBACK_URL` as secrets. The job below
+creates one approval per workflow attempt and polls the authenticated status
+endpoint. The callback remains useful for audit or an external orchestrator.
+
+```yaml
+name: Approved production deploy
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CLOUDY_API_URL: https://api.example.com
+      CLOUDY_AUTOMATION_KEY: ${{ secrets.CLOUDY_AUTOMATION_KEY }}
+      CLOUDY_CALLBACK_URL: ${{ secrets.CLOUDY_CALLBACK_URL }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Request Cloudy approval
+        env:
+          IDEMPOTENCY_KEY: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          payload=$(jq -n \
+            --arg callback "$CLOUDY_CALLBACK_URL" \
+            --arg revision "$GITHUB_SHA" \
+            '{
+              title: "Approve production deploy",
+              source: "GitHub Actions",
+              summary: ("Deploy " + $revision + " to production."),
+              risk: "high",
+              warnings: ["Customer-facing change"],
+              expires_in_minutes: 15,
+              callback_url: $callback,
+              action: {type: "deploy", environment: "production", revision: $revision}
+            }')
+          response=$(curl --fail-with-body \
+            -H "Authorization: Bearer $CLOUDY_AUTOMATION_KEY" \
+            -H "Content-Type: application/json" \
+            -H "Idempotency-Key: $IDEMPOTENCY_KEY" \
+            -d "$payload" \
+            "$CLOUDY_API_URL/v1/automation/approvals")
+          request_id=$(jq -r '.request.id' <<<"$response")
+
+          while true; do
+            status=$(curl --fail-with-body \
+              -H "Authorization: Bearer $CLOUDY_AUTOMATION_KEY" \
+              "$CLOUDY_API_URL/v1/automation/approvals/$request_id" \
+              | jq -r '.request.status')
+            case "$status" in
+              approved) break ;;
+              rejected|expired|cancelled) exit 1 ;;
+            esac
+            sleep 10
+          done
+
+      - name: Deploy the approved revision
+        run: ./scripts/deploy.sh "$GITHUB_SHA"
+```
+
+GitHub recommends storing sensitive values as
+[Actions secrets](https://docs.github.com/en/actions/reference/security/secrets).
+Keep job permissions minimal and never use pull-request-controlled text as the
+approval key, callback URL, or deployment command.
+
+## Infrastructure changes
+
+For Terraform or another plan/apply tool, create the plan first and put its
+immutable digest, workspace, and target account in `action`. After approval,
+verify the saved plan still has that digest and apply that exact file:
+
+```json
+{
+  "type": "terraform_apply",
+  "workspace": "production",
+  "account_id": "123456789012",
+  "plan_sha256": "9c1185a5c5e9fc54612808977ee8f548b2258d31b66c8c739b843d1e9c8e3ab"
+}
+```
+
+If the plan changes, request a new approval. Never regenerate a plan after the
+decision and treat it as the approved artifact.

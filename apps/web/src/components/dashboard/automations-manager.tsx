@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useTransition, type FormEvent, type ReactNode } from "react";
-import { ArrowRight, Check, Copy, KeyRound, Plus, Trash2 } from "lucide-react";
+import { ArrowRight, Check, Copy, Download, KeyRound, Plus, Trash2 } from "lucide-react";
+import Link from "next/link";
 
 import {
   createAutomationKey,
@@ -17,7 +18,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -31,20 +32,25 @@ import { Label } from "@/components/ui/label";
 import type { AutomationKey } from "@/types/api";
 
 const requestBody = `{
-  "title": "Approve {{$json.action}}",
-  "summary": "{{$json.summary}}",
-  "risk": "medium",
-  "warnings": [],
+  "title": "Approve production deploy",
+  "source": "CI pipeline",
+  "summary": "Deploy revision abc123 to production.",
+  "risk": "high",
+  "warnings": ["Customer-facing change"],
   "expires_in_minutes": 15,
-  "callback_url": "{{$execution.resumeUrl}}",
-  "action": {{$json}}
+  "callback_url": "https://example.com/cloudy/callbacks/run-123",
+  "action": {
+    "type": "deploy",
+    "environment": "production",
+    "revision": "abc123"
+  }
 }`;
 
 const workflowSteps = [
-  { label: "n8n action", detail: "Prepare the write" },
+  { label: "Your system", detail: "Prepare the exact action" },
   { label: "Cloudy approval", detail: "Send the exact payload", active: true },
-  { label: "Wait", detail: "Pause on webhook" },
-  { label: "Continue", detail: "Branch on status" },
+  { label: "Callback", detail: "Receive terminal status" },
+  { label: "Continue", detail: "Run only when approved" },
 ];
 
 export function AutomationsManager({
@@ -127,14 +133,14 @@ export function AutomationsManager({
               One decision, four steps
             </h2>
             <p className="mt-2 text-muted-foreground">
-              n8n supplies a private resume URL; Cloudy calls it after your decision.
+              Any HTTPS client can create an approval; Cloudy calls its private callback after the decision.
             </p>
           </div>
           <span className="hidden font-mono text-caption text-muted-foreground sm:block">
             POST → WAIT → RESUME
           </span>
         </div>
-        <ol className="flex min-w-max items-stretch overflow-x-auto border-y border-border" aria-label="n8n approval flow">
+        <ol className="flex min-w-max items-stretch overflow-x-auto border-y border-border" aria-label="Automation approval flow">
           {workflowSteps.map((step, index) => (
             <li key={step.label} className="flex items-stretch">
               <div
@@ -176,7 +182,7 @@ export function AutomationsManager({
         <div>
           <h2 id="access-keys-title" className="font-sans text-lg font-medium">Access keys</h2>
           <p className="mt-2 max-w-sm leading-6 text-muted-foreground">
-            Give each n8n environment its own key so you can revoke access without disturbing another workflow.
+            Give each environment or automation system its own key so one integration can be revoked independently.
           </p>
           <Button className="mt-5" onClick={() => setCreateOpen(true)}>
             <Plus data-icon="inline-start" />
@@ -209,27 +215,63 @@ export function AutomationsManager({
           ) : (
             <div className="py-8">
               <p className="font-medium">No automation keys yet.</p>
-              <p className="mt-1 text-sm text-muted-foreground">Generate one before configuring the HTTP Request node.</p>
+              <p className="mt-1 text-sm text-muted-foreground">Generate one before making an approval API request.</p>
             </div>
           )}
         </div>
       </section>
 
+      <section className="grid gap-8 border-b border-border py-10 md:grid-cols-[minmax(0,0.7fr)_minmax(22rem,1.3fr)] md:gap-16" aria-labelledby="n8n-title">
+        <div>
+          <p className="font-mono text-caption tracking-[0.14em] text-muted-foreground uppercase">Ready to import</p>
+          <h2 id="n8n-title" className="mt-2 font-sans text-lg font-medium">n8n approval workflow</h2>
+          <p className="mt-2 max-w-sm leading-6 text-muted-foreground">
+            Start with the complete create, wait, approve-only branch, and safe-stop flow. The real action stays a placeholder until you finish the acceptance test.
+          </p>
+          <a
+            className={buttonVariants({ variant: "outline", className: "mt-5" })}
+            href="/examples/cloudy-n8n-approval.json"
+            download
+          >
+            <Download data-icon="inline-start" />
+            Download workflow
+          </a>
+        </div>
+
+        <ol className="divide-y divide-border border-y border-border">
+          <SetupStep number="01" title="Import and connect">
+            <p className="text-sm leading-6 text-muted-foreground">
+              Replace the example API host, then select a Header Auth credential whose <code className="font-mono text-foreground">Authorization</code> value is <code className="font-mono text-foreground">Bearer YOUR_CLOUDY_KEY</code>.
+            </p>
+          </SetupStep>
+          <SetupStep number="02" title="Expose the Wait webhook">
+            <p className="text-sm leading-6 text-muted-foreground">
+              n8n must generate a public HTTPS resume URL. Self-hosted instances behind a proxy need <code className="font-mono text-foreground">WEBHOOK_URL</code> and <code className="font-mono text-foreground">N8N_PROXY_HOPS=1</code>.
+            </p>
+          </SetupStep>
+          <SetupStep number="03" title="Test before adding the action">
+            <p className="text-sm leading-6 text-muted-foreground">
+              Run the workflow, decide on the Pod, and confirm only an approved callback reaches <strong className="font-medium text-foreground">Approved exact action</strong>. Then replace that placeholder with the real node.
+            </p>
+          </SetupStep>
+        </ol>
+      </section>
+
       <section className="grid gap-8 py-10 md:grid-cols-[minmax(0,0.7fr)_minmax(22rem,1.3fr)] md:gap-16" aria-labelledby="setup-title">
         <div>
-          <h2 id="setup-title" className="font-sans text-lg font-medium">n8n setup</h2>
+          <h2 id="setup-title" className="font-sans text-lg font-medium">HTTP API setup</h2>
           <p className="mt-2 max-w-sm leading-6 text-muted-foreground">
-            Configure three built-in nodes. Expressions keep every field connected to the current execution.
+            Use the same three-step contract from n8n, Zapier, Make, CI, an agent, or your own service.
           </p>
           <p className="mt-3 max-w-sm text-sm leading-6 text-muted-foreground">
-            Self-hosted n8n must set <code className="font-mono text-foreground">WEBHOOK_URL</code> to its public HTTPS origin.
+            See the <Link className="text-foreground underline underline-offset-4" href="/docs/development/automations">automation recipes</Link> for complete examples.
           </p>
         </div>
 
         <div className="divide-y divide-border border-y border-border">
-          <SetupStep number="01" title="Create the credential">
+          <SetupStep number="01" title="Authenticate">
             <p className="text-sm leading-6 text-muted-foreground">
-              Add a Header Auth credential. Name it Cloudy, set the header to <code className="font-mono text-foreground">Authorization</code>, and use <code className="font-mono text-foreground">Bearer YOUR_CLOUDY_KEY</code> as its value.
+              Store the generated key in your platform’s secret manager and send it as a bearer token.
             </p>
             <CopyRow label="Header name" value="Authorization" copied={copied === "header"} onCopy={() => copy("Authorization", "header")} />
             <CopyRow label="Header value" value="Bearer YOUR_CLOUDY_KEY" copied={copied === "credential"} onCopy={() => copy("Bearer YOUR_CLOUDY_KEY", "credential")} />
@@ -237,17 +279,17 @@ export function AutomationsManager({
 
           <SetupStep number="02" title="Send the approval">
             <p className="text-sm leading-6 text-muted-foreground">
-              Add an HTTP Request node with POST, the Cloudy credential, JSON body mode, and an <code className="font-mono text-foreground">Idempotency-Key</code> header set to <code className="font-mono text-foreground">{"{{$execution.id}}"}</code>.
+              POST the exact action as JSON. Set <code className="font-mono text-foreground">Idempotency-Key</code> to a stable execution or job ID so retries cannot create duplicate approvals.
             </p>
             <CopyRow label="Endpoint" value={endpoint} copied={copied === "endpoint"} onCopy={() => copy(endpoint, "endpoint")} />
             <CodeBlock label="JSON body" value={requestBody} copied={copied === "body"} onCopy={() => copy(requestBody, "body")} />
           </SetupStep>
 
-          <SetupStep number="03" title="Wait, then branch">
+          <SetupStep number="03" title="Handle the result">
             <p className="text-sm leading-6 text-muted-foreground">
-              Add a Wait node set to On Webhook Call, POST, and Respond Immediately. Then add a Switch node using <code className="font-mono text-foreground">{"{{$json.body.status}}"}</code> for approved, rejected, expired, and cancelled paths.
+              Accept Cloudy’s POST at the private callback URL and continue only for <code className="font-mono text-foreground">approved</code>. Stop safely for rejected, expired, or cancelled results.
             </p>
-            <CopyRow label="Switch expression" value="{{$json.body.status}}" copied={copied === "switch"} onCopy={() => copy("{{$json.body.status}}", "switch")} />
+            <CopyRow label="Status field" value="status" copied={copied === "status"} onCopy={() => copy("status", "status")} />
           </SetupStep>
         </div>
       </section>
@@ -258,8 +300,8 @@ export function AutomationsManager({
             <DialogTitle>{createdToken ? "Save your automation key" : "Generate an automation key"}</DialogTitle>
             <DialogDescription>
               {createdToken
-                ? "This is the only time Cloudy will show the complete key. Save it in n8n before closing."
-                : "Use a name that identifies the n8n environment or workflow group."}
+                ? "This is the only time Cloudy will show the complete key. Save it in your secret manager before closing."
+                : "Use a name that identifies the environment or automation system."}
             </DialogDescription>
           </DialogHeader>
           {createdToken ? (
@@ -282,7 +324,7 @@ export function AutomationsManager({
                 required
                 maxLength={80}
                 autoFocus
-                placeholder="Production n8n"
+                placeholder="Production CI"
                 className="mt-3"
               />
             </form>

@@ -22,6 +22,40 @@ def _flag(name: str) -> bool:
     return os.getenv(name) == "1"
 
 
+class Backlight:
+    def __init__(self, path: Path):
+        self.brightness_path = path / "brightness"
+        maximum_path = path / "max_brightness"
+        if not self.brightness_path.is_file() or not os.access(self.brightness_path, os.W_OK):
+            raise FileNotFoundError(f"Backlight brightness is not writable: {self.brightness_path}")
+        try:
+            self.maximum = int(maximum_path.read_text().strip())
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Backlight maximum is unavailable: {maximum_path}") from None
+        except ValueError:
+            raise ValueError(f"Backlight maximum is invalid: {maximum_path}") from None
+        if self.maximum <= 0:
+            raise ValueError(f"Backlight maximum must be positive: {maximum_path}")
+
+    @classmethod
+    def from_env(cls) -> "Backlight | None":
+        configured = os.getenv("CLOUDY_BACKLIGHT")
+        if not configured:
+            return None
+        if configured != "auto":
+            return cls(Path(configured))
+        for path in sorted(Path("/sys/class/backlight").glob("*")):
+            try:
+                return cls(path)
+            except (OSError, ValueError):
+                continue
+        raise FileNotFoundError("A writable Linux backlight was not found")
+
+    def set(self, percent: int) -> None:
+        value = self.maximum if percent >= 100 else max(1, round(self.maximum * max(0, percent) / 100))
+        self.brightness_path.write_text(str(value))
+
+
 class FramebufferOutput:
     def __init__(self, path: Path, size: tuple[int, int] | None = None):
         self.path = path

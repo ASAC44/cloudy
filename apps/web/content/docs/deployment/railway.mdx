@@ -88,6 +88,10 @@ OAuth callbacks use the public API domain.
 - Confirm the web and API `/` healthchecks pass and the worker remains running.
 - Activate a rule and confirm its activity log records polling and delivery.
 - Pair a Pod against the API's public HTTPS origin and complete a Test Ping.
+- Import the [n8n acceptance workflow](/examples/cloudy-n8n-approval.json), then
+  verify a Pod approval resumes its Wait node and a rejection reaches the safe
+  stop branch. If the Ping resolves but n8n stays waiting, check the `worker`
+  service first because callback delivery does not run in the API process.
 
 Railway references: [monorepos](https://docs.railway.com/deployments/monorepo),
 [config as code](https://docs.railway.com/config-as-code/reference),

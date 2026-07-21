@@ -14,7 +14,7 @@ import pygame
 
 from .client import ApiClient
 from .audio import ButtonChord, Recorder
-from .hardware import FramebufferOutput, TouchInput
+from .hardware import Backlight, FramebufferOutput, TouchInput
 from .storage import Storage
 from .worker import PodWorker
 
@@ -226,6 +226,7 @@ class PodApp:
         self.simulator = simulator
         self.framebuffer = FramebufferOutput.from_env()
         self.touch = TouchInput.from_env()
+        self.backlight = None if simulator else Backlight.from_env()
         self.native_window: pygame.Window | None = None
         if simulator and pygame.display.get_driver() != "dummy":
             self.native_window = pygame.Window(
@@ -311,6 +312,7 @@ class PodApp:
         self.idle_stage = pygame.Surface((round(280 * self.render_scale),) * 2, pygame.SRCALPHA)
         self.yawn_mouth = pygame.Surface((128, 128), pygame.SRCALPHA)
         pygame.draw.ellipse(self.yawn_mouth, BACKGROUND, self.yawn_mouth.get_rect())
+        self._apply_brightness()
         self._apply_volume()
 
     def _font(self, size: int, path: Path = FONT_PATH) -> pygame.font.Font:
@@ -744,7 +746,7 @@ class PodApp:
                 self._wrapped("Pod will retry automatically.", 38, 246, 560, self.font, MUTED)
         else:
             self._render_request(self.state == "offline")
-        if self.brightness < 100:
+        if self.brightness < 100 and self.backlight is None:
             shade = pygame.Surface(self.surface.get_size(), pygame.SRCALPHA)
             shade.fill((0, 0, 0, round((100 - self.brightness) * 1.8)))
             self.surface.blit(shade, (0, 0))
@@ -884,6 +886,7 @@ class PodApp:
         value = round(fraction * 20) * 5
         if self.settings_slider == "brightness":
             self.brightness = max(10, value)
+            self._apply_brightness()
         elif self.settings_slider == "volume":
             self.volume = value
             if persist:
@@ -897,6 +900,14 @@ class PodApp:
             "volume": self.volume,
             "reduce_motion": self.reduce_motion,
         })
+
+    def _apply_brightness(self) -> None:
+        if self.backlight is None:
+            return
+        try:
+            self.backlight.set(self.brightness)
+        except OSError:
+            self.backlight = None
 
     def _apply_volume(self) -> None:
         if self.simulator:

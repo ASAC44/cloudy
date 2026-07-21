@@ -5,6 +5,7 @@ cd "$(dirname "$0")/.."
 
 pnpm --dir apps/api test
 pnpm --dir apps/api typecheck
+node scripts/check-n8n-workflow.mjs
 pnpm --dir apps/web lint
 pnpm --dir apps/web exec tsc --noEmit
 sh -n scripts/deploy-pod.sh

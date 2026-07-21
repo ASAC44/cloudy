@@ -127,7 +127,6 @@ Future connection candidates:
 
 - Additional Google Calendar workflows
 - Slack and Discord
-- n8n
 
 OpenAI provides connectors for Gmail and Google Calendar. Other services can use an official remote MCP server when available or a direct API integration.
 
@@ -150,7 +149,8 @@ Cloudy exposes a small MCP interface so external agents can submit human-in-the-
 - `get_decision`: retrieve its current status and result.
 - `cancel_request`: cancel an unresolved request.
 
-n8n can use the same flow through webhooks without requiring MCP support.
+The shipped automation HTTP API already supports n8n, Zapier, Make, CI/CD, and
+custom tools without requiring this future MCP interface.
 
 ### Email and calendar example
 

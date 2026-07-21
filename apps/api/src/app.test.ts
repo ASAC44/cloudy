@@ -538,6 +538,7 @@ test('automation approvals authenticate, remain idempotent, read, and cancel', a
   const repeatedBody = await (await create()).json()
   assert.equal(first.status, 202)
   assert.equal(firstBody.request.id, repeatedBody.request.id)
+  assert.equal(store.automationRequests.get(firstBody.request.id)?.source, 'Automation')
 
   const conflict = await api.request('/v1/automation/approvals', {
     method: 'POST',

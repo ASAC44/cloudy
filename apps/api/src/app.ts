@@ -867,7 +867,7 @@ export function createApp(
     const body = await c.req.json().catch(() => null)
     const externalId = text(c.req.header('idempotency-key'), 200)
     const title = text(body?.title, 160)
-    const source = body?.source === undefined ? 'n8n' : text(body.source, 120)
+    const source = body?.source === undefined ? 'Automation' : text(body.source, 120)
     const summary = text(body?.summary, 1000)
     const details = optionalText(body?.details, 8000)
     const affected = optionalText(body?.affected_context, 2000)

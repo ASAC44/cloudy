@@ -21,14 +21,14 @@ export default async function AutomationsPage() {
     <div className="mx-auto w-full max-w-6xl px-6 py-12 md:px-10 md:py-16">
       <header className="max-w-4xl border-b border-border pb-10">
         <p className="mb-4 font-mono text-caption tracking-[0.16em] text-muted-foreground uppercase">
-          n8n · human in the loop
+          Automation API · human in the loop
         </p>
         <h1 className="text-[clamp(2.5rem,6vw,4.5rem)] leading-none tracking-[-0.04em]">
-          Approve your HITL nodes from Cloudy!
+          Put approval in front of any action.
         </h1>
         <p className="mt-5 max-w-2xl text-base leading-7 text-muted-foreground">
-          Send an action to your Pod, pause n8n, then continue from the exact
-          decision you made. Your workflow stays asleep while it waits.
+          Send an exact action to your Pod, wait for the decision callback, and
+          continue only when Cloudy returns an approved status.
         </p>
       </header>
 

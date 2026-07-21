@@ -51,7 +51,7 @@
 - [ ] If `apps/api/.state/cloudy.sqlite` contains customized local layouts, record them before applying the migration, re-save them from the dashboard afterward, and verify the revision starts from the persisted Supabase value.
 - [ ] Preserve the current local Pod `e86a829d-37f8-487e-ae43-7fb1c7ba70ea` revision-3 legacy layout before its first directional save, then verify it starts from the GitHub-left, Gmail-right, Codex-down default without losing pairing.
 - [ ] Attach and reorder apps across Swipe left, Swipe right, and Swipe down in staging; verify autosave survives reload, then confirm the paired Pod applies each layout within one polling interval and rejects a stale revision without overwriting newer changes.
-- [ ] On Raspberry Pi hardware, replace Quick Settings software dimming with the approved display-backlight control and verify ALSA `Master` volume changes plus local persistence after reboot; add restart and unpair actions only with confirmation and recovery testing.
+- [ ] On Raspberry Pi hardware, choose and wire a display-overlay `led_pin` that does not conflict with the INMP441 GPIOs, verify the driver exposes `/sys/class/backlight/<device>`, grant `cloudy-pod.service` write access, set `CLOUDY_BACKLIGHT`, and verify physical brightness plus ALSA `Master` volume persist after reboot.
 - [ ] Run `supabase/rollback/20260720010000_pod_screen_layout.sql` on a disposable database and verify the previous API build can still list, poll, and revoke Pods.
 
 ## Activate Linear and Stripe MCP connections
@@ -96,18 +96,12 @@
 
 - [ ] Apply `supabase/migrations/20260719050000_automations.sql` to the production Supabase project.
 - [ ] Set `CLOUDY_PUBLIC_API_URL` to the production HTTPS API origin.
-- [ ] Restart the API and web dashboard after the migration and environment changes.
-- [ ] Configure n8n with a public HTTPS `WEBHOOK_URL`; private and localhost callback URLs are intentionally rejected.
-- [ ] Run a live create → Pod decision → callback resume test and verify approved, rejected, expired, and cancelled outcomes.
+- [ ] Restart the API and web dashboard after the migration and environment changes, and deploy the dedicated Railway `worker` service from `/apps/api/railway.worker.json` with the same Supabase and encryption variables as the API.
+- [ ] Import `/examples/cloudy-n8n-approval.json` into the target n8n instance and configure a public HTTPS `WEBHOOK_URL` plus `N8N_PROXY_HOPS=1` on every execution process; private and localhost callback URLs are intentionally rejected.
+- [ ] Run the imported workflow through a live create → Pod decision → callback resume test and verify approved reaches only the approved branch while rejected, expired, cancelled, and Wait timeout reach only the safe-stop branch.
 
-## General automation support
+## Conditional automation extensions
 
-- [ ] Replace the n8n-only setup copy with generic API documentation plus an n8n recipe.
-- [ ] Publish examples for Zapier and Make.
-- [ ] Publish examples for CI/CD pipelines and GitHub Actions.
-- [ ] Publish Python, JavaScript, and shell examples for internal tools and custom applications.
-- [ ] Publish an AI-agent approval example.
-- [ ] Publish a deployment/infrastructure approval example.
 - [ ] Add signed callbacks or configurable callback authentication before integrations that cannot treat the callback URL as a bearer secret.
 - [ ] Add MCP approval tools and provider-specific SDKs only when a real consumer requires them.
 

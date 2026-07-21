@@ -1,0 +1,179 @@
+{
+  "name": "Cloudy approval gate",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "d5dad239-486e-4721-818e-29a4b3a99678",
+      "name": "When clicking Execute workflow",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [-720, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{\n  json: {\n    title: 'Approve production deploy',\n    summary: 'Deploy revision abc123 to production.',\n    action: {\n      type: 'deploy',\n      environment: 'production',\n      revision: 'abc123',\n    },\n  },\n}];"
+      },
+      "id": "a062bfac-4072-485a-aa27-ef8fbef49a75",
+      "name": "Prepare exact action",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-480, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://YOUR-CLOUDY-API.example/v1/automation/approvals",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Idempotency-Key",
+              "value": "={{ $execution.id + ':cloudy-approval:' + $itemIndex }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { title: $json.title, source: 'n8n', summary: $json.summary, details: 'This imported workflow demonstrates the complete Cloudy approval and resume loop.', affected_context: 'production', risk: 'high', warnings: ['Customer-facing change'], expires_in_minutes: 15, callback_url: $execution.resumeUrl, action: $json.action } }}",
+        "options": {}
+      },
+      "id": "93d9b58c-d25b-4c8e-ae76-7274a4995f1c",
+      "name": "Request Cloudy approval",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [-220, 0],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "SELECT_YOUR_CLOUDY_CREDENTIAL",
+          "name": "Cloudy API key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resume": "webhook",
+        "httpMethod": "POST",
+        "responseMode": "onReceived",
+        "limitWaitTime": true,
+        "limitType": "afterTimeInterval",
+        "resumeAmount": 16,
+        "resumeUnit": "minutes",
+        "options": {}
+      },
+      "id": "9bfeae57-b1f5-4081-b9d3-d614aa5cd9dd",
+      "name": "Wait for Cloudy decision",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [40, 0],
+      "webhookId": "0424c398-f6d3-48c7-bfd7-4b23c5721098"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "7fca838d-a566-43e0-b8f2-e3bce9f7d2d4",
+              "leftValue": "={{ $json.body.status }}",
+              "rightValue": "approved",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "df6cf11c-b167-4e59-bcf1-5141e571d4a6",
+      "name": "Approved?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [300, 0]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "fdd67d5f-a6c0-48ed-b752-b8273fdeba21",
+              "name": "approved_action",
+              "value": "={{ $('Prepare exact action').first().json.action }}",
+              "type": "object"
+            },
+            {
+              "id": "61857d91-2406-46b5-bef0-f59985787be8",
+              "name": "cloudy_request_id",
+              "value": "={{ $json.body.request_id }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "c728efad-c594-44ae-b32a-a89e21b10b50",
+      "name": "Approved exact action",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [580, -100]
+    },
+    {
+      "parameters": {},
+      "id": "75b230e5-06df-481f-a51f-59717285f84f",
+      "name": "Stopped safely",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [580, 100]
+    },
+    {
+      "parameters": {
+        "content": "## Setup before running\n1. Replace `YOUR-CLOUDY-API.example` with the Cloudy API host.\n2. Select a Header Auth credential named `Cloudy API key` with header `Authorization` and value `Bearer YOUR_CLOUDY_KEY`.\n3. For self-hosted n8n, expose a public HTTPS webhook URL.\n4. Replace `Approved exact action` with the real action node after testing.\n\nOnly the true output may execute the saved action.",
+        "height": 360,
+        "width": 360
+      },
+      "id": "53681780-aea1-4dd0-b8e6-48c82865d45b",
+      "name": "Setup notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-720, -460]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When clicking Execute workflow": {
+      "main": [[{"node": "Prepare exact action", "type": "main", "index": 0}]]
+    },
+    "Prepare exact action": {
+      "main": [[{"node": "Request Cloudy approval", "type": "main", "index": 0}]]
+    },
+    "Request Cloudy approval": {
+      "main": [[{"node": "Wait for Cloudy decision", "type": "main", "index": 0}]]
+    },
+    "Wait for Cloudy decision": {
+      "main": [[{"node": "Approved?", "type": "main", "index": 0}]]
+    },
+    "Approved?": {
+      "main": [
+        [{"node": "Approved exact action", "type": "main", "index": 0}],
+        [{"node": "Stopped safely", "type": "main", "index": 0}]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "024691f9-d4b2-4cf1-aa2c-86bb563dcc31",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

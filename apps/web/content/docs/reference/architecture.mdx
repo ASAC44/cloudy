@@ -80,6 +80,10 @@ The transcript is displayed and requires a separate approval before it becomes
 a Codex instruction. The bridge steers an active turn and starts a read-only
 planning turn when the selected conversation is idle.
 
+On hardware, Quick Settings writes configured brightness to the standard Linux
+backlight sysfs device and volume to ALSA. The simulator and unconfigured legacy
+displays retain rendered software dimming.
+
 ## Web and API boundary
 
 Browser authentication terminates at Supabase Auth. Next.js server actions
@@ -93,7 +97,8 @@ used by physical Pod decisions.
 The public API also has separate authentication boundaries:
 
 - Pod pairing creates a one-time code and a scoped Pod token.
-- Automation clients use revocable automation keys.
+- Automation clients use revocable automation keys and provider-neutral HTTPS
+  approval and callback endpoints.
 - Codex bridges use a separately paired, revocable bridge token.
 - OAuth callbacks validate short-lived, one-time state before saving encrypted
   credentials.

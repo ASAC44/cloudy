@@ -52,6 +52,23 @@ CLOUDY_BUTTONS=0 \
 For a persistent SPI deployment, install the direct framebuffer service
 override during the service setup below.
 
+Quick Settings can drive a kernel-exposed backlight through the standard Linux
+backlight class. Configure the display overlay's `led_pin` with a free GPIO,
+then verify that the driver creates `/sys/class/backlight/<device>`. Do not use
+GPIO18 for the backlight because the INMP441 uses it for the I²S clock. Grant the
+`cloudy` service user write access to that device's `brightness` file, then set
+either automatic discovery or its exact directory in `/etc/cloudy-pod.env`:
+
+```dotenv
+CLOUDY_BACKLIGHT=auto
+# CLOUDY_BACKLIGHT=/sys/class/backlight/<device>
+```
+
+An explicitly configured invalid device stops startup with a clear error. If a
+working device later rejects a write, the Pod keeps running and uses software
+dimming until its next restart. The Raspberry Pi `fbtft` overlay documents the
+configurable [`led_pin`](https://github.com/raspberrypi/firmware/blob/master/boot/overlays/README).
+
 Touch coordinates come from the kernel-reported axis ranges. If the physical
 orientation differs, set `CLOUDY_TOUCH_SWAP_XY=1`, `CLOUDY_TOUCH_INVERT_X=1`, or
 `CLOUDY_TOUCH_INVERT_Y=1` as needed. The XPT2046 interrupt wire is required;
@@ -177,6 +194,8 @@ CLOUDY_APPROVE_PIN=5
 CLOUDY_REJECT_PIN=6
 CLOUDY_BUTTON_HOLD_SECONDS=0.6
 CLOUDY_MIC_DEVICE=plughw:CARD=sndrpii2scard,DEV=0
+# Set after the display driver exposes a writable Linux backlight device.
+# CLOUDY_BACKLIGHT=auto
 ```
 
 Then install and start the kiosk service:
@@ -216,16 +235,18 @@ invalidations over SSE and then fetch a complete authenticated snapshot. A
 Wi-Fi, or Realtime interruptions.
 
 Swipe up from a feed to open Quick Settings. Changes persist in
-`CLOUDY_STATE_DIR/settings.json`. Brightness currently dims the rendered UI;
-volume uses the native ALSA `Master` control through `amixer`. Connectivity,
-and reduced motion are configurable from the same touchscreen list.
+`CLOUDY_STATE_DIR/settings.json`. A configured `CLOUDY_BACKLIGHT` controls
+physical brightness through Linux sysfs; otherwise the Pod retains software
+dimming. Volume uses the native ALSA `Master` control through `amixer`.
+Connectivity and reduced motion are configurable from the same touchscreen
+list.
 
 ## Hardware acceptance
 
 Before treating the image as production-ready, verify:
 
 - Native 640×480 KMS output or scaled 320×240 SPI output, including color,
-  brightness, rotation, and screen blanking.
+  physical backlight brightness, rotation, and screen blanking.
 - Touch coordinates, swipe direction, and physical text/button legibility.
 - GPIO5 Approve and GPIO6 Reject wiring, pull-ups, debounce, and enclosure fit.
 - `sndrpii2scard` detection and microphone capture with `arecord`: mono, 16 kHz,
