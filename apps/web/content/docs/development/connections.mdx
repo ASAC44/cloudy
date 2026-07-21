@@ -31,6 +31,14 @@ swipe down on the Pod to read the complete email. Reply rules additionally show
 the exact proposed response. Existing inbox messages form the first polling
 baseline, so send a new message after activating a rule when testing.
 
+Gmail also exposes **Send a new Gmail message** when the OAuth connection has
+the send scope. Learned communication rules may use it only with an
+owner-scoped verified identity whose saved version still matches; a model-made
+email address is rejected. The dashboard does not yet provide identity
+management, so new-recipient rules require a verified identity already present
+in the canonical memory ledger. Reply candidates can bind only the current
+event thread.
+
 ### Schedule-aware meeting replies
 
 Create a Ping with Gmail as the source, Google Calendar event reads as context,

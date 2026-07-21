@@ -175,14 +175,18 @@ order, writes metadata-only temporal episodes to Graphiti, and stores the
 derived graph reference atomically when it completes an event. Recent unindexed
 decisions provide read-through consistency while the graph catches up.
 
-The runtime retrieves bounded owner-scoped action and voice evidence. That
-evidence can help the configured evaluator match and draft, but it cannot
-select a capability or authorize delivery; the fixed Ping definition and Pod
-approval remain authoritative. Graph outages fail open for existing fixed
-Pings. The service derives every namespace from the authenticated owner UUID,
-accepts only a fixed Cloudy ontology, disables Graphiti telemetry and raw
-episode storage, and exposes no raw Cypher. Its internal routes require
-timestamped, nonce-protected HMAC signatures. This boundary is documented in
+The runtime retrieves bounded owner-scoped action and voice evidence. Existing
+version-2 Pings remain fixed. Version-3 learned communication Pings can select
+only an opaque candidate from a normalized, owner-scoped allowlist containing
+Gmail and Telegram writes. The server, not the model, binds the capability,
+connection, current-event recipient or verified identity, and exact arguments.
+Unknown candidates, low confidence, identity drift, capability drift, and graph
+outages all cause learned-action abstention. No selection authorizes delivery;
+the hash-bound Pod approval remains authoritative. The service derives every
+namespace from the authenticated owner UUID, accepts only a fixed Cloudy
+ontology, disables Graphiti telemetry and raw episode storage, and exposes no
+raw Cypher. Its internal routes require timestamped, nonce-protected HMAC
+signatures. This boundary is documented in
 [Graph memory service](/docs/development/graph-memory).
 
 The API exposes explicit authenticated endpoints: `POST /v1/memories` to
@@ -210,6 +214,8 @@ connection ID so separate accounts do not mix.
 - Decisions include the displayed payload hash and an idempotency key.
 - Expired, revoked, changed, or already-resolved requests fail closed.
 - Approved provider actions and callbacks use durable delivery identities.
+- Learned communication candidates are capped at eight and revalidated before
+  approval creation and again before delivery.
 - Test Pings record a decision but deliberately execute no external action.
 - Sensitive credentials stay encrypted server-side and are never returned by
   read endpoints.

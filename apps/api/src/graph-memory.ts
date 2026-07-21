@@ -22,19 +22,20 @@ type GraphEvidence = {
 
 type GraphEntity = {
   canonical_ref: string
-  kind: 'Topic' | 'CommunicationEvent' | 'Decision'
+  kind: 'Topic' | 'ChannelIdentity' | 'CommunicationEvent' | 'Decision'
   name: string
   provenance_type: 'approval'
   confidence: number
   ontology_version: 1
   channel?: GraphChannel
+  verified?: boolean
   outcome?: string
 }
 
 type GraphFact = {
   canonical_ref: string
   subject: GraphEntity
-  predicate: 'ABOUT' | 'CHOSE_ACTION'
+  predicate: 'ABOUT' | 'CONTACTED_VIA' | 'CHOSE_ACTION' | 'REJECTED_ACTION'
   object: GraphEntity
   provenance_type: 'approval'
   confidence: number
@@ -167,14 +168,19 @@ export class GraphMemoryRetriever {
   ) {}
 
   async context(rule: RuntimeRule, event: Record<string, unknown>) {
+    return (await this.retrieve(rule, event)).context
+  }
+
+  async retrieve(rule: RuntimeRule, event: Record<string, unknown>) {
     const query = memoryQuery(rule, event)
     const recentPromise = this.store.listRecentUnindexedDecisions(rule.owner_id, 8).catch(() => [])
     const graphPromise = Promise.all([
       this.graph.searchAction(rule.owner_id, query, 8),
       this.graph.searchVoice(rule.owner_id, query, 5),
-    ]).catch(() => [[], []] as [GraphEvidence[], GraphEvidence[]])
-    const [recent, [actions, voice]] = await Promise.all([recentPromise, graphPromise])
-    return graphMemoryContext(actions, voice, recent)
+    ]).then(([actions, voice]) => ({ actions, voice, available: true as const }))
+      .catch(() => ({ actions: [], voice: [], available: false as const }))
+    const [recent, graph] = await Promise.all([recentPromise, graphPromise])
+    return { context: graphMemoryContext(graph.actions, graph.voice, recent), graphAvailable: graph.available }
   }
 }
 
@@ -200,33 +206,61 @@ function decisionEpisode(claim: MemoryOutboxClaim, decision: MemoryDecisionGraph
   const capability = safeLabel(decision.action_capability_id ?? 'no external action')
   const channel = capabilityChannel(decision.action_capability_id)
   const approved = decision.approval_outcome === 'approved'
-  const target: GraphEntity = approved && decision.action_capability_id ? {
-    canonical_ref: `communication:${claim.outboxId}`,
-    kind: 'CommunicationEvent',
-    name: capability,
-    provenance_type: 'approval',
-    confidence: 1,
-    ontology_version: 1,
-    channel,
-    outcome: communicationOutcome(claim),
-  } : {
-    canonical_ref: `topic:${createHash('sha256').update(capability).digest('hex').slice(0, 32)}`,
-    kind: 'Topic',
-    name: capability,
-    provenance_type: 'approval',
-    confidence: 1,
-    ontology_version: 1,
+  const situation = safeLabel([decision.source_provider, decision.rule_intent].filter(Boolean).join(': ') || 'unspecified situation')
+  const situationEntity: GraphEntity = {
+    canonical_ref: `topic:${createHash('sha256').update(situation).digest('hex').slice(0, 32)}`,
+    kind: 'Topic', name: situation, provenance_type: 'approval', confidence: 1, ontology_version: 1,
   }
-  const fact: GraphFact = {
-    canonical_ref: `outbox:${claim.outboxId}`,
-    subject: decisionEntity,
-    predicate: approved && decision.action_capability_id ? 'CHOSE_ACTION' : 'ABOUT',
-    object: target,
-    provenance_type: 'approval',
-    confidence: 1,
-    outcome: claim.eventType === 'delivery_recorded' ? communicationOutcome(claim) : decision.approval_outcome,
-    ontology_version: 1,
-    ...(approved && decision.action_capability_id ? { channel } : {}),
+  const facts: GraphFact[] = [{
+    canonical_ref: `outbox:${claim.outboxId}:situation`,
+    subject: decisionEntity, predicate: 'ABOUT', object: situationEntity,
+    provenance_type: 'approval', confidence: 1, outcome: decision.approval_outcome, ontology_version: 1,
+  }]
+  if (decision.action_capability_id) {
+    const target: GraphEntity = {
+      canonical_ref: `communication:${claim.outboxId}`,
+      kind: 'CommunicationEvent',
+      name: capability,
+      provenance_type: 'approval',
+      confidence: 1,
+      ontology_version: 1,
+      channel,
+      outcome: approved ? communicationOutcome(claim) : 'intent_only',
+    }
+    facts.push({
+      canonical_ref: `outbox:${claim.outboxId}:action`,
+      subject: decisionEntity,
+      predicate: approved ? 'CHOSE_ACTION' : 'REJECTED_ACTION',
+      object: target,
+      provenance_type: 'approval',
+      confidence: 1,
+      outcome: claim.eventType.startsWith('delivery.') ? communicationOutcome(claim) : decision.approval_outcome,
+      ontology_version: 1,
+      channel,
+    })
+    if (decision.selected_identity_id) {
+      const identity: GraphEntity = {
+        canonical_ref: `identity:${decision.selected_identity_id}`,
+        kind: 'ChannelIdentity',
+        name: `Verified ${channel} identity ${decision.selected_identity_id}`,
+        provenance_type: 'approval',
+        confidence: 1,
+        ontology_version: 1,
+        channel,
+        verified: true,
+      }
+      facts.push({
+        canonical_ref: `outbox:${claim.outboxId}:identity`,
+        subject: target,
+        predicate: 'CONTACTED_VIA',
+        object: identity,
+        provenance_type: 'approval',
+        confidence: 1,
+        outcome: decision.approval_outcome,
+        ontology_version: 1,
+        channel,
+      })
+    }
   }
   return {
     owner_id: claim.ownerId,
@@ -234,7 +268,7 @@ function decisionEpisode(claim: MemoryOutboxClaim, decision: MemoryDecisionGraph
     source_description: `Cloudy ${safeLabel(claim.eventType)}`,
     reference_time: claim.createdAt,
     ontology_version: 1,
-    facts: [fact],
+    facts,
   }
 }
 
@@ -266,9 +300,9 @@ function memoryQuery(rule: RuntimeRule, event: Record<string, unknown>) {
 
 function graphMemoryContext(actions: GraphEvidence[], voice: GraphEvidence[], recent: RecentUnindexedDecision[], maxCharacters = 6_000) {
   const lines = [
-    ...actions.map((item) => `- [graph action ${safeEvidence(item.relationship)}] ${safeEvidence(item.fact)}`),
-    ...voice.map((item) => `- [graph voice ${safeEvidence(item.relationship)}] ${safeEvidence(item.fact)}`),
-    ...recent.map((item) => `- [recent canonical decision] capability=${safeEvidence(item.action_capability_id ?? 'none')} approval=${item.approval_outcome} event=${safeEvidence(item.event_type)} outcome=${safeEvidence(item.event_outcome ?? item.delivery_outcome)}`),
+    ...actions.map((item) => `- [graph action evidence=${safeEvidence(item.evidence_id)} relationship=${safeEvidence(item.relationship)}] ${safeEvidence(item.fact)}`),
+    ...voice.map((item) => `- [graph voice evidence=${safeEvidence(item.evidence_id)} relationship=${safeEvidence(item.relationship)}] ${safeEvidence(item.fact)}`),
+    ...recent.map((item) => `- [recent canonical decision] situation=${safeEvidence([item.source_provider, item.rule_intent].filter(Boolean).join(': ') || 'unspecified')} capability=${safeEvidence(item.action_capability_id ?? 'none')} identity=${safeEvidence(item.selected_identity_id ? `identity:${item.selected_identity_id}` : 'event participant')} approval=${item.approval_outcome} event=${safeEvidence(item.event_type)} outcome=${safeEvidence(item.event_outcome ?? item.delivery_outcome)}`),
   ]
   let used = 0
   const bounded = lines.flatMap((line) => {

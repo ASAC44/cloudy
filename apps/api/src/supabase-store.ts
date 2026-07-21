@@ -890,13 +890,16 @@ export class SupabaseStore implements Store, RuntimeStore {
       capability_schema_hash: editingRule.capability_schema_hash,
       capability_safety: editingRule.capability_safety,
       definition: editingRule.definition,
-      context_bindings: editingRule.schema_version === 2
+      context_bindings: [2, 3].includes(editingRule.schema_version)
         ? ((editingRule.definition as { context?: RuleDraft['context_bindings'] }).context ?? [])
         : [],
       action: editingRule.schema_version === 2
         ? ((editingRule.definition as { action?: RuleDraft['action'] }).action ?? null)
         : null,
-      ready: editingRule.schema_version === 2,
+      action_policy: editingRule.schema_version === 3
+        ? ((editingRule.definition as { action_policy?: RuleDraft['action_policy'] }).action_policy ?? null)
+        : null,
+      ready: [2, 3].includes(editingRule.schema_version),
     } : {}
     const { data, error } = await this.db
       .from('rule_builder_sessions')
@@ -957,7 +960,8 @@ export class SupabaseStore implements Store, RuntimeStore {
     expectedRevision: number,
     draft: RuleDraft,
   ) {
-    const { data, error } = await this.db.rpc('commit_ping_rule_session_v2', {
+    const learned = draft.action_policy?.mode === 'learned_communication'
+    const { data, error } = await this.db.rpc(learned ? 'commit_ping_rule_session_v3' : 'commit_ping_rule_session_v2', {
       p_owner_id: ownerId,
       p_session_id: sessionId,
       p_expected_revision: expectedRevision,
@@ -969,10 +973,12 @@ export class SupabaseStore implements Store, RuntimeStore {
       p_capability_schema_hash: draft.capability_schema_hash,
       p_definition: draft.definition,
       p_context_bindings: draft.context_bindings ?? [],
-      p_action_connection_id: draft.action?.connection_id ?? null,
-      p_action_capability_id: draft.action?.capability_id ?? null,
-      p_action_capability_name: draft.action?.capability_name ?? null,
-      p_action_capability_schema_hash: draft.action?.capability_schema_hash ?? null,
+      ...(learned ? { p_action_candidates: draft.action_policy!.allowed_actions } : {
+        p_action_connection_id: draft.action?.connection_id ?? null,
+        p_action_capability_id: draft.action?.capability_id ?? null,
+        p_action_capability_name: draft.action?.capability_name ?? null,
+        p_action_capability_schema_hash: draft.action?.capability_schema_hash ?? null,
+      }),
     })
     if (error || !data) fail(error)
     return (Array.isArray(data) ? data[0] : data) as PingRule
@@ -993,7 +999,9 @@ export class SupabaseStore implements Store, RuntimeStore {
     expectedRevision: number,
     status: 'active' | 'paused',
   ) {
-    const { data, error } = await this.db.rpc('set_ping_rule_status', {
+    const current = await this.getRule(ownerId, ruleId)
+    if (!current) throw new Error('rule_not_found')
+    const { data, error } = await this.db.rpc(current.schema_version === 3 ? 'set_ping_rule_status_v3' : 'set_ping_rule_status', {
       p_owner_id: ownerId,
       p_rule_id: ruleId,
       p_expected_revision: expectedRevision,
@@ -1202,7 +1210,7 @@ export class SupabaseStore implements Store, RuntimeStore {
       .eq('owner_id', ownerId)
       .eq('source_connection_id', connectionId)
       .eq('status', 'active')
-      .eq('schema_version', 2)
+      .in('schema_version', [2, 3])
     if (error) fail(error)
     const rules = await Promise.all(data.map((row) => this.getRuntimeRule(ownerId, row.id)))
     return rules.filter((rule): rule is RuntimeRule => rule !== null)
@@ -1221,10 +1229,10 @@ export class SupabaseStore implements Store, RuntimeStore {
   async getRuntimeRule(ownerId: string, ruleId: string) {
     const { data, error } = await this.db
       .from('ping_rules')
-      .select('*, ping_rule_context_bindings(connection_id, capability_id, capability_name, capability_schema_hash, arguments, position), ping_rule_runtime_states!ping_rule_runtime_states_owner_id_rule_id_fkey(cursor, baseline_completed, next_run_at, consecutive_failures, schema_drift)')
+      .select('*, ping_rule_context_bindings(connection_id, capability_id, capability_name, capability_schema_hash, arguments, position), ping_rule_action_candidates(connection_id, capability_id, capability_name, capability_schema_hash, arguments, descriptor, identity_id, identity_version, position), ping_rule_runtime_states!ping_rule_runtime_states_owner_id_rule_id_fkey(cursor, baseline_completed, next_run_at, consecutive_failures, schema_drift)')
       .eq('owner_id', ownerId)
       .eq('id', ruleId)
-      .eq('schema_version', 2)
+      .in('schema_version', [2, 3])
       .maybeSingle()
     if (error) fail(error)
     if (!data) return null
@@ -1233,11 +1241,14 @@ export class SupabaseStore implements Store, RuntimeStore {
     const contexts = [...(data.ping_rule_context_bindings ?? [])]
       .sort((left, right) => left.position - right.position)
       .map(({ position: _position, ...binding }) => binding)
+    const actionCandidates = [...(data.ping_rule_action_candidates ?? [])]
+      .sort((left, right) => left.position - right.position)
+      .map(({ position: _position, ...candidate }) => candidate)
     const runtime = Array.isArray(data.ping_rule_runtime_states)
       ? data.ping_rule_runtime_states[0]
       : data.ping_rule_runtime_states
-    const { ping_rule_context_bindings: _bindings, ping_rule_runtime_states: _runtime, ...rule } = data
-    return { ...rule, source, contexts, runtime } as RuntimeRule
+    const { ping_rule_context_bindings: _bindings, ping_rule_action_candidates: _candidates, ping_rule_runtime_states: _runtime, ...rule } = data
+    return { ...rule, source, contexts, action_candidates: actionCandidates, runtime } as RuntimeRule
   }
 
   async completeRuleRun(input: {
@@ -1349,6 +1360,16 @@ export class SupabaseStore implements Store, RuntimeStore {
     return (data ?? []) as import('./types/store.js').MemoryMessageExample[]
   }
 
+  async listMemoryIdentities(ownerId: string, limit: number) {
+    const { data, error } = await this.db.from('memory_identities')
+      .select('id, owner_id, person_id, connection_id, channel, encrypted_identity, version')
+      .eq('owner_id', ownerId).is('deleted_at', null)
+      .order('updated_at', { ascending: false }).order('id', { ascending: true })
+      .limit(Math.max(1, Math.min(limit, 50)))
+    if (error) fail(error)
+    return (data ?? []) as import('./types/store.js').MemoryIdentityRecord[]
+  }
+
   async claimMemoryOutbox() {
     const { data, error } = await this.db.rpc('claim_memory_outbox', { p_lease_seconds: 120 })
     if (error) fail(error)
@@ -1369,10 +1390,21 @@ export class SupabaseStore implements Store, RuntimeStore {
 
   async getMemoryDecisionGraphRecord(ownerId: string, decisionId: string) {
     const { data, error } = await this.db.from('memory_decision_cases')
-      .select('id, owner_id, action_capability_id, approval_outcome, delivery_outcome, occurred_at, decided_at')
+      .select('id, owner_id, rule_id, selected_identity_id, action_capability_id, approval_outcome, delivery_outcome, occurred_at, decided_at')
       .eq('owner_id', ownerId).eq('id', decisionId).maybeSingle()
     if (error) fail(error)
-    return data as import('./types/store.js').MemoryDecisionGraphRecord | null
+    if (!data) return null
+    let ruleIntent: string | null = null
+    let sourceProvider: import('./types/store.js').ConnectionProvider | null = null
+    if (data.rule_id) {
+      const { data: rule, error: ruleError } = await this.db.from('ping_rules')
+        .select('intent_summary, source_connection_id').eq('owner_id', ownerId).eq('id', data.rule_id).maybeSingle()
+      if (ruleError) fail(ruleError)
+      ruleIntent = rule?.intent_summary ?? null
+      const connection = rule?.source_connection_id ? await this.getConnection(ownerId, rule.source_connection_id) : null
+      sourceProvider = connection?.provider ?? null
+    }
+    return { ...data, rule_intent: ruleIntent, source_provider: sourceProvider } as import('./types/store.js').MemoryDecisionGraphRecord
   }
 
   async completeMemoryOutbox(outboxId: string, leaseToken: string, graphUuid?: string) {
@@ -1409,18 +1441,46 @@ export class SupabaseStore implements Store, RuntimeStore {
     const ids = [...new Set((outbox ?? []).map((event) => event.aggregate_id))]
     if (!ids.length) return []
     const { data: decisions, error: decisionsError } = await this.db.from('memory_decision_cases')
-      .select('id, owner_id, action_capability_id, approval_outcome, delivery_outcome, occurred_at, decided_at')
+      .select('id, owner_id, rule_id, selected_identity_id, action_capability_id, approval_outcome, delivery_outcome, occurred_at, decided_at')
       .eq('owner_id', ownerId).in('id', ids)
     if (decisionsError) fail(decisionsError)
     const byId = new Map((decisions ?? []).map((decision) => [decision.id, decision]))
+    const ruleIds = [...new Set((decisions ?? []).flatMap((decision) => decision.rule_id ? [decision.rule_id] : []))]
+    const { data: rules, error: rulesError } = ruleIds.length
+      ? await this.db.from('ping_rules').select('id, intent_summary, source_connection_id').eq('owner_id', ownerId).in('id', ruleIds)
+      : { data: [], error: null }
+    if (rulesError) fail(rulesError)
+    const byRuleId = new Map((rules ?? []).map((rule) => [rule.id, rule]))
+    const connectionIds = [...new Set((rules ?? []).map((rule) => rule.source_connection_id))]
+    const { data: connections, error: connectionsError } = connectionIds.length
+      ? await this.db.from('connections').select('id, provider').eq('owner_id', ownerId).in('id', connectionIds)
+      : { data: [], error: null }
+    if (connectionsError) fail(connectionsError)
+    const providerByConnectionId = new Map((connections ?? []).map((connection) => [connection.id, connection.provider]))
     return (outbox ?? []).flatMap((event) => {
       const decision = byId.get(event.aggregate_id)
       if (!decision) return []
+      const rule = decision.rule_id ? byRuleId.get(decision.rule_id) : null
       const outcome = event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
         && typeof (event.payload as Record<string, unknown>).outcome === 'string'
         ? (event.payload as Record<string, unknown>).outcome as string : null
-      return [{ ...decision, event_type: event.event_type, event_outcome: outcome, outbox_created_at: event.created_at }]
+      return [{
+        ...decision,
+        rule_intent: rule?.intent_summary ?? null,
+        source_provider: rule ? providerByConnectionId.get(rule.source_connection_id) ?? null : null,
+        event_type: event.event_type,
+        event_outcome: outcome,
+        outbox_created_at: event.created_at,
+      }]
     }) as import('./types/store.js').RecentUnindexedDecision[]
+  }
+
+  async getMemoryIdentity(ownerId: string, identityId: string) {
+    const { data, error } = await this.db.from('memory_identities')
+      .select('id, owner_id, person_id, connection_id, channel, encrypted_identity, version')
+      .eq('owner_id', ownerId).eq('id', identityId).is('deleted_at', null).maybeSingle()
+    if (error) fail(error)
+    return data as import('./types/store.js').MemoryIdentityRecord | null
   }
 
   async reviseReply(input: { ownerId: string; requestId: string; expectedHash: string; newHash: string; encryptedDraft: string; encryptedAction: string; encryptedRevision: string; revisionSource: Record<string, unknown> }) {
@@ -1473,8 +1533,9 @@ export class SupabaseStore implements Store, RuntimeStore {
     risk: 'low' | 'medium' | 'high'
     warnings: string[]
     expiresAt: string
+    selection?: { candidateId: string; candidatePosition: number }
   }) {
-    const { data, error } = await this.db.rpc('prepare_ping_rule_approval', {
+    const { data, error } = await this.db.rpc(input.selection ? 'prepare_ping_rule_approval_v3' : 'prepare_ping_rule_approval', {
       p_event_id: input.eventId,
       p_lease_token: input.leaseToken,
       p_encrypted_draft_payload: input.encryptedDraft,
@@ -1488,6 +1549,10 @@ export class SupabaseStore implements Store, RuntimeStore {
       p_risk: input.risk,
       p_warnings: input.warnings,
       p_expires_at: input.expiresAt,
+      ...(input.selection ? {
+        p_candidate_id: input.selection.candidateId,
+        p_candidate_position: input.selection.candidatePosition,
+      } : {}),
     })
     if (error || !data) fail(error)
     return (Array.isArray(data) ? data[0] : data) as ApprovalRequest

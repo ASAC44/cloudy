@@ -212,6 +212,10 @@ export type MemoryOutboxClaim = {
 export type MemoryDecisionGraphRecord = {
   id: string
   owner_id: string
+  rule_id: string | null
+  rule_intent: string | null
+  source_provider: ConnectionProvider | null
+  selected_identity_id: string | null
   action_capability_id: string | null
   approval_outcome: 'approved' | 'rejected' | 'expired' | 'cancelled'
   delivery_outcome: 'pending' | 'delivered' | 'failed' | 'ambiguous' | 'superseded' | 'not_applicable'
@@ -223,6 +227,16 @@ export type RecentUnindexedDecision = MemoryDecisionGraphRecord & {
   event_type: string
   event_outcome: string | null
   outbox_created_at: string
+}
+
+export type MemoryIdentityRecord = {
+  id: string
+  owner_id: string
+  person_id: string
+  connection_id: string | null
+  channel: 'gmail' | 'telegram' | 'slack' | 'discord' | 'custom'
+  encrypted_identity: string
+  version: number
 }
 
 export type CapabilitySafety = 'verified_read' | 'verified_write' | 'unannotated'
@@ -268,6 +282,28 @@ export type RuleContextBindingDraft = {
 
 export type RuleActionDraft = RuleContextBindingDraft
 
+export type CommunicationDescriptor = {
+  channel: 'gmail' | 'telegram'
+  mode: 'reply' | 'new_message'
+  recipient_argument: 'thread_id' | 'peer_id' | 'to'
+  body_argument: 'message'
+  subject_argument?: 'subject'
+}
+
+export type LearnedActionDraft = RuleActionDraft & {
+  descriptor: CommunicationDescriptor
+  identity_id?: string
+  identity_version?: number
+}
+
+export type ActionPolicy = {
+  mode: 'learned_communication'
+  allowed_actions: LearnedActionDraft[]
+  recipient_scope: 'event_participants' | 'verified_responsible_contacts' | 'explicit_allowlist'
+  allowed_identity_ids?: string[]
+  minimum_confidence: number
+}
+
 export type RuleDefinitionV2 = {
   schema_version: 2
   source: {
@@ -298,6 +334,12 @@ export type RuleDefinitionV2 = {
   assumptions: string[]
 }
 
+export type RuleDefinitionV3 = Omit<RuleDefinitionV2, 'schema_version' | 'action'> & {
+  schema_version: 3
+  action: null
+  action_policy: ActionPolicy
+}
+
 export type RuleQuestion = {
   id: string
   prompt: string
@@ -316,6 +358,7 @@ export type RuleDraft = {
   definition: Record<string, unknown>
   context_bindings?: RuleContextBindingDraft[]
   action?: RuleActionDraft | null
+  action_policy?: ActionPolicy | null
   ready: boolean
 }
 
@@ -361,7 +404,7 @@ export type PingRule = {
   capability_schema_hash: string
   capability_safety: CapabilitySafety
   definition: Record<string, unknown>
-  schema_version: 1 | 2
+  schema_version: 1 | 2 | 3
   status?: 'active' | 'paused' | 'needs_attention'
   action_connection_id?: string | null
   action_capability_id?: string | null
@@ -429,9 +472,10 @@ export type TelegramAuthSession = {
 
 export type RuntimeRule = PingRule & {
   owner_id: string
-  definition: RuleDefinitionV2
+  definition: RuleDefinitionV2 | RuleDefinitionV3
   source: StoredConnection
   contexts: RuleContextBindingDraft[]
+  action_candidates: LearnedActionDraft[]
   runtime: {
     cursor: Record<string, unknown>
     baseline_completed: boolean
@@ -459,6 +503,13 @@ export type RuntimeEvent = {
   delivery_idempotency_key: string
   telegram_random_id: string | null
   attempts: number
+  selected_candidate_id?: string | null
+  selected_candidate_position?: number | null
+  selected_action_connection_id?: string | null
+  selected_action_capability_id?: string | null
+  selected_person_id?: string | null
+  selected_identity_id?: string | null
+  selected_identity_version?: number | null
 }
 
 export type EditableReply = {
@@ -583,6 +634,7 @@ export interface Store {
   ): Promise<PingRule>
   deleteRule(ownerId: string, ruleId: string): Promise<boolean>
   listAgentMemories(ownerId: string, scopes?: Array<{ scope: AgentMemory['scope']; scopeId?: string; provider?: ConnectionProvider }>, query?: string, limit?: number): Promise<AgentMemory[]>
+  listMemoryIdentities(ownerId: string, limit: number): Promise<MemoryIdentityRecord[]>
   upsertAgentMemory(input: { ownerId: string; scope: AgentMemory['scope']; scopeId?: string; provider?: ConnectionProvider; memoryKey: string; content: string; source?: Record<string, unknown> }): Promise<AgentMemory>
   deleteAgentMemory(ownerId: string, memoryId: string): Promise<boolean>
 }
@@ -616,11 +668,12 @@ export interface RuntimeStore {
   completeMemoryOutbox(outboxId: string, leaseToken: string, graphUuid?: string): Promise<boolean>
   failMemoryOutbox(outboxId: string, leaseToken: string, error: string, retryable: boolean): Promise<boolean>
   listRecentUnindexedDecisions(ownerId: string, limit: number): Promise<RecentUnindexedDecision[]>
+  getMemoryIdentity(ownerId: string, identityId: string): Promise<MemoryIdentityRecord | null>
   getEditableReply(ownerId: string, requestId: string): Promise<EditableReply | null>
   reviseReply(input: { ownerId: string; requestId: string; expectedHash: string; newHash: string; encryptedDraft: string; encryptedAction: string; encryptedRevision: string; revisionSource: Record<string, unknown> }): Promise<ApprovalRequest>
   ignoreRuleEvent(eventId: string, leaseToken: string, reason: string): Promise<boolean>
   failRuleEvent(eventId: string, leaseToken: string, error: string, ambiguous?: boolean): Promise<boolean>
-  prepareRuleApproval(input: { eventId: string; leaseToken: string; encryptedDraft: string; encryptedAction: string; actionHash: string; title: string; source: string; summary: string; details: string; affectedContext: string; risk: 'low' | 'medium' | 'high'; warnings: string[]; expiresAt: string }): Promise<ApprovalRequest>
+  prepareRuleApproval(input: { eventId: string; leaseToken: string; encryptedDraft: string; encryptedAction: string; actionHash: string; title: string; source: string; summary: string; details: string; affectedContext: string; risk: 'low' | 'medium' | 'high'; warnings: string[]; expiresAt: string; selection?: { candidateId: string; candidatePosition: number } }): Promise<ApprovalRequest>
   claimApprovedAction(): Promise<{ eventId: string; ownerId: string; ruleId: string; leaseToken: string } | null>
   completeAction(eventId: string, leaseToken: string, result: { delivered: boolean; retryable?: boolean; ambiguous?: boolean; superseded?: boolean; error?: string }): Promise<boolean>
   recordRuleRun(input: { ownerId: string; ruleId: string; eventId?: string; stage: string; outcome: string; errorCode?: string; errorMessage?: string; durationMs?: number }): Promise<void>

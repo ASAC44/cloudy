@@ -113,6 +113,7 @@
 
 ## Activate graph memory
 
+- [ ] Apply `supabase/migrations/20260722020000_learned_communication_actions.sql` in staging before enabling version-3 rules; verify a populated rollback refuses, then verify the rollback on an empty disposable database.
 - [ ] Provision Neo4j 5.26+ for staging and production, create least-privilege credentials, enable backups, and verify restore into a disposable instance.
 - [ ] Deploy `apps/memory` on Railway private networking with every `GRAPHITI_*` model variable set explicitly and `GRAPHITI_TELEMETRY_ENABLED=false`.
 - [ ] Generate one 32-byte-or-longer `MEMORY_INTERNAL_SECRET`, set the same value on the worker and memory service, and verify unsigned, stale, and replayed requests are rejected.
