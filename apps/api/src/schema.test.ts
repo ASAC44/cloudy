@@ -132,8 +132,8 @@ test('Google Calendar provider migration is atomic, reversible, and preserves co
 })
 
 test('Notion provider migration is atomic, reversible, and preserves constrained layouts', async () => {
-  const migration = await readFile(new URL('supabase/migrations/20260721000000_notion_connections.sql', root), 'utf8')
-  const rollback = await readFile(new URL('supabase/rollback/20260721000000_notion_connections.sql', root), 'utf8')
+  const migration = await readFile(new URL('supabase/migrations/20260721030000_notion_connections.sql', root), 'utf8')
+  const rollback = await readFile(new URL('supabase/rollback/20260721030000_notion_connections.sql', root), 'utf8')
 
   assert.match(migration, /^begin;/)
   assert.match(migration, /connection_oauth_states_provider_check[\s\S]*'notion'/)
@@ -230,6 +230,39 @@ test('reply personalization revisions are atomic, owner-scoped, and reversible',
   assert.match(migration, /revoke all on function public\.revise_ping_rule_reply/)
   assert.match(rollback, /drop function if exists public\.revise_ping_rule_reply/)
   assert.match(rollback, /drop column if exists personalization_enabled/)
+})
+
+test('canonical memory data is constrained, encrypted, transactional, and rollback-safe', async () => {
+  const migration = await readFile(new URL('supabase/migrations/20260722000000_memory_data_model.sql', root), 'utf8')
+  const rollback = await readFile(new URL('supabase/rollback/20260722000000_memory_data_model.sql', root), 'utf8')
+
+  assert.match(migration, /^begin;/)
+  for (const table of [
+    'memory_people', 'memory_identities', 'memory_decision_cases', 'memory_message_examples',
+    'memory_preferences', 'memory_graph_refs', 'memory_import_cursors', 'memory_outbox',
+  ]) {
+    assert.match(migration, new RegExp(`create table public\\.${table}`))
+    assert.match(migration, new RegExp(`alter table public\\.${table} enable row level security`))
+    assert.match(rollback, new RegExp(`drop table if exists public\\.${table}`))
+  }
+  assert.match(migration, /foreign key \(owner_id, person_id\)[\s\S]*references public\.memory_people\(owner_id, id\)/)
+  assert.match(migration, /memory_identities_active_external[\s\S]*where deleted_at is null/)
+  assert.match(migration, /memory_outbox_claim_queue[\s\S]*where status in \('pending', 'processing'\)/)
+  assert.match(migration, /check \(\(lease_token is null\) = \(leased_until is null\)\)/)
+  assert.match(migration, /num_nonnulls\(person_id, identity_id, decision_case_id, message_example_id, preference_id\) = 1/)
+  assert.match(migration, /create or replace function public\.record_ping_memory_decision/)
+  assert.match(migration, /'decision\.' \|\| p_outcome[\s\S]*on conflict \(owner_id, dedupe_key\) do nothing/)
+  assert.match(migration, /'delivery\.' \|\| final_status[\s\S]*on conflict \(owner_id, dedupe_key\) do nothing/)
+  assert.match(migration, /encrypted_revision_payload = p_memory_content/)
+  assert.match(migration, /coalesce\(decisions\.outcome, requests\.status\) as outcome/)
+  assert.match(migration, /cases\.delivery_outcome in \('delivered', 'failed', 'ambiguous', 'superseded'\)/)
+  const revisedReply = migration.match(/create or replace function public\.revise_ping_rule_reply\([\s\S]*?\n\$\$;/)?.[0] ?? ''
+  assert.doesNotMatch(revisedReply, /insert into public\.agent_memories/)
+  assert.match(rollback, /Refusing rollback while canonical memory data exists/)
+  assert.match(rollback, /create or replace function public\.sync_ping_event_approval_status/)
+  assert.match(rollback, /create or replace function public\.complete_ping_action/)
+  assert.match(migration, /commit;\s*$/)
+  assert.match(rollback, /commit;\s*$/)
 })
 
 test('local Supabase startup replays tracked migrations and injects local credentials', async () => {

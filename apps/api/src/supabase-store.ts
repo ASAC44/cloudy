@@ -1300,7 +1300,7 @@ export class SupabaseStore implements Store, RuntimeStore {
   async getRuntimeEvent(ownerId: string, eventId: string) {
     const { data, error } = await this.db
       .from('ping_rule_events')
-      .select('id, owner_id, rule_id, event_identity, conversation_key, provider_event_id, occurred_at, status, encrypted_source_payload, encrypted_draft_payload, encrypted_action_payload, action_payload_hash, approval_request_id, delivery_idempotency_key, telegram_random_id, attempts')
+      .select('id, owner_id, rule_id, event_identity, conversation_key, provider_event_id, occurred_at, status, encrypted_source_payload, encrypted_draft_payload, encrypted_action_payload, encrypted_revision_payload, action_payload_hash, approval_request_id, delivery_idempotency_key, telegram_random_id, attempts')
       .eq('owner_id', ownerId)
       .eq('id', eventId)
       .maybeSingle()
@@ -1311,7 +1311,7 @@ export class SupabaseStore implements Store, RuntimeStore {
   async listConversationEvents(ownerId: string, ruleId: string, conversationKey: string, limit: number) {
     const { data, error } = await this.db
       .from('ping_rule_events')
-      .select('id, owner_id, rule_id, event_identity, conversation_key, provider_event_id, occurred_at, status, encrypted_source_payload, encrypted_draft_payload, encrypted_action_payload, action_payload_hash, approval_request_id, delivery_idempotency_key, telegram_random_id, attempts')
+      .select('id, owner_id, rule_id, event_identity, conversation_key, provider_event_id, occurred_at, status, encrypted_source_payload, encrypted_draft_payload, encrypted_action_payload, encrypted_revision_payload, action_payload_hash, approval_request_id, delivery_idempotency_key, telegram_random_id, attempts')
       .eq('owner_id', ownerId)
       .eq('rule_id', ruleId)
       .eq('conversation_key', conversationKey)
@@ -1326,7 +1326,7 @@ export class SupabaseStore implements Store, RuntimeStore {
 
   async getEditableReply(ownerId: string, requestId: string) {
     const { data, error } = await this.db.from('ping_rule_events')
-      .select('id, owner_id, rule_id, event_identity, conversation_key, provider_event_id, occurred_at, status, encrypted_source_payload, encrypted_draft_payload, encrypted_action_payload, action_payload_hash, approval_request_id, delivery_idempotency_key, telegram_random_id, attempts, approval_requests!inner(status, payload_hash)')
+      .select('id, owner_id, rule_id, event_identity, conversation_key, provider_event_id, occurred_at, status, encrypted_source_payload, encrypted_draft_payload, encrypted_action_payload, encrypted_revision_payload, action_payload_hash, approval_request_id, delivery_idempotency_key, telegram_random_id, attempts, approval_requests!inner(status, payload_hash)')
       .eq('owner_id', ownerId).eq('approval_request_id', requestId).maybeSingle()
     if (error) fail(error)
     const request = Array.isArray(data?.approval_requests) ? data.approval_requests[0] : data?.approval_requests
@@ -1335,7 +1335,21 @@ export class SupabaseStore implements Store, RuntimeStore {
     return { event: event as RuntimeEvent, payloadHash: request.payload_hash }
   }
 
-  async reviseReply(input: { ownerId: string; requestId: string; expectedHash: string; newHash: string; encryptedDraft: string; encryptedAction: string; memoryContent: string; memorySource: Record<string, unknown> }) {
+  async listMessageExamples(ownerId: string, connectionId: string, limit: number) {
+    const { data, error } = await this.db.from('memory_message_examples')
+      .select('id, owner_id, decision_case_id, connection_id, person_id, identity_id, channel, language, source_kind, eligibility, encrypted_payload, payload_hash, style_metadata, occurred_at, created_at, updated_at')
+      .eq('owner_id', ownerId)
+      .eq('connection_id', connectionId)
+      .in('eligibility', ['positive', 'intent_only'])
+      .is('deleted_at', null)
+      .order('occurred_at', { ascending: false })
+      .order('id', { ascending: false })
+      .limit(Math.max(1, Math.min(limit, 20)))
+    if (error) fail(error)
+    return (data ?? []) as import('./types/store.js').MemoryMessageExample[]
+  }
+
+  async reviseReply(input: { ownerId: string; requestId: string; expectedHash: string; newHash: string; encryptedDraft: string; encryptedAction: string; encryptedRevision: string; revisionSource: Record<string, unknown> }) {
     const { data, error } = await this.db.rpc('revise_ping_rule_reply', {
       p_owner_id: input.ownerId,
       p_request_id: input.requestId,
@@ -1343,8 +1357,8 @@ export class SupabaseStore implements Store, RuntimeStore {
       p_new_hash: input.newHash,
       p_encrypted_draft_payload: input.encryptedDraft,
       p_encrypted_action_payload: input.encryptedAction,
-      p_memory_content: input.memoryContent,
-      p_memory_source: input.memorySource,
+      p_memory_content: input.encryptedRevision,
+      p_memory_source: input.revisionSource,
     })
     if (error || !data) fail(error)
     return (Array.isArray(data) ? data[0] : data) as ApprovalRequest

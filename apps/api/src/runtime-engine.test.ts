@@ -133,7 +133,7 @@ test('all-incoming Gmail rules do not ask AI to infer sender metadata from IDs',
   })
 })
 
-test('reply corrections replace draft-bound arguments and retain a scoped before-after example', async () => {
+test('reply corrections replace draft-bound arguments and remain encrypted until approval', async () => {
   const runtimeRule = rule()
   runtimeRule.action_connection_id = 'connection-1'
   runtimeRule.action_capability_id = 'send-reply'
@@ -172,8 +172,11 @@ test('reply corrections replace draft-bound arguments and retain a scoped before
   assert.deepEqual(await engine.editableReply('owner-1', 'request-1'), { reply: 'Old reply', payload_hash: payloadHash })
   const result = await engine.reviseReply('owner-1', 'request-1', payloadHash, 'New reply')
   assert.equal(JSON.parse(revision!.encryptedAction).arguments.message, 'New reply')
-  assert.match(revision!.memoryContent, /Before:\nOld reply[\s\S]*After:\nNew reply/)
-  assert.deepEqual(revision!.memorySource, { kind: 'correction', request_id: 'request-1', rule_id: 'rule-1', provider: 'custom_mcp', connection_id: 'connection-1' })
+  assert.deepEqual(JSON.parse(revision!.encryptedRevision), {
+    kind: 'correction', original: 'Old reply', final: 'New reply', request_id: 'request-1',
+    rule_id: 'rule-1', provider: 'custom_mcp', connection_id: 'connection-1',
+  })
+  assert.deepEqual(revision!.revisionSource, { kind: 'correction', request_id: 'request-1', rule_id: 'rule-1' })
   assert.equal(result.payload_hash, revision!.newHash)
 })
 

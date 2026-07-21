@@ -4,7 +4,7 @@ import { generateText, jsonSchema, Output } from 'ai'
 
 import { createAiModel } from './ai.js'
 import { ConnectionError, ConnectionService } from './connections.js'
-import { memoryContext, memoryScopes } from './memory.js'
+import { memoryContext, memoryScopes, messageExampleContext } from './memory.js'
 import {
   factOnlyPresentation,
   GithubApiError,
@@ -107,7 +107,10 @@ export class RuntimeEngine {
     if (sha256(canonicalJson(action)) !== expectedHash || !field) {
       throw new ConnectionError('payload_changed')
     }
-    const original = presentation[field] as string
+    const pendingRevision = revision.event.encrypted_revision_payload
+      ? safePendingRevision(this.connections, revision.event.encrypted_revision_payload)
+      : null
+    const original = (pendingRevision?.original ?? presentation[field]) as string
     const revisedAction = { ...action, arguments: { ...action.arguments } }
     for (const key of keys) revisedAction.arguments[key] = reply
     const newHash = sha256(canonicalJson(revisedAction))
@@ -118,8 +121,12 @@ export class RuntimeEngine {
       newHash,
       encryptedDraft: this.connections.encryptPrivatePayload({ ...presentation, [field]: reply }),
       encryptedAction: this.connections.encryptPrivatePayload(revisedAction),
-      memoryContent: `Before:\n${original.slice(0, 900)}\n\nAfter:\n${reply.slice(0, 900)}`,
-      memorySource: { kind: 'correction', request_id: requestId, rule_id: rule.id, provider: rule.source.provider, connection_id: rule.source_connection_id },
+      encryptedRevision: this.connections.encryptPrivatePayload({
+        kind: 'correction', original: original.slice(0, 4_096), final: reply.slice(0, 4_096),
+        request_id: requestId, rule_id: rule.id, provider: rule.source.provider,
+        connection_id: rule.action_connection_id ?? rule.source_connection_id,
+      }),
+      revisionSource: { kind: 'correction', request_id: requestId, rule_id: rule.id },
     })
     return { reply, payload_hash: newHash }
   }
@@ -302,8 +309,13 @@ export class RuntimeEngine {
         context.push({ schedule: { missing_fields: ['scheduling details'] } })
       }
       const githubPull = isGithubPullRequest(source) ? source : null
-      const memories = await this.store.listAgentMemories(rule.owner_id, memoryScopes(undefined, rule.source.provider, rule.source_connection_id), undefined, 12)
-      const decision = await this.decide(rule, source, context, githubPull ? false : undefined, memoryContext(memories))
+      const [memories, examples] = await Promise.all([
+        this.store.listAgentMemories(rule.owner_id, memoryScopes(undefined, rule.source.provider, rule.source_connection_id), undefined, 12),
+        rule.action_connection_id ? this.store.listMessageExamples(rule.owner_id, rule.action_connection_id, 5) : Promise.resolve([]),
+      ])
+      const voice = messageExampleContext(examples, (payload) => this.connections.decryptPrivatePayload(payload))
+      const decision = await this.decide(rule, source, context, githubPull ? false : undefined,
+        [memoryContext(memories), voice].filter(Boolean).join('\n'))
       if (!decision.match) {
         await this.store.ignoreRuleEvent(event.id, claim.leaseToken, decision.summary || 'The event did not match.')
         await this.store.recordRuleRun({ ownerId: rule.owner_id, ruleId: rule.id, eventId: event.id, stage: 'evaluate', outcome: 'ignored', durationMs: Date.now() - started })
@@ -537,6 +549,17 @@ function editableReplyField(presentation: Record<string, unknown>) {
   if (typeof presentation.proposed_reply === 'string') return 'proposed_reply'
   if (typeof presentation.response === 'string') return 'response'
   return null
+}
+
+function safePendingRevision(connections: ConnectionService, encryptedPayload: string) {
+  try {
+    const value = connections.decryptPrivatePayload<Record<string, unknown>>(encryptedPayload)
+    return value.kind === 'correction' && typeof value.original === 'string'
+      ? { original: value.original }
+      : null
+  } catch {
+    return null
+  }
 }
 
 function isAllIncomingGmailSource(rule: RuntimeRule) {
