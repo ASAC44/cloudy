@@ -158,6 +158,18 @@ sessions. Memories may be scoped to a user, workspace, or provider and can
 include a source pointer. They are bounded context only: they never authorize
 an action, replace a provider read, or bypass Pod approval.
 
+The Ping runtime also keeps a normalized, owner-scoped learning ledger for
+people, verified channel identities, decisions, writing examples, preferences,
+provider import cursors, and future graph references. Sensitive profiles,
+identities, message examples, and decision situations are encrypted. Row-level
+security and owner constraints prevent records from linking across users.
+
+Approval and delivery are separate facts. The exact approval transition writes
+the decision and a durable memory-outbox event in the same Postgres transaction.
+Delivery later strengthens the precedent only if the provider confirms success.
+Outbox events are idempotent and leased so a future derived memory index can be
+rebuilt or retried without becoming canonical state.
+
 The API exposes explicit authenticated endpoints: `POST /v1/memories` to
 write a memory, `GET /v1/memories?q=...&limit=...` to list memories, and
 `DELETE /v1/memories/:id` to soft-delete one. Workspace and provider memories
@@ -167,12 +179,14 @@ Integrations do not silently save arbitrary conversation text.
 `PUT /v1/settings/personalization` controls collection and prompt injection.
 For editable Ping replies, `GET /v1/requests/:id/reply` returns the current
 exact text and hash, while `PUT /v1/requests/:id/reply` atomically replaces the
-encrypted draft, encrypted action, payload hash, and provider-scoped correction
-memory. A Pod holding the previous hash cannot approve the changed action.
+encrypted draft, encrypted action, payload hash, and encrypted pending
+correction. The correction becomes learning evidence only after approval. A Pod
+holding the previous hash cannot approve the changed action.
 
-Reply prompts receive no more than 12 memories or 6,000 characters. General
-preferences apply across providers; corrections use the source connection ID
-so examples from separate accounts do not mix.
+Reply prompts receive no more than 12 explicit memories plus five eligible
+approved writing examples, each under a bounded character budget. General
+preferences apply across providers; automatic examples use the action
+connection ID so separate accounts do not mix.
 
 ## Decision guarantees
 
