@@ -8,6 +8,10 @@
   An AI-powered keychain companion for reviewing, revising, approving, and rejecting important actions without opening your laptop or phone.
 </p>
 
+## Demo video
+
+[Watch Cloudy in action on YouTube](https://youtu.be/tp_9mXRJlGY)
+
 ## The idea
 
 AI agents can work for minutes or hours on their own, but they still pause when
