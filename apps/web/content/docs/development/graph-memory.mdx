@@ -1,0 +1,81 @@
+---
+title: Graph memory service
+description: Run and authenticate Cloudy's private Graphiti and Neo4j service.
+---
+
+Cloudy includes a private Python memory service under `apps/memory`. It pins
+Graphiti 0.29.2, stores its derived temporal graph in Neo4j 5.26, and keeps
+Supabase Postgres as the canonical source of truth. The API-to-memory outbox
+worker is a separate integration step; adding this service alone does not turn
+on graph-backed decisions.
+
+The service never authorizes or delivers an action. It accepts bounded canonical
+facts, returns scoped evidence, and can be deleted or rebuilt from Postgres.
+Exact message examples remain encrypted in Postgres rather than being stored as
+raw Graphiti episode content.
+
+## Local setup
+
+Start Neo4j and install the locked Python environment:
+
+```sh
+cd apps/memory
+docker compose up -d neo4j
+uv sync --extra dev --frozen
+cp .env.example .env
+```
+
+Set every model name explicitly in `.env`, then run:
+
+```sh
+uv run uvicorn cloudy_memory.app:configured_app --factory --reload --port 8000
+```
+
+`GET /health` is a process liveness check. `GET /ready` also verifies Neo4j
+connectivity. Both reveal no graph facts; every `/internal/v1/*` route requires
+a signed internal request.
+
+## Required variables
+
+| Variable | Purpose |
+| --- | --- |
+| `MEMORY_INTERNAL_SECRET` | At least 32 random bytes shared only with the API and worker |
+| `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD` | Neo4j connection |
+| `NEO4J_DATABASE` | Explicit database name; defaults to `neo4j` |
+| `GRAPHITI_OPENAI_API_KEY` | Platform-owned Graphiti inference key, separate from user drafting settings |
+| `GRAPHITI_LLM_MODEL` | Extraction model |
+| `GRAPHITI_SMALL_MODEL` | Smaller extraction model |
+| `GRAPHITI_EMBEDDING_MODEL` | Embedding model |
+| `GRAPHITI_RERANKER_MODEL` | Search reranker model |
+
+`GRAPHITI_OPENAI_BASE_URL` is optional for an OpenAI-compatible platform
+endpoint. `GRAPHITI_MAX_COROUTINES`, `MEMORY_MAX_BODY_BYTES`, and
+`MEMORY_AUTH_MAX_SKEW_SECONDS` are bounded tuning settings. Graphiti telemetry
+is disabled by the service and raw episode content is not retained.
+
+## Request signing
+
+The caller sends `X-Cloudy-Timestamp`, `X-Cloudy-Nonce`, and
+`X-Cloudy-Signature`. The signature is `v1=` followed by the hexadecimal
+HMAC-SHA256 of:
+
+```text
+timestamp\nnonce\nMETHOD\n/path?query\nsha256(raw_body)
+```
+
+Timestamps outside the configured skew window, malformed nonces, duplicate
+nonces, oversized bodies, and invalid signatures fail before JSON parsing.
+Run one service replica until a shared replay store is introduced; the current
+nonce cache is deliberately process-local.
+
+## Isolation and ontology
+
+The caller supplies an owner UUID, never a Graphiti namespace. The service
+derives `owner_<uuid-without-dashes>` and supplies it on every ingest, search,
+delete, and rebuild operation. Entity and relationship types are fixed by the
+Cloudy ontology; there is no raw Cypher or caller-defined graph namespace.
+
+Mutating and searching one owner's graph is serialized for consistency while
+different owners can proceed concurrently. Verified triplets use deterministic
+UUIDs and a single Neo4j transaction, so Graphiti's LLM cannot merge verified
+people or channel identities.
