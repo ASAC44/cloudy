@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { memoryContext, memoryScopes, messageExampleContext } from './memory.js'
+import { memoryContext, memoryScopes, messageExampleContext, rankMessageExamples } from './memory.js'
 import type { AgentMemory, MemoryMessageExample } from './types/store.js'
 
 const memory = (key: string, kind: string, content: string): AgentMemory => ({
@@ -31,12 +31,42 @@ test('approved message examples expose only decrypted final writing samples', ()
     payload_hash: 'a'.repeat(64), style_metadata: {}, occurred_at: '', created_at: '', updated_at: '',
   })
   const context = messageExampleContext([
-    example('1', 'positive', { arguments: { message: 'hey, this works for me' } }),
+    { ...example('1', 'positive', { arguments: { message: 'hey, this works for me' } }), language: 'en', style_metadata: { greeting: 'casual' } },
     { ...example('2', 'intent_only', { kind: 'correction', original: 'Dear Anne', final: 'hey Anne' }), source_kind: 'approved_correction' },
     example('3', 'negative', { arguments: { message: 'do not include this' } }),
   ], JSON.parse)
 
+  assert.match(context, /voice profile.*languages=en.*greeting=casual/)
   assert.match(context, /delivered gmail writing sample.*hey, this works for me/)
   assert.match(context, /approved gmail writing sample[^]*hey Anne[^]*Correction note: avoid the earlier wording: Dear Anne/)
   assert.doesNotMatch(context, /do not include this/)
+})
+
+test('voice examples prefer person, channel, and intent before global recency', () => {
+  const example = (
+    id: string,
+    person: string | null,
+    channel: MemoryMessageExample['channel'],
+    eligibility: MemoryMessageExample['eligibility'] = 'positive',
+    sourceKind: MemoryMessageExample['source_kind'] = 'approved_action',
+  ): MemoryMessageExample => ({
+    id, owner_id: 'owner', decision_case_id: `decision-${id}`, connection_id: `${channel}-connection`,
+    person_id: person, identity_id: person ? `identity-${person}` : null, channel, language: null,
+    source_kind: sourceKind, eligibility, encrypted_payload: '{}', payload_hash: 'a'.repeat(64),
+    style_metadata: {}, occurred_at: '', created_at: '', updated_at: '',
+  })
+  const ranked = rankMessageExamples([
+    { example: example('global-newest', null, 'gmail'), intent: 'Unrelated sales update' },
+    { example: example('same-intent', null, 'gmail'), intent: 'Handle Vercel incidents' },
+    { example: example('same-person', 'anne', 'telegram'), intent: 'Handle Vercel incidents quickly' },
+    { example: example('corrected', 'anne', 'telegram', 'intent_only', 'approved_correction'), intent: 'Handle Vercel incidents' },
+    { example: example('approved-only', 'anne', 'telegram', 'intent_only'), intent: 'Handle Vercel incidents' },
+    { example: example('same-channel', null, 'telegram'), intent: 'Unrelated report' },
+  ], {
+    personId: 'anne', identityId: 'identity-anne', channel: 'telegram',
+    connectionId: 'telegram-connection', intent: 'Handle Vercel incidents',
+  }, 6)
+  assert.deepEqual(ranked.map(({ id }) => id), [
+    'corrected', 'same-person', 'approved-only', 'same-channel', 'same-intent', 'global-newest',
+  ])
 })

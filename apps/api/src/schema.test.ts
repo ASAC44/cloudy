@@ -311,6 +311,30 @@ test('learned communication rules constrain candidates and preserve selected-act
   assert.match(rollback, /commit;\s*$/)
 })
 
+test('live context policies are normalized, fail-safe, indexed, and reversible', async () => {
+  const migration = await readFile(new URL('supabase/migrations/20260722030000_voice_context_policies.sql', root), 'utf8')
+  const rollback = await readFile(new URL('supabase/rollback/20260722030000_voice_context_policies.sql', root), 'utf8')
+  assert.match(migration, /^begin;/)
+  assert.match(migration, /add column required boolean not null default true/)
+  assert.match(migration, /activation in \('always', 'scheduling_intent', 'selected_recipient', 'selected_thread'\)/)
+  assert.match(migration, /required and failure_policy = 'abort'/)
+  assert.match(migration, /create trigger apply_ping_context_policy_before_write/)
+  assert.match(migration, /rules\.definition->'context'->new\.position->'policy'/)
+  assert.match(rollback, /Refusing rollback while context policies would be lost/)
+  assert.match(rollback, /drop trigger if exists apply_ping_context_policy_before_write/)
+  assert.match(migration, /commit;\s*$/)
+  assert.match(rollback, /commit;\s*$/)
+})
+
+test('voice example lookup has an owner-scoped eligible recency index', async () => {
+  const migration = await readFile(new URL('supabase/migrations/20260722040000_voice_example_lookup.sql', root), 'utf8')
+  const rollback = await readFile(new URL('supabase/rollback/20260722040000_voice_example_lookup.sql', root), 'utf8')
+  assert.match(migration, /memory_message_examples_owner_eligible_recent/)
+  assert.match(migration, /owner_id, eligibility, occurred_at desc, id desc/)
+  assert.match(migration, /where deleted_at is null/)
+  assert.match(rollback, /drop index if exists public\.memory_message_examples_owner_eligible_recent/)
+})
+
 test('local Supabase startup replays tracked migrations and injects local credentials', async () => {
   const config = await readFile(new URL('supabase/config.toml', root), 'utf8')
   const launcher = await readFile(new URL('scripts/local.sh', root), 'utf8')

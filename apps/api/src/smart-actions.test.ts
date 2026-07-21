@@ -89,6 +89,23 @@ test('learned envelopes use the server candidate recipient, never model-provided
   assert.equal(action.candidate_id, candidate.id)
 })
 
+test('rule validation fixes context failure behavior at setup time', () => {
+  const status = capability('status', 'service.status', 'verified_read', 'read', ['context'], {}, [])
+  const reply = plannerReply({})
+  const definition = reply.draft.definition as Record<string, unknown>
+  definition.schema_version = 2
+  definition.context = [{
+    capability_id: status.id, arguments: {},
+    policy: { required: false, activation: 'selected_recipient', failure_policy: 'abort' },
+  }]
+  delete definition.action_policy
+  const result = validateReply(reply as never, [source, status], 'pod-1', {})
+  assert.equal(result.draft.ready, true)
+  assert.deepEqual(result.draft.context_bindings?.[0].policy, {
+    required: false, activation: 'selected_recipient', failure_policy: 'continue_with_warning',
+  })
+})
+
 function plannerReply(actionPolicy: Record<string, unknown>) {
   return {
     phase: 'review', message: 'Ready', questions: [],
