@@ -33,6 +33,7 @@ import {
   type Store,
 } from './types/store.js'
 import { StoreError } from './store.js'
+import { LocalGoogleCalendarStore } from './local-google-calendar.js'
 import { LocalPodLayoutStore } from './local-pod-layout.js'
 
 function fail(error: { code?: string; message: string } | null): never {
@@ -66,13 +67,17 @@ function missingMemorySchema(error: { code?: string; message: string } | null) {
 
 export class SupabaseStore implements Store, RuntimeStore {
   private readonly db: SupabaseClient
+  private readonly localGoogleCalendar?: LocalGoogleCalendarStore
   private readonly localPodLayouts?: LocalPodLayoutStore
 
   constructor(url: string, secretKey: string, localPodLayoutPath?: string) {
     this.db = createClient(url, secretKey, {
       auth: { persistSession: false, autoRefreshToken: false },
     })
-    if (localPodLayoutPath) this.localPodLayouts = new LocalPodLayoutStore(localPodLayoutPath)
+    if (localPodLayoutPath) {
+      this.localGoogleCalendar = new LocalGoogleCalendarStore(localPodLayoutPath)
+      this.localPodLayouts = new LocalPodLayoutStore(localPodLayoutPath)
+    }
   }
 
   async createPairingSession(input: {
@@ -441,10 +446,12 @@ export class SupabaseStore implements Store, RuntimeStore {
       .eq('owner_id', ownerId)
       .order('created_at', { ascending: true })
     if (error) fail(error)
-    return data as Connection[]
+    return [...data as Connection[], ...(this.localGoogleCalendar?.list(ownerId) ?? [])]
   }
 
   async getConnection(ownerId: string, connectionId: string) {
+    const local = this.localGoogleCalendar?.get(ownerId, connectionId)
+    if (local) return local
     const { data: connection, error } = await this.db
       .from('connections')
       .select('id, name, provider, protocol, endpoint_url, auth_type, status, account_label, last_error, last_tested_at, created_at, updated_at')
@@ -464,6 +471,9 @@ export class SupabaseStore implements Store, RuntimeStore {
   }
 
   async createConnection(ownerId: string, connection: NewConnection, encryptedPayload: string) {
+    if (connection.provider === 'google_calendar' && this.localGoogleCalendar) {
+      return this.localGoogleCalendar.create(ownerId, connection, encryptedPayload)
+    }
     const { data, error } = await this.db.rpc('create_connection_with_secret', {
       p_owner_id: ownerId,
       p_name: connection.name,
@@ -484,6 +494,9 @@ export class SupabaseStore implements Store, RuntimeStore {
     changes: Partial<Pick<Connection, 'name' | 'endpoint_url' | 'auth_type'>>,
     encryptedPayload?: string,
   ) {
+    if (this.localGoogleCalendar?.get(ownerId, connectionId)) {
+      return this.localGoogleCalendar.update(ownerId, connectionId, changes.name, encryptedPayload)
+    }
     const { data, error } = await this.db.rpc('update_connection_with_secret', {
       p_owner_id: ownerId,
       p_connection_id: connectionId,
@@ -497,6 +510,10 @@ export class SupabaseStore implements Store, RuntimeStore {
   }
 
   async updateConnectionSecret(connectionId: string, encryptedPayload: string) {
+    if (this.localGoogleCalendar?.has(connectionId)) {
+      this.localGoogleCalendar.updateSecret(connectionId, encryptedPayload)
+      return
+    }
     const { error } = await this.db
       .from('connection_secrets')
       .update({ encrypted_payload: encryptedPayload, updated_at: new Date().toISOString() })
@@ -514,6 +531,9 @@ export class SupabaseStore implements Store, RuntimeStore {
       encryptedPayload?: string
     },
   ) {
+    if (this.localGoogleCalendar?.get(ownerId, connectionId)) {
+      return this.localGoogleCalendar.setTest(ownerId, connectionId, result)
+    }
     const { data, error } = await this.db.rpc('set_connection_test_result', {
       p_owner_id: ownerId,
       p_connection_id: connectionId,
@@ -527,6 +547,9 @@ export class SupabaseStore implements Store, RuntimeStore {
   }
 
   async deleteConnection(ownerId: string, connectionId: string) {
+    if (this.localGoogleCalendar?.get(ownerId, connectionId)) {
+      return this.localGoogleCalendar.delete(ownerId, connectionId)
+    }
     const { data, error } = await this.db.rpc('delete_connection_with_layout_cleanup', {
       p_owner_id: ownerId,
       p_connection_id: connectionId,
@@ -541,6 +564,10 @@ export class SupabaseStore implements Store, RuntimeStore {
   }
 
   async createOAuthState(stateHash: string, state: OAuthState, expiresAt: string) {
+    if (state.provider === 'google_calendar' && this.localGoogleCalendar) {
+      this.localGoogleCalendar.createOAuthState(stateHash, state, expiresAt)
+      return
+    }
     const { error } = await this.db.from('connection_oauth_states').insert({
       state_hash: stateHash,
       owner_id: state.ownerId,
@@ -554,6 +581,9 @@ export class SupabaseStore implements Store, RuntimeStore {
   }
 
   async consumeOAuthState(stateHash: string, provider: OAuthProvider) {
+    if (provider === 'google_calendar' && this.localGoogleCalendar) {
+      return this.localGoogleCalendar.consumeOAuthState(stateHash)
+    }
     const { data, error } = await this.db
       .from('connection_oauth_states')
       .update({ used_at: new Date().toISOString() })

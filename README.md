@@ -14,8 +14,9 @@ them.
 
 ## Local development
 
-Copy the environment examples in `apps/api` and `apps/web`, then configure the
-hosted Supabase development project as described in the
+Copy the environment examples in `apps/api`, `apps/web`, `apps/pod`, and the
+optional `apps/bridge`, then configure the hosted Supabase development project
+as described in the
 [getting started guide](apps/web/content/docs/getting-started.mdx).
 
 ```sh

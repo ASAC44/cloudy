@@ -23,6 +23,11 @@ Enable the Google Calendar API and register the
 [Authentication setup](/docs/development/authentication). Then choose
 **Google Calendar** on the Connections page and continue with Google OAuth.
 
+When using `./start.sh`, Google Calendar OAuth state and the encrypted Calendar
+connection are stored in `apps/api/.state/podex.sqlite`. This narrow local
+fallback supports connecting and retesting Calendar without local Supabase;
+creating active Calendar Pings still requires the tracked Supabase migration.
+
 Calendar rules can list available calendars and read events only inside an
 explicit RFC 3339 time window. Event creation and updates are actions: Podex
 shows the exact title, times, timezone, location, description, and attendees
@@ -70,6 +75,11 @@ deduplicated Ping engine. A bot reply is available only as an exact Pod-approved
 action; an uncertain Bot API delivery is not retried automatically. Retest an
 existing bot connection after deploying this version to register its webhook.
 See Telegram's [Bot API webhook documentation](https://core.telegram.org/bots/api#setwebhook).
+
+For local bot testing, run `./scripts/run-ngrok.sh`, copy its HTTPS forwarding
+URL into `PODEX_PUBLIC_API_URL` in `apps/api/.env`, and restart Podex before
+connecting or retesting the bot. Keep ngrok running while Telegram sends
+webhook updates.
 
 ## Capability safety
 

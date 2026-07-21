@@ -39,6 +39,7 @@ test('JSON pointers and immutable bindings support RFC 6901 escaping', () => {
     text: { from: 'decision', pointer: '/draft' },
     fixed: 'literal',
   }, event, { draft: 'Exact reply' }), { peer: '42', text: 'Exact reply', fixed: 'literal' })
+  assert.deepEqual(resolveArguments({ peer_id: { from: 'event', pointer: '/chat/id' } }, event, {}), { peer_id: '42' })
   assert.throws(() => resolveArguments({ missing: { from: 'event', pointer: '/none' } }, event, {}), /could not be resolved/)
 })
 

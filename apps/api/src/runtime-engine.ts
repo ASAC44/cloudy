@@ -558,6 +558,7 @@ export function resolveArguments(
 ) {
   return Object.fromEntries(Object.entries(bindings).map(([key, value]) => {
     if (!isBinding(value)) return [key, value]
+    if (key === 'peer_id' && value.from === 'event' && typeof event.peer_id === 'string') return [key, event.peer_id]
     const source = value.from === 'event' ? event : decision
     const resolved = pointerValue(source, value.pointer)
     if (resolved === undefined) throw new Error(`Required binding ${key} could not be resolved.`)

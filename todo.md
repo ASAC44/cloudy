@@ -39,6 +39,7 @@
 
 ## Activate Telegram bot webhooks
 
+- [ ] Add a Telegram application ID and hash from `my.telegram.org` to `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` in `apps/api/.env`, restart `./start.sh`, then connect a disposable personal account and verify QR login plus one generated-response approval. The narrow SQLite fallback does not store Telegram connections, so this test also needs the configured Supabase project and migrations.
 - [ ] Deploy the matching API before retesting every existing Telegram bot connection so `setWebhook` points to the production `PODEX_PUBLIC_API_URL`; send duplicate webhook deliveries and verify one rule event, reject one reply, approve one reply, then disconnect the bot and confirm `deleteWebhook` succeeds.
 
 ## Deploy Codex bridge schema safely

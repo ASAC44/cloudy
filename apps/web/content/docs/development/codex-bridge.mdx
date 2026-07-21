@@ -20,6 +20,7 @@ requests.
 From the repository root:
 
 ```sh
+cp apps/bridge/.env.example apps/bridge/.env
 cd apps/bridge
 npm link
 podex-bridge pair http://localhost:3001
@@ -46,8 +47,12 @@ The selected target is where the Pod sends its next dictated task.
 Run the bridge in the foreground while testing:
 
 ```sh
-podex-bridge run
+npm start
 ```
+
+`npm start` loads `PODEX_API_URL` and the optional `PODEX_BRIDGE_HOME` from
+`apps/bridge/.env`. Direct `podex-bridge` commands accept the API URL as shown
+above and otherwise use the process environment.
 
 Once it is working, install the current user service on macOS or Linux:
 
