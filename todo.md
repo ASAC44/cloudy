@@ -107,7 +107,7 @@
 
 - [ ] Create a public Notion OAuth connection and configure `NOTION_CLIENT_ID` and `NOTION_CLIENT_SECRET` in the API environment.
 - [ ] Register `${PODEX_PUBLIC_API_URL}/v1/connections/oauth/notion/callback` as an allowed Notion OAuth redirect URI.
-- [ ] Apply `supabase/migrations/20260721000000_notion_connections.sql` before deploying the matching API build.
+- [ ] Apply `supabase/migrations/20260721030000_notion_connections.sql` before deploying the matching API build.
 - [ ] Connect a staging Notion workspace, verify tool discovery and workspace labeling, then approve one read and one write action through the Pod.
 - [ ] Verify production Notion OAuth, token refresh/reconnection, screen assignment, and rollback safety before marking this section complete.
 
