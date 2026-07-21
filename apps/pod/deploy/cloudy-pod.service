@@ -8,10 +8,11 @@ Conflicts=getty@tty1.service
 Type=simple
 User=cloudy
 Group=cloudy
-SupplementaryGroups=input render video gpio
+SupplementaryGroups=input render video gpio audio
 WorkingDirectory=/opt/cloudy-pod
-EnvironmentFile=/etc/cloudy-pod.env
 Environment=CLOUDY_SIMULATOR=0
+Environment=CLOUDY_MIC_DEVICE=plughw:CARD=sndrpii2scard,DEV=0
+EnvironmentFile=/etc/cloudy-pod.env
 Environment=XDG_RUNTIME_DIR=/run/cloudy-pod
 RuntimeDirectory=cloudy-pod
 RuntimeDirectoryMode=0700

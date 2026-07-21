@@ -1,5 +1,14 @@
 # Final Deployment TODO
 
+## Verify Pi buttons and microphone steering
+
+- [ ] Restore local DNS or use the Pi's current IP so `cloudy@cloudy.local` resolves and accepts SSH; the implementation-time probe on 2026-07-22 could not resolve the hostname.
+- [ ] On the production Pi, verify each four-leg switch's internally connected pairs with a continuity meter; wire Accept to BCM GPIO5/header pin 29, Reject to BCM GPIO6/header pin 31, and both opposite pairs to GND/header pin 30 without a 3.3 V connection.
+- [ ] On the production Pi Zero 2 W, wire the INMP441 left channel to 3.3 V/GND, GPIO18 SCK, GPIO19 WS, and GPIO20 SD; run `sudo sh /opt/cloudy-pod/deploy/provision-inmp441.sh --apply`, reboot when it returns status 10, and verify `arecord -l` exposes `sndrpii2scard`.
+- [ ] Run `sudo sh /opt/cloudy-pod/deploy/provision-inmp441.sh --check` while speaking near the mic; confirm its mono 16 kHz/16-bit, nonzero signal, audio-group, and sub-2 MB checks pass, then listen to a sample and configure an ALSA `softvol` PCM only if measured input is too quiet.
+- [ ] Reboot the Pi and verify `cloudy-pod.service` retains GPIO and audio permissions, single-button Accept/Reject taps work once, short two-button chords do nothing, and a 600 ms two-button hold records until either button is released.
+- [ ] Pair a live Codex bridge, select an active conversation, dictate and approve a transcript, and verify the existing turn is steered rather than a second turn being started; repeat while idle and verify a read-only planning turn starts.
+
 ## Demo mode follow-up
 
 - [ ] If demos need to follow a user across browsers or devices, replace the browser-local demo flag with an authenticated account preference and verify it cannot affect real automation creation.
@@ -75,7 +84,6 @@
 - [ ] Run `supabase/rollback/20260719070000_codex_sessions.sql` on a disposable database, then verify ordinary Pod approvals still resolve and expire correctly.
 - [ ] Install the bridge user service on one macOS and one Linux staging machine, pair each bridge, add a disposable repository, and verify restart recovery plus mode-`0600` config permissions.
 - [ ] Configure the production dashboard AI settings with the official `https://api.openai.com/v1` endpoint and an encrypted OpenAI key before enabling Pod voice.
-- [ ] Install and verify `arecord` on the production Pod, then confirm its microphone produces mono 16 kHz/16-bit PCM WAV recordings under the 2 MB limit.
 - [ ] Run the opt-in real Codex smoke flow in a disposable repository: dictate → revise plan → approve → approve a scoped permission → verify final summary and repository changes.
 
 ## Apply atomic connection writes

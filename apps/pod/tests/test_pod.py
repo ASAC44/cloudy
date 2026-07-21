@@ -10,6 +10,7 @@ import tempfile
 import threading
 import time
 import unittest
+import wave
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -120,6 +121,14 @@ class FakeWorker:
 
     def prompt(self, prompt, revision, replace_request=None):
         self.prompts.append((prompt, revision, replace_request))
+
+
+def write_test_wav(path: Path) -> None:
+    with wave.open(str(path), "wb") as recording:
+        recording.setnchannels(1)
+        recording.setsampwidth(2)
+        recording.setframerate(16_000)
+        recording.writeframes(b"\0\0")
 
 
 class PodTests(unittest.TestCase):
@@ -503,20 +512,32 @@ class PodTests(unittest.TestCase):
             self.app.start_gpio()
         self.assertEqual(self.app.buttons, [])
 
-    def test_button_chord_records_without_triggering_a_decision(self):
-        now = [10.0]
+    def test_button_chord_requires_both_buttons_to_be_held(self):
         actions = []
         recordings = []
-        chord = ButtonChord(actions.append, lambda: recordings.append("start"), lambda: recordings.append("stop"), clock=lambda: now[0])
+        chord = ButtonChord(actions.append, lambda: recordings.append("start"), lambda: recordings.append("stop"))
         chord.press("approve")
-        now[0] += 0.1
         chord.press("reject")
+        chord.hold("approve")
+        self.assertEqual(recordings, [])
+        chord.hold("reject")
         chord.release("approve")
         chord.release("reject")
         self.assertEqual(actions, [])
         self.assertEqual(recordings, ["start", "stop"])
 
-    def test_single_button_release_decides_after_chord_window(self):
+    def test_short_button_chord_does_nothing(self):
+        actions = []
+        recordings = []
+        chord = ButtonChord(actions.append, lambda: recordings.append("start"), lambda: recordings.append("stop"))
+        chord.press("approve")
+        chord.press("reject")
+        chord.release("reject")
+        chord.release("approve")
+        self.assertEqual(actions, [])
+        self.assertEqual(recordings, [])
+
+    def test_single_button_release_decides(self):
         actions = []
         chord = ButtonChord(actions.append, lambda: None, lambda: None)
         chord.press("reject")
@@ -528,10 +549,89 @@ class PodTests(unittest.TestCase):
         with patch("cloudy_pod.audio.subprocess.Popen", return_value=process) as popen:
             recorder = Recorder(Path(self.temp.name))
             recorder.start()
+            write_test_wav(recorder.path)
             recorder.stop()
         arguments = popen.call_args.args[0]
         self.assertEqual(arguments[1:9], ["-q", "-f", "S16_LE", "-r", "16000", "-c", "1", "-d"])
         self.assertEqual(arguments[9], "30")
+
+    def test_recorder_uses_configured_alsa_device(self):
+        process = type("Process", (), {"poll": lambda self: None, "terminate": lambda self: None, "wait": lambda self, timeout: None})()
+        with patch("cloudy_pod.audio.subprocess.Popen", return_value=process) as popen:
+            recorder = Recorder(Path(self.temp.name), device="plughw:CARD=Mic,DEV=0")
+            recorder.start()
+            write_test_wav(recorder.path)
+            recorder.stop()
+        self.assertEqual(popen.call_args.args[0][1:3], ["-D", "plughw:CARD=Mic,DEV=0"])
+
+    def test_recorder_cancel_removes_its_private_temporary_file(self):
+        process = type("Process", (), {"poll": lambda self: None, "terminate": lambda self: None, "wait": lambda self, timeout: None})()
+        with patch("cloudy_pod.audio.subprocess.Popen", return_value=process):
+            recorder = Recorder(Path(self.temp.name))
+            recorder.start()
+            path = recorder.path
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+            recorder.cancel()
+        self.assertFalse(path.exists())
+
+    def test_recorder_rejects_and_removes_an_empty_capture(self):
+        process = type("Process", (), {"poll": lambda self: 1, "wait": lambda self, timeout: None})()
+        with patch("cloudy_pod.audio.subprocess.Popen", return_value=process):
+            recorder = Recorder(Path(self.temp.name))
+            recorder.start()
+            path = recorder.path
+            with self.assertRaisesRegex(OSError, "Microphone capture failed"):
+                recorder.stop()
+        self.assertFalse(path.exists())
+
+    def test_recorder_rejects_a_failed_arecord_process(self):
+        process = type("Process", (), {"poll": lambda self: 1, "wait": lambda self, timeout: None})()
+        with patch("cloudy_pod.audio.subprocess.Popen", return_value=process):
+            recorder = Recorder(Path(self.temp.name))
+            recorder.start()
+            path = recorder.path
+            write_test_wav(path)
+            with self.assertRaisesRegex(OSError, "Microphone capture failed"):
+                recorder.stop()
+        self.assertFalse(path.exists())
+
+    def test_capture_failure_never_uploads_audio(self):
+        self.app.codex = {"target": {"revision": 4}}
+        self.app.state = "recording"
+        with patch.object(self.app.recorder, "stop", side_effect=OSError):
+            self.app.stop_recording()
+        self.assertEqual(self.worker.transcriptions, [])
+        self.assertEqual(self.app.state, "error")
+        self.assertEqual(self.app.message, "Microphone capture failed")
+
+    def test_capture_start_failure_shows_the_same_failure_state(self):
+        self.app.codex = {"target": {"revision": 4}}
+        self.app.state = "idle"
+        with patch.object(self.app.recorder, "start", side_effect=OSError):
+            self.app.start_recording()
+        self.assertEqual(self.worker.transcriptions, [])
+        self.assertEqual(self.app.state, "error")
+        self.assertEqual(self.app.message, "Microphone capture failed")
+
+    def test_pod_uses_the_configured_mic_device(self):
+        with patch.dict(os.environ, {"CLOUDY_MIC_DEVICE": "plughw:CARD=sndrpii2scard,DEV=0"}):
+            app = PodApp(self.worker, self.storage, simulator=True)
+        self.assertEqual(app.recorder.device, "plughw:CARD=sndrpii2scard,DEV=0")
+
+    def test_recording_requires_a_codex_target(self):
+        self.app.state = "idle"
+        with patch.object(self.app.recorder, "start") as start:
+            self.app.start_recording()
+        start.assert_not_called()
+        self.assertEqual(self.app.state, "target_unavailable")
+
+    def test_codex_mock_can_record_without_a_live_target(self):
+        self.app.request = {**REQUEST, "action_payload": {"mock_type": "codex"}, "codex_payload": {"plan": "Plan"}}
+        self.app.state = "request"
+        with patch.object(self.app.recorder, "start") as start:
+            self.app.start_recording()
+        start.assert_called_once()
+        self.assertEqual(self.app.state, "recording")
 
     def test_confirmed_transcript_uses_active_target_revision(self):
         self.app.codex = {"target": {"revision": 4}, "thread": {"status": "waiting"}}
@@ -540,6 +640,15 @@ class PodTests(unittest.TestCase):
         self.app.choose("approved")
         self.assertEqual(self.worker.prompts, [("Make the retry smaller", 4, None)])
         self.assertEqual(self.app.state, "queued")
+
+    def test_rejected_transcript_is_discarded(self):
+        self.app.codex = {"target": {"revision": 4}}
+        self.app.transcript = "Ignore this"
+        self.app.state = "transcript"
+        self.app.choose("rejected")
+        self.assertEqual(self.worker.prompts, [])
+        self.assertEqual(self.app.transcript, "")
+        self.assertEqual(self.app.state, "idle")
 
     def test_confirmed_voice_revision_replaces_the_exact_plan(self):
         plan = {**REQUEST, "source": "Codex", "codex_payload": {"plan": "Original plan"}}

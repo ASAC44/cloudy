@@ -12,7 +12,7 @@ hostname, a `cloudy` user, and public-key SSH access in Imager. After boot:
 sudo apt update
 sudo apt full-upgrade
 sudo apt install alsa-utils cage python3-venv python3-pip
-sudo usermod -a -G input,render,video,gpio cloudy
+sudo usermod -a -G input,render,video,gpio,audio cloudy
 sudo mkdir -p /opt/cloudy-pod /var/lib/cloudy-pod
 sudo chown -R cloudy:cloudy /opt/cloudy-pod /var/lib/cloudy-pod
 python3 --version # must report Python 3.13.x
@@ -59,6 +59,78 @@ without `T_IRQ` connected to GPIO17, Linux exposes the device but reports no
 touches. Omit `CLOUDY_BUTTONS=0` after wiring the GPIO5/6 approval buttons and
 installing a supported gpiozero pin backend.
 
+### Four-leg approval buttons
+
+A four-leg tactile switch contains two internally connected pairs; pressing the
+button connects the two pairs. Confirm the pairs with a continuity meter, then
+wire one leg from one pair to the GPIO and one leg from the opposite pair to
+ground. Leave the other two legs unused.
+
+| Action | BCM GPIO | Header pin | Other switch side |
+| --- | --- | --- | --- |
+| Accept | GPIO5 | 29 | Shared GND, pin 30 |
+| Reject | GPIO6 | 31 | Shared GND, pin 30 |
+
+The runtime enables internal pull-ups, so a press connects the input to ground.
+Do not connect either button to 3.3 V. A single-button release decides; holding
+both buttons for the configured threshold opens the microphone, and releasing
+either stops recording. A short two-button press is ignored.
+
+### INMP441 I²S microphone
+
+Wire one mono INMP441 on the left I²S channel:
+
+| INMP441 | Raspberry Pi Zero 2 W |
+| --- | --- |
+| VDD | 3.3 V, header pin 1 |
+| GND | GND, header pin 6 |
+| L/R | GND for the left channel |
+| SCK | BCM GPIO18, header pin 12 |
+| WS | BCM GPIO19, header pin 35 |
+| SD | BCM GPIO20, header pin 38 |
+
+The deployment includes an idempotent provisioner that installs `alsa-utils`,
+adds the `cloudy` user to the `audio` group, and adds the precompiled
+capture-card overlay when missing:
+
+```sh
+sudo sh /opt/cloudy-pod/deploy/provision-inmp441.sh --apply
+```
+
+Exit status `10` means the overlay was added but is not active until reboot.
+The normal deployment command handles that status and schedules the one
+required reboot automatically. The resulting boot setting is:
+
+```ini title="/boot/firmware/config.txt"
+dtoverlay=googlevoicehat-soundcard
+```
+
+After reboot, the same provisioner verifies the active card, service audio
+permissions, exact WAV contract, file size, and a nonzero three-second signal:
+
+```sh
+sudo sh /opt/cloudy-pod/deploy/provision-inmp441.sh --check
+```
+
+For manual diagnosis, inspect the named card or make a short recording directly:
+
+```sh
+arecord -l
+arecord -D plughw:CARD=sndrpii2scard,DEV=0 -q \
+  -f S16_LE -r 16000 -c 1 -d 3 /tmp/cloudy-mic.wav
+file /tmp/cloudy-mic.wav
+```
+
+The overlay captures at fixed 48 kHz/32-bit; `plughw` converts it to Cloudy's
+mono 16 kHz/16-bit upload contract. The production service uses this named card
+by default, avoiding unstable numeric ALSA card indexes. Override
+`CLOUDY_MIC_DEVICE` only when `arecord -l` reports another name, such as for a
+USB microphone or an ALSA `softvol` PCM added after measured input is too quiet.
+
+See the [Raspberry Pi I²S pin map](https://pip-assets.raspberrypi.com/categories/1259-audio-camera-and-display/documents/RP-009699-WP-1-Using%20the%20I2S%20peripherals%20on%20Raspberry%20Pi%20SBCs.pdf),
+[INMP441 data sheet](https://product.tdk.com/system/files/dam/doc/product/sw_piezo/mic/mems-mic/data_sheet/inmp441.pdf),
+and [Bookworm-compatible overlay setup](https://learn.adafruit.com/adafruit-i2s-mems-microphone-breakout/raspberry-pi-wiring-test).
+
 ## Copy and install
 
 For an already-provisioned Pod, deploy runtime updates from the repository root
@@ -74,10 +146,12 @@ Pass a different SSH destination when needed:
 ./scripts/deploy-pod.sh cloudy@192.168.1.50
 ```
 
-The script syncs only the Pod runtime and dependency manifests, reinstalls the
-Python package only when those manifests change, restarts `cloudy-pod`, and
-fails if the service does not return to an active state. It does not overwrite
-the Pod token, settings, or `/etc/cloudy-pod.env`.
+The script syncs the Pod runtime, deployment files, and dependency manifests;
+provisions the INMP441 overlay and audio permissions; reinstalls the Python
+package only when those manifests change; refreshes and enables the systemd
+unit; and fails if the service does not return to an active state. The first
+deployment schedules one reboot when the I²S overlay is newly added or not yet
+loaded. It does not overwrite the Pod token, settings, or `/etc/cloudy-pod.env`.
 
 Use the manual steps below for the first installation.
 
@@ -101,14 +175,19 @@ CLOUDY_API_URL=https://your-api-domain.example
 CLOUDY_STATE_DIR=/var/lib/cloudy-pod
 CLOUDY_APPROVE_PIN=5
 CLOUDY_REJECT_PIN=6
+CLOUDY_BUTTON_HOLD_SECONDS=0.6
+CLOUDY_MIC_DEVICE=plughw:CARD=sndrpii2scard,DEV=0
 ```
 
 Then install and start the kiosk service:
 
 ```sh
+sudo sh /opt/cloudy-pod/deploy/provision-inmp441.sh --apply
 sudo install -m 0644 /tmp/cloudy-pod.service /etc/systemd/system/cloudy-pod.service
 sudo chmod 0600 /etc/cloudy-pod.env
 ```
+
+Reboot before continuing if the provisioner exits with status `10`.
 
 SPI framebuffer installations additionally run:
 
@@ -149,10 +228,13 @@ Before treating the image as production-ready, verify:
   brightness, rotation, and screen blanking.
 - Touch coordinates, swipe direction, and physical text/button legibility.
 - GPIO5 Approve and GPIO6 Reject wiring, pull-ups, debounce, and enclosure fit.
-- Microphone capture with `arecord`: mono, 16 kHz, 16-bit PCM WAV, including
-  the 30-second recording limit and permissions for the service user.
-- Both-button dictation start/stop, transcript review, rejection, and approved
-  delivery to the selected Codex target.
+- `sndrpii2scard` detection and microphone capture with `arecord`: mono, 16 kHz,
+  16-bit PCM WAV with audible, nonzero speech, including the 30-second recording
+  limit and permissions for the service user. Run
+  `sudo sh /opt/cloudy-pod/deploy/provision-inmp441.sh --check` for the automated
+  format, size, permissions, and nonzero-level checks.
+- Both-button 600 ms hold, release-to-stop, transcript review, rejection, and
+  approved delivery to the selected Codex target.
 - Boot-to-kiosk behavior and clean restart after power loss.
 - Wi-Fi loss/recovery and read-only cached request behavior.
 - Frame timing, memory, temperature, and power stability during a long run.

@@ -62,6 +62,23 @@ test('new prompts always begin with a read-only planning turn', async () => {
   assert.match(turn.params.input[0].text, /without editing files/)
 })
 
+test('prompts steer the exact active turn without starting another turn', async () => {
+  const calls = []
+  const app = { call: async (method, params) => { calls.push({ method, params }); return {} }, stop() {} }
+  const bridge = new Bridge({ workspaces: [{ id: 'local-workspace', label: 'Repo', path: '/tmp' }], threads: [] }, { api: {}, app })
+  bridge.remoteWorkspaces.set('remote-workspace', { id: 'remote-workspace', local_id: 'local-workspace' })
+  bridge.remoteThreads.set('remote-thread', { id: 'remote-thread', codex_thread_id: 'thread-1' })
+  bridge.threads.set('thread-1', { workspaceLocalId: 'local-workspace', activeTurnId: 'turn-1' })
+  bridge.threadModes.set('thread-1', 'planning')
+
+  await bridge.prompt({ workspace_id: 'remote-workspace', thread_id: 'remote-thread', idempotency_key: 'message-1', payload: { prompt: 'Use the smaller retry' } })
+
+  assert.deepEqual(calls, [{ method: 'turn/steer', params: {
+    threadId: 'thread-1', expectedTurnId: 'turn-1', clientUserMessageId: 'message-1',
+    input: [{ type: 'text', text: 'Use the smaller retry' }],
+  } }])
+})
+
 test('approved plans use workspace-write without network or full access', async () => {
   let turn
   const app = { call: async (method, params) => { if (method === 'turn/start') turn = params; return {} }, stop() {} }
