@@ -39,6 +39,12 @@ management, so new-recipient rules require a verified identity already present
 in the canonical memory ledger. Reply candidates can bind only the current
 event thread.
 
+Gmail's existing read-only OAuth scope also supports an explicitly consented
+sent-mail import for writing personalization. Open **Configure → Memory
+controls**, choose a start date and maximum of 500 messages, review the
+provider estimate, and confirm the exact scope. Importing is asynchronous and
+does not grant any action permission.
+
 ### Schedule-aware meeting replies
 
 Create a Ping with Gmail as the source, Google Calendar event reads as context,
@@ -110,6 +116,12 @@ groups, and channels through the worker and requires `TELEGRAM_API_ID` plus
 `TELEGRAM_API_HASH` on both the API and worker services. Messages sent by the
 connected account are ignored so an approved reply cannot trigger the same
 Ping again.
+
+A personal connection can also import outgoing text from up to 20 dialogs
+selected under **Configure → Memory controls**, with at most 100 messages per
+dialog. Cloudy displays the selected-dialog upper bound before consent. Bot
+connections do not offer history import because Telegram exposes only messages
+observable by that bot.
 
 Choose **Bot** to paste a BotFather token. After `getMe` succeeds, Podex
 registers an HTTPS webhook under `PODEX_PUBLIC_API_URL` with Telegram's secret

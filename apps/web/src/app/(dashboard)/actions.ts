@@ -18,6 +18,8 @@ import type {
   ScreenLayout,
   MascotAction,
   ScreenNavigation,
+  MemoryImport,
+  TelegramHistoryDialog,
 } from "@/types/api";
 import type { ActionState, ConnectionInput } from "@/types/actions";
 
@@ -235,6 +237,76 @@ export async function setPersonalization(enabled: boolean): Promise<{ error?: st
     return {};
   } catch (error) {
     return { error: error instanceof Error ? error.message : "Personalization could not be updated" };
+  }
+}
+
+export async function setLearnedActions(enabled: boolean): Promise<{ error?: string }> {
+  try {
+    await apiFetch("/v1/settings/learned-actions", { method: "PUT", body: JSON.stringify({ enabled }) });
+    revalidatePath("/configure");
+    return {};
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Learned actions could not be updated" };
+  }
+}
+
+export async function telegramHistoryDialogs(connectionId: string): Promise<{ dialogs?: TelegramHistoryDialog[]; error?: string }> {
+  try {
+    return await apiFetch<{ dialogs: TelegramHistoryDialog[] }>(`/v1/memory/imports/telegram/${connectionId}/dialogs`);
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Telegram chats could not be loaded" };
+  }
+}
+
+export async function estimateMessageHistory(connectionId: string, scope: Record<string, unknown>): Promise<{ estimated_count?: number; error?: string }> {
+  try {
+    return await apiFetch<{ estimated_count: number }>("/v1/memory/imports/estimate", {
+      method: "POST", body: JSON.stringify({ connection_id: connectionId, scope }),
+    });
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Import size could not be estimated" };
+  }
+}
+
+export async function startMessageHistoryImport(connectionId: string, scope: Record<string, unknown>): Promise<{ import?: MemoryImport; error?: string }> {
+  try {
+    const result = await apiFetch<{ import: MemoryImport }>("/v1/memory/imports", {
+      method: "POST", body: JSON.stringify({ connection_id: connectionId, scope, consent: true }),
+    });
+    revalidatePath("/configure");
+    return result;
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Import could not be started" };
+  }
+}
+
+export async function forgetMemoryPerson(id: string): Promise<{ error?: string }> {
+  try {
+    await apiFetch(`/v1/memory/people/${id}`, { method: "DELETE" });
+    revalidatePath("/configure");
+    return {};
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Person could not be forgotten" };
+  }
+}
+
+export async function forgetConnectionMemory(id: string): Promise<{ error?: string }> {
+  try {
+    await apiFetch(`/v1/memory/connections/${id}`, { method: "DELETE" });
+    revalidatePath("/configure");
+    return {};
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Connection memory could not be forgotten" };
+  }
+}
+
+export async function forgetAllMemory(): Promise<{ error?: string }> {
+  try {
+    await apiFetch("/v1/memory", { method: "DELETE", body: JSON.stringify({ confirmation: "FORGET EVERYTHING" }) });
+    revalidatePath("/configure");
+    return {};
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Memory could not be cleared" };
   }
 }
 

@@ -178,6 +178,34 @@ test('MemoryOutboxSync records a rejected communication against its situation', 
   assert.ok(facts.some((fact) => fact.predicate === 'CONTACTED_VIA'))
 })
 
+test('MemoryOutboxSync rebuilds an owner after a transactional forget', async () => {
+  const paths: string[] = []
+  let completed = false
+  const claim = { ...memoryClaim('user.rebuild', { scope: 'person' }), aggregateType: 'user' as const, aggregateId: ownerId }
+  const decision = {
+    id: decisionId, owner_id: ownerId, rule_id: 'rule-1', rule_intent: 'Handle Vercel incidents', selected_identity_id: null,
+    source_provider: 'vercel' as const, action_capability_id: 'gmail.send_reply', approval_outcome: 'approved' as const,
+    delivery_outcome: 'delivered' as const, occurred_at: '2026-07-21T10:00:00.000Z', decided_at: '2026-07-21T10:01:00.000Z',
+  }
+  const store = {
+    claimMemoryOutbox: async () => claim,
+    listMemoryDecisionGraphRecords: async () => [decision],
+    completeMemoryOutbox: async (_id: string, _lease: string, graphId?: string) => { assert.equal(graphId, undefined); completed = true; return true },
+    failMemoryOutbox: async () => { throw new Error('unexpected failure') },
+  } as unknown as RuntimeStore
+  const graph = new GraphMemoryClient('http://memory.internal', secret, async (input, init) => {
+    const path = new URL(String(input)).pathname
+    paths.push(`${init?.method}:${path}`)
+    return init?.method === 'DELETE' ? Response.json({ deleted: true }) : Response.json({ graph_ids: ['rebuilt'] })
+  })
+  assert.equal(await new MemoryOutboxSync(store, graph).syncOnce(), true)
+  assert.deepEqual(paths, [
+    `DELETE:/internal/v1/users/${ownerId}`,
+    'POST:/internal/v1/episodes',
+  ])
+  assert.equal(completed, true)
+})
+
 function memoryClaim(eventType: string, payload: Record<string, unknown>): MemoryOutboxClaim {
   return {
     outboxId, ownerId, aggregateType: 'decision', aggregateId: decisionId, eventType,

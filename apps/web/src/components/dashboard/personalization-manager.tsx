@@ -90,7 +90,7 @@ export function PersonalizationManager({ initialMemories, initialEnabled, config
         <div>
           <Label htmlFor="personalization">Personalize drafted replies</Label>
           <p className="mt-2 text-sm leading-5 text-muted-foreground">
-            Use only the preferences, examples, and corrections you explicitly save.
+            Use approved corrections, saved preferences, and sent-message history you explicitly choose to import.
           </p>
         </div>
         <Switch id="personalization" checked={enabled} disabled={!configured || pending} onCheckedChange={toggle} />

@@ -193,9 +193,18 @@ The API exposes explicit authenticated endpoints: `POST /v1/memories` to
 write a memory, `GET /v1/memories?q=...&limit=...` to list memories, and
 `DELETE /v1/memories/:id` to soft-delete one. Workspace and provider memories
 also require their scope identifier; provider memories require `provider`.
-Integrations do not silently save arbitrary conversation text.
+Integrations do not silently save arbitrary conversation text. Sent history is
+separate: `POST /v1/memory/imports/estimate` previews one bounded Gmail or
+Telegram-personal scope, `POST /v1/memory/imports` requires explicit consent,
+and `GET /v1/memory/imports` reports progress and failures. The worker, not a
+draft request, reads that saved scope asynchronously.
 
 `PUT /v1/settings/personalization` controls collection and prompt injection.
+`PUT /v1/settings/learned-actions` independently controls version-3 action
+selection. `GET /v1/memory/people` lists decrypted display-safe people and
+verified identities for the owning user. Owner-scoped forget routes remove a
+person, a connection's memory, or everything transactionally and schedule the
+derived graph rebuild.
 For editable Ping replies, `GET /v1/requests/:id/reply` returns the current
 exact text and hash, while `PUT /v1/requests/:id/reply` atomically replaces the
 encrypted draft, encrypted action, payload hash, and encrypted pending

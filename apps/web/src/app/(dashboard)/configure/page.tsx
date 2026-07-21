@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { PingRuleDefinitions } from "@/components/dashboard/ping-rule-definitions";
 import { PersonalizationManager } from "@/components/dashboard/personalization-manager";
+import { MemoryControls } from "@/components/dashboard/memory-controls";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -9,22 +10,31 @@ import {
 } from "@/components/ui/native-select";
 import { Switch } from "@/components/ui/switch";
 import { apiFetch } from "@/lib/api";
-import type { AgentMemory, AiSettings, PingRuleSummary } from "@/types/api";
+import type { AgentMemory, AiSettings, Connection, MemoryImport, MemoryPerson, PingRuleSummary } from "@/types/api";
 
 export default async function ConfigurePage() {
   let rules: PingRuleSummary[] = [];
   let memories: AgentMemory[] = [];
   let aiSettings: AiSettings | null = null;
+  let connections: Connection[] = [];
+  let imports: MemoryImport[] = [];
+  let people: MemoryPerson[] = [];
   let rulesError = "";
-  const [rulesResult, memoriesResult, settingsResult] = await Promise.allSettled([
+  const [rulesResult, memoriesResult, settingsResult, connectionsResult, importsResult, peopleResult] = await Promise.allSettled([
     apiFetch<{ rules: PingRuleSummary[] }>("/v1/rules"),
     apiFetch<{ memories: AgentMemory[] }>("/v1/memories?limit=50"),
     apiFetch<{ settings: AiSettings | null }>("/v1/settings/ai"),
+    apiFetch<{ connections: Connection[] }>("/v1/connections"),
+    apiFetch<{ imports: MemoryImport[] }>("/v1/memory/imports"),
+    apiFetch<{ people: MemoryPerson[] }>("/v1/memory/people"),
   ]);
   if (rulesResult.status === "fulfilled") rules = rulesResult.value.rules;
   else rulesError = rulesResult.reason instanceof Error ? rulesResult.reason.message : "Ping definitions could not be loaded";
   if (memoriesResult.status === "fulfilled") memories = memoriesResult.value.memories.filter((memory) => ["preference", "writing_sample", "correction"].includes(String(memory.source.kind)));
   if (settingsResult.status === "fulfilled") aiSettings = settingsResult.value.settings;
+  if (connectionsResult.status === "fulfilled") connections = connectionsResult.value.connections;
+  if (importsResult.status === "fulfilled") imports = importsResult.value.imports;
+  if (peopleResult.status === "fulfilled") people = peopleResult.value.people;
 
   return (
     <div className="mx-auto w-full max-w-5xl px-6 py-12 md:px-10 md:py-16">
@@ -204,6 +214,20 @@ export default async function ConfigurePage() {
           </Button>
         </div>
       </form>
+
+      <section className="grid gap-8 border-b border-border py-10 md:grid-cols-[minmax(0,0.7fr)_minmax(22rem,1.3fr)] md:gap-16">
+        <div>
+          <h2 className="font-sans text-lg font-medium">Memory controls</h2>
+          <p className="mt-2 max-w-sm leading-6 text-muted-foreground">Choose what Cloudy may learn, inspect its verified people, and remove memory at any scope.</p>
+        </div>
+        <MemoryControls
+          connections={connections.filter((connection): connection is Connection & { provider: "gmail" | "telegram" } => ["gmail", "telegram"].includes(connection.provider))}
+          imports={imports}
+          people={people}
+          learnedActionsEnabled={aiSettings?.learned_actions_enabled ?? false}
+          configured={Boolean(aiSettings)}
+        />
+      </section>
     </div>
   );
 }

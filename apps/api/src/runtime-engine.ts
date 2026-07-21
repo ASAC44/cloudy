@@ -301,9 +301,10 @@ export class RuntimeEngine {
     const claim = await this.store.claimRuleEvent()
     if (!claim) return false
     const started = Date.now()
-    const [rule, event] = await Promise.all([
+    const [rule, event, settings] = await Promise.all([
       this.store.getRuntimeRule(claim.ownerId, claim.ruleId),
       this.store.getRuntimeEvent(claim.ownerId, claim.eventId),
+      this.store.getAiSettings(claim.ownerId),
     ])
     if (!rule || !event?.encrypted_source_payload || rule.status !== 'active') {
       await this.store.failRuleEvent(claim.eventId, claim.leaseToken, 'The rule or encrypted event is unavailable.')
@@ -312,13 +313,17 @@ export class RuntimeEngine {
 
     try {
       const source = this.connections.decryptPrivatePayload<Record<string, unknown>>(event.encrypted_source_payload)
-      const learnedMemory = rule.schema_version === 3
+      const learnedEnabled = settings?.learned_actions_enabled ?? false
+      const voiceEnabled = settings?.personalization_enabled ?? false
+      const learnedMemory = rule.schema_version === 3 && learnedEnabled
         ? await this.graphMemory?.retrieve(rule, source) ?? { context: '', graphAvailable: false }
         : null
-      const learnedCandidates = rule.schema_version === 3
+      const learnedCandidates = rule.schema_version === 3 && learnedEnabled
         ? await this.learnedCandidates(rule, source)
         : []
-      const actionSelection = rule.schema_version === 3 && learnedMemory?.graphAvailable
+      const actionSelection = rule.schema_version === 3 && !learnedEnabled
+        ? { candidate_id: null, confidence: 0, rationale: 'Learned actions are disabled in memory controls.', evidence_ids: [], missing_information: [] }
+        : rule.schema_version === 3 && learnedMemory?.graphAvailable
         ? await this.selectLearnedAction(rule, source, learnedCandidates, learnedMemory.context)
         : rule.schema_version === 3
           ? { candidate_id: null, confidence: 0, rationale: 'Graph memory is unavailable, so Cloudy abstained.', evidence_ids: [], missing_information: ['graph memory'] }
@@ -376,8 +381,8 @@ export class RuntimeEngine {
       const actionConnectionId = selectedCandidate?.binding.connection_id ?? rule.action_connection_id
       const actionChannel = selectedCandidate?.binding.descriptor.channel ?? communicationChannel(rule.action_capability_id)
       const [memories, examples, graphMemory] = await Promise.all([
-        this.store.listAgentMemories(rule.owner_id, memoryScopes(undefined, rule.source.provider, rule.source_connection_id), undefined, 12),
-        actionConnectionId || actionChannel ? this.store.listRelevantMessageExamples({
+        voiceEnabled ? this.store.listAgentMemories(rule.owner_id, memoryScopes(undefined, rule.source.provider, rule.source_connection_id), undefined, 12) : Promise.resolve([]),
+        voiceEnabled && (actionConnectionId || actionChannel) ? this.store.listRelevantMessageExamples({
           ownerId: rule.owner_id,
           ...(actionConnectionId ? { connectionId: actionConnectionId } : {}),
           ...(selectedCandidate?.personId ? { personId: selectedCandidate.personId } : {}),
@@ -386,7 +391,9 @@ export class RuntimeEngine {
           intent: rule.intent_summary,
           limit: 5,
         }) : Promise.resolve([]),
-        learnedMemory ? Promise.resolve(learnedMemory.context) : this.graphMemory?.context(rule, source) ?? Promise.resolve(''),
+        learnedEnabled && learnedMemory ? Promise.resolve(learnedMemory.context)
+          : learnedEnabled ? this.graphMemory?.context(rule, source) ?? Promise.resolve('')
+            : Promise.resolve(''),
       ])
       const voice = messageExampleContext(examples, (payload) => this.connections.decryptPrivatePayload(payload))
       const decision = await this.decide(rule, source, context,

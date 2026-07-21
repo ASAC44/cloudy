@@ -42,6 +42,19 @@ test('approved message examples expose only decrypted final writing samples', ()
   assert.doesNotMatch(context, /do not include this/)
 })
 
+test('imported sent messages are voice-only final writing samples', () => {
+  const example: MemoryMessageExample = {
+    id: 'imported', owner_id: 'owner', decision_case_id: null, connection_id: 'gmail-connection',
+    person_id: null, identity_id: null, channel: 'gmail', language: null,
+    source_kind: 'imported_sent', eligibility: 'positive',
+    encrypted_payload: JSON.stringify({ final_message: 'Yep, Friday afternoon works for me.' }),
+    payload_hash: 'a'.repeat(64), style_metadata: {}, occurred_at: '', created_at: '', updated_at: '',
+  }
+  const context = messageExampleContext([example], JSON.parse)
+  assert.match(context, /imported user-sent gmail writing sample/)
+  assert.match(context, /Friday afternoon works/)
+})
+
 test('voice examples prefer person, channel, and intent before global recency', () => {
   const example = (
     id: string,

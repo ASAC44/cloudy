@@ -7,7 +7,7 @@ import type { JwtVariables } from 'hono/jwt'
 
 import type { ApprovalRequest, Connection, NewRequest, OAuthProvider, RuntimeStore, ScreenItem, Store, TelegramAuthSession } from './types/store.js'
 import { StoreError } from './store.js'
-import { ConnectionError, type ConnectionService, validatePublicEndpoint } from './connections.js'
+import { ConnectionError, type ConnectionService, type MessageHistoryScope, validatePublicEndpoint } from './connections.js'
 import { GithubApiError } from './github-pr.js'
 import { isAiProvider, testAiSettings, type AiTester } from './ai.js'
 import { RuleBuilderError, type RuleBuilderService } from './rule-builder.js'
@@ -244,6 +244,7 @@ function errorResponse(c: AppContext, error: unknown) {
       capability_not_found: 404,
       payload_changed: 409,
       capability_changed: 409,
+      invalid_history_scope: 400,
     }[error.code] ?? 500
     return c.json({ error: error.code.replaceAll('_', ' ') }, status as 400)
   }
@@ -267,6 +268,7 @@ function errorResponse(c: AppContext, error: unknown) {
     request_expired: 409,
     payload_changed: 409,
     idempotency_conflict: 409,
+    memory_forget_action_in_flight: 409,
     connection_name_exists: 409,
     connection_in_use: 409,
     rule_session_not_found: 404,
@@ -385,6 +387,7 @@ export function createApp(
   ]) app.use(route, userAuth)
   for (const route of ['/v1/rule-builder/*', '/v1/rules', '/v1/rules/*']) app.use(route, userAuth)
   for (const route of ['/v1/memories', '/v1/memories/*']) app.use(route, userAuth)
+  for (const route of ['/v1/memory/*']) app.use(route, userAuth)
   for (const route of ['/v1/codex', '/v1/codex/bridges/claim', '/v1/codex/bridges/:id', '/v1/codex/target', '/v1/codex/sessions']) app.use(route, userAuth)
 
   app.get('/v1/me', (c) => {
@@ -410,6 +413,7 @@ export function createApp(
           model: settings.model,
           has_api_key: true,
           personalization_enabled: settings.personalization_enabled,
+          learned_actions_enabled: settings.learned_actions_enabled,
           updated_at: settings.updated_at,
         } : null,
       })
@@ -448,6 +452,7 @@ export function createApp(
           model: settings.model,
           has_api_key: true,
           personalization_enabled: settings.personalization_enabled,
+          learned_actions_enabled: settings.learned_actions_enabled,
           updated_at: settings.updated_at,
         },
       })
@@ -479,6 +484,20 @@ export function createApp(
     try {
       return await store.setPersonalization(ownerId, body.enabled)
         ? c.json({ personalization_enabled: body.enabled })
+        : c.json({ error: 'Configure an AI provider first' }, 409)
+    } catch (error) {
+      return errorResponse(c, error)
+    }
+  })
+
+  app.put('/v1/settings/learned-actions', async (c) => {
+    const ownerId = userId(c)
+    if (!ownerId) return c.json({ error: 'Unauthorized' }, 401)
+    const body = await c.req.json().catch(() => null)
+    if (typeof body?.enabled !== 'boolean') return c.json({ error: 'Invalid learned actions setting' }, 400)
+    try {
+      return await store.setLearnedActions(ownerId, body.enabled)
+        ? c.json({ learned_actions_enabled: body.enabled })
         : c.json({ error: 'Configure an AI provider first' }, 409)
     } catch (error) {
       return errorResponse(c, error)
@@ -1480,6 +1499,144 @@ export function createApp(
     }
   })
 
+  app.get('/v1/memory/imports', async (c) => {
+    const ownerId = userId(c)
+    if (!ownerId) return c.json({ error: 'Unauthorized' }, 401)
+    try {
+      return c.json({ imports: await store.listMemoryImports(ownerId) })
+    } catch (error) {
+      return errorResponse(c, error)
+    }
+  })
+
+  app.get('/v1/memory/imports/telegram/:connectionId/dialogs', async (c) => {
+    const ownerId = userId(c)
+    const connectionId = c.req.param('connectionId')
+    if (!ownerId) return c.json({ error: 'Unauthorized' }, 401)
+    if (!connectionService) return c.json({ error: 'Connections are unavailable' }, 503)
+    if (!UUID_PATTERN.test(connectionId)) return c.json({ error: 'Invalid connection' }, 400)
+    try {
+      const capabilities = await connectionService.discoverConnectionCapabilities(ownerId, connectionId)
+      const capability = capabilities.find(({ name, callable_during_setup }) => name === 'telegram.discover_dialogs' && callable_during_setup)
+      if (!capability) return c.json({ error: 'Telegram personal history is unavailable' }, 409)
+      return c.json({ dialogs: await connectionService.callSetupCapability(ownerId, capability, { limit: 50 }) })
+    } catch (error) {
+      return errorResponse(c, error)
+    }
+  })
+
+  app.post('/v1/memory/imports/estimate', async (c) => {
+    const ownerId = userId(c)
+    if (!ownerId) return c.json({ error: 'Unauthorized' }, 401)
+    if (!connectionService) return c.json({ error: 'Connections are unavailable' }, 503)
+    const body = await c.req.json().catch(() => null)
+    const connectionId = text(body?.connection_id, 36)
+    const scope = historyScope(body?.scope)
+    if (!connectionId || !UUID_PATTERN.test(connectionId) || !scope) return c.json({ error: 'Invalid import scope' }, 400)
+    try {
+      return c.json({ estimated_count: await connectionService.estimateMessageHistory(ownerId, connectionId, scope) })
+    } catch (error) {
+      return errorResponse(c, error)
+    }
+  })
+
+  app.post('/v1/memory/imports', async (c) => {
+    const ownerId = userId(c)
+    if (!ownerId) return c.json({ error: 'Unauthorized' }, 401)
+    if (!connectionService) return c.json({ error: 'Connections are unavailable' }, 503)
+    const body = await c.req.json().catch(() => null)
+    const connectionId = text(body?.connection_id, 36)
+    const scope = historyScope(body?.scope)
+    if (!connectionId || !UUID_PATTERN.test(connectionId) || !scope || body?.consent !== true) {
+      return c.json({ error: 'Explicit consent and a valid import scope are required' }, 400)
+    }
+    try {
+      const estimatedCount = await connectionService.estimateMessageHistory(ownerId, connectionId, scope)
+      const serialized = JSON.stringify(scope)
+      const imported = await store.configureMemoryImport({
+        ownerId,
+        connectionId,
+        importKind: scope.provider === 'gmail' ? 'sent_messages' : 'dialog_messages',
+        scopeHash: hash(serialized),
+        encryptedScope: connectionService.encryptPrivatePayload(scope),
+        estimatedCount,
+      })
+      return c.json({ import: imported }, 202)
+    } catch (error) {
+      return errorResponse(c, error)
+    }
+  })
+
+  app.get('/v1/memory/people', async (c) => {
+    const ownerId = userId(c)
+    if (!ownerId) return c.json({ error: 'Unauthorized' }, 401)
+    if (!connectionService) return c.json({ error: 'Encryption is unavailable' }, 503)
+    try {
+      const people = await store.listMemoryPeople(ownerId, 100)
+      return c.json({ people: people.map((person) => {
+        const profile = decryptSafeRecord(connectionService, person.encrypted_profile)
+        return {
+          id: person.id,
+          kind: person.kind,
+          name: displayValue(profile, ['name', 'display_name', 'label']) ?? (person.kind === 'organization' ? 'Organization' : 'Person'),
+          version: person.version,
+          updated_at: person.updated_at,
+          identities: person.identities.map((identity) => {
+            const details = decryptSafeRecord(connectionService, identity.encrypted_identity)
+            return {
+              id: identity.id,
+              channel: identity.channel,
+              label: displayValue(details, ['display_name', 'name', 'email', 'username', 'address']) ?? `Verified ${identity.channel} identity`,
+              connection_id: identity.connection_id,
+              version: identity.version,
+            }
+          }),
+        }
+      }) })
+    } catch (error) {
+      return errorResponse(c, error)
+    }
+  })
+
+  app.delete('/v1/memory/people/:id', async (c) => {
+    const ownerId = userId(c)
+    const id = c.req.param('id')
+    if (!ownerId) return c.json({ error: 'Unauthorized' }, 401)
+    if (!UUID_PATTERN.test(id)) return c.json({ error: 'Invalid person' }, 400)
+    try {
+      const affected = await store.forgetMemory(ownerId, 'person', id)
+      return affected ? c.json({ forgotten: true }) : c.json({ error: 'Person not found' }, 404)
+    } catch (error) {
+      return errorResponse(c, error)
+    }
+  })
+
+  app.delete('/v1/memory/connections/:id', async (c) => {
+    const ownerId = userId(c)
+    const id = c.req.param('id')
+    if (!ownerId) return c.json({ error: 'Unauthorized' }, 401)
+    if (!UUID_PATTERN.test(id)) return c.json({ error: 'Invalid connection' }, 400)
+    try {
+      await store.forgetMemory(ownerId, 'connection', id)
+      return c.json({ forgotten: true })
+    } catch (error) {
+      return errorResponse(c, error)
+    }
+  })
+
+  app.delete('/v1/memory', async (c) => {
+    const ownerId = userId(c)
+    if (!ownerId) return c.json({ error: 'Unauthorized' }, 401)
+    const body = await c.req.json().catch(() => null)
+    if (body?.confirmation !== 'FORGET EVERYTHING') return c.json({ error: 'Exact confirmation is required' }, 400)
+    try {
+      await store.forgetMemory(ownerId, 'everything')
+      return c.json({ forgotten: true })
+    } catch (error) {
+      return errorResponse(c, error)
+    }
+  })
+
   app.post('/v1/codex/bridge/sync', async (c) => {
     const identity = await codexIdentity(c, store)
     if (!identity) return c.json({ error: 'Unauthorized' }, 401)
@@ -1663,4 +1820,44 @@ export function normalizeTelegramBotUpdate(value: unknown) {
 
 function objectValue(value: unknown): Record<string, unknown> | null {
   return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null
+}
+
+function historyScope(value: unknown): MessageHistoryScope | null {
+  const scope = objectValue(value)
+  if (scope?.provider === 'gmail') {
+    const after = text(scope.after, 10)
+    const maxMessages = scope.max_messages
+    return after && /^\d{4}-\d{2}-\d{2}$/.test(after)
+      && Number.isInteger(maxMessages) && Number(maxMessages) >= 1 && Number(maxMessages) <= 500
+      ? { provider: 'gmail', after, max_messages: Number(maxMessages) }
+      : null
+  }
+  if (scope?.provider === 'telegram') {
+    const ids = Array.isArray(scope.dialog_ids) ? scope.dialog_ids : []
+    const maxMessages = scope.max_messages_per_dialog
+    return ids.length >= 1 && ids.length <= 20
+      && ids.every((id): id is string => typeof id === 'string' && id.length >= 1 && id.length <= 160)
+      && new Set(ids).size === ids.length
+      && Number.isInteger(maxMessages) && Number(maxMessages) >= 1 && Number(maxMessages) <= 100
+      ? { provider: 'telegram', dialog_ids: ids, max_messages_per_dialog: Number(maxMessages) }
+      : null
+  }
+  return null
+}
+
+function decryptSafeRecord(connections: ConnectionService, encrypted: string) {
+  try {
+    const value = connections.decryptPrivatePayload<unknown>(encrypted)
+    return objectValue(value) ?? {}
+  } catch {
+    return {}
+  }
+}
+
+function displayValue(value: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const found = text(value[key], 320)
+    if (found) return found
+  }
+  return null
 }

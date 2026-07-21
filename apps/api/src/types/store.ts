@@ -111,6 +111,7 @@ export type AiSettings = {
   base_url: string
   model: string
   personalization_enabled: boolean
+  learned_actions_enabled: boolean
   updated_at: string
 }
 
@@ -180,7 +181,7 @@ export type AgentMemory = {
 export type MemoryMessageExample = {
   id: string
   owner_id: string
-  decision_case_id: string
+  decision_case_id: string | null
   connection_id: string | null
   person_id: string | null
   identity_id: string | null
@@ -194,6 +195,34 @@ export type MemoryMessageExample = {
   occurred_at: string
   created_at: string
   updated_at: string
+}
+
+export type MemoryImport = {
+  id: string
+  owner_id: string
+  connection_id: string
+  import_kind: 'sent_messages' | 'dialog_messages'
+  status: 'idle' | 'running' | 'paused' | 'failed' | 'completed'
+  estimated_count: number | null
+  imported_count: number
+  excluded_count: number
+  attempts: number
+  last_error: string | null
+  last_imported_at: string | null
+  consented_at: string
+  completed_at: string | null
+  updated_at: string
+}
+
+export type MemoryImportClaim = {
+  importId: string
+  ownerId: string
+  connectionId: string
+  importKind: MemoryImport['import_kind']
+  encryptedScope: string
+  encryptedCursor: string | null
+  leaseToken: string
+  attempts: number
 }
 
 export type MemoryOutboxClaim = {
@@ -237,6 +266,16 @@ export type MemoryIdentityRecord = {
   channel: 'gmail' | 'telegram' | 'slack' | 'discord' | 'custom'
   encrypted_identity: string
   version: number
+}
+
+export type MemoryPersonRecord = {
+  id: string
+  owner_id: string
+  kind: 'person' | 'organization'
+  encrypted_profile: string
+  version: number
+  updated_at: string
+  identities: MemoryIdentityRecord[]
 }
 
 export type CapabilitySafety = 'verified_read' | 'verified_write' | 'unannotated'
@@ -599,6 +638,7 @@ export interface Store {
   consumeOAuthState(stateHash: string, provider: OAuthProvider): Promise<OAuthState | null>
   getAiSettings(ownerId: string): Promise<StoredAiSettings | null>
   setPersonalization(ownerId: string, enabled: boolean): Promise<boolean>
+  setLearnedActions(ownerId: string, enabled: boolean): Promise<boolean>
   saveAiSettings(
     ownerId: string,
     settings: Pick<StoredAiSettings, 'provider' | 'base_url' | 'model' | 'encrypted_api_key'>,
@@ -642,8 +682,16 @@ export interface Store {
   deleteRule(ownerId: string, ruleId: string): Promise<boolean>
   listAgentMemories(ownerId: string, scopes?: Array<{ scope: AgentMemory['scope']; scopeId?: string; provider?: ConnectionProvider }>, query?: string, limit?: number): Promise<AgentMemory[]>
   listMemoryIdentities(ownerId: string, limit: number): Promise<MemoryIdentityRecord[]>
+  listMemoryPeople(ownerId: string, limit: number): Promise<MemoryPersonRecord[]>
   upsertAgentMemory(input: { ownerId: string; scope: AgentMemory['scope']; scopeId?: string; provider?: ConnectionProvider; memoryKey: string; content: string; source?: Record<string, unknown> }): Promise<AgentMemory>
   deleteAgentMemory(ownerId: string, memoryId: string): Promise<boolean>
+  configureMemoryImport(input: { ownerId: string; connectionId: string; importKind: MemoryImport['import_kind']; scopeHash: string; encryptedScope: string; estimatedCount: number }): Promise<MemoryImport>
+  listMemoryImports(ownerId: string): Promise<MemoryImport[]>
+  claimMemoryImport(): Promise<MemoryImportClaim | null>
+  recordImportedMessage(input: { importId: string; leaseToken: string; providerMessageIdHash: string; conversationIdHash?: string; encryptedPayload: string; payloadHash: string; styleMetadata: Record<string, unknown>; occurredAt: string }): Promise<boolean>
+  completeMemoryImport(input: { importId: string; leaseToken: string; encryptedCursor?: string; excludedCount: number; hasMore: boolean }): Promise<boolean>
+  failMemoryImport(importId: string, leaseToken: string, error: string, retryable: boolean): Promise<boolean>
+  forgetMemory(ownerId: string, scope: 'person' | 'connection' | 'everything', targetId?: string): Promise<number>
 }
 
 export interface RuntimeStore {
@@ -683,6 +731,7 @@ export interface RuntimeStore {
   completeMemoryOutbox(outboxId: string, leaseToken: string, graphUuid?: string): Promise<boolean>
   failMemoryOutbox(outboxId: string, leaseToken: string, error: string, retryable: boolean): Promise<boolean>
   listRecentUnindexedDecisions(ownerId: string, limit: number): Promise<RecentUnindexedDecision[]>
+  listMemoryDecisionGraphRecords(ownerId: string, limit: number, afterId?: string): Promise<MemoryDecisionGraphRecord[]>
   getMemoryIdentity(ownerId: string, identityId: string): Promise<MemoryIdentityRecord | null>
   getEditableReply(ownerId: string, requestId: string): Promise<EditableReply | null>
   reviseReply(input: { ownerId: string; requestId: string; expectedHash: string; newHash: string; encryptedDraft: string; encryptedAction: string; encryptedRevision: string; revisionSource: Record<string, unknown> }): Promise<ApprovalRequest>

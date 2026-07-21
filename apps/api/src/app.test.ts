@@ -19,6 +19,7 @@ import type {
   NewRequest,
   OAuthState,
   OAuthProvider,
+  MemoryImport,
   PairingStatus,
   Pod,
   RuntimeStore,
@@ -193,10 +194,21 @@ class FakeStore implements Store {
   async listConnections() { return this.connections }
   async listAgentMemories() { return [] as AgentMemory[] }
   async listMemoryIdentities() { return [] }
+  async listMemoryPeople() { return [] }
   async upsertAgentMemory(input: { ownerId: string; scope: AgentMemory['scope']; scopeId?: string; provider?: AgentMemory['provider']; memoryKey: string; content: string; source?: Record<string, unknown> }) {
     return { id: randomTestId(90), owner_id: input.ownerId, scope: input.scope, scope_id: input.scopeId ?? null, provider: input.provider ?? null, memory_key: input.memoryKey, content: input.content, source: input.source ?? {}, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
   }
   async deleteAgentMemory() { return true }
+  async configureMemoryImport(input: { ownerId: string; connectionId: string; importKind: MemoryImport['import_kind']; estimatedCount: number }) {
+    const now = new Date().toISOString()
+    return { id: randomTestId(91), owner_id: input.ownerId, connection_id: input.connectionId, import_kind: input.importKind, status: 'idle' as const, estimated_count: input.estimatedCount, imported_count: 0, excluded_count: 0, attempts: 0, last_error: null, last_imported_at: null, consented_at: now, completed_at: null, updated_at: now }
+  }
+  async listMemoryImports() { return [] as MemoryImport[] }
+  async claimMemoryImport() { return null }
+  async recordImportedMessage() { return true }
+  async completeMemoryImport() { return true }
+  async failMemoryImport() { return true }
+  async forgetMemory() { return 1 }
   async getConnection(_ownerId: string, connectionId: string) {
     const connection = this.connections.find(({ id }) => id === connectionId)
     const encrypted_payload = this.connectionSecrets.get(connectionId)
@@ -273,11 +285,16 @@ class FakeStore implements Store {
     this.aiSettings.personalization_enabled = enabled
     return true
   }
+  async setLearnedActions(_ownerId: string, enabled: boolean) {
+    if (!this.aiSettings) return false
+    this.aiSettings.learned_actions_enabled = enabled
+    return true
+  }
   async saveAiSettings(
     _ownerId: string,
     settings: Pick<StoredAiSettings, 'provider' | 'base_url' | 'model' | 'encrypted_api_key'>,
   ) {
-    this.aiSettings = { ...settings, personalization_enabled: this.aiSettings?.personalization_enabled ?? true, updated_at: new Date().toISOString() }
+    this.aiSettings = { ...settings, personalization_enabled: this.aiSettings?.personalization_enabled ?? true, learned_actions_enabled: this.aiSettings?.learned_actions_enabled ?? false, updated_at: new Date().toISOString() }
     return this.aiSettings
   }
   async createCodexPairing(input: { bridgeId: string; tokenHash: string }) {
@@ -632,9 +649,33 @@ test('AI settings encrypt the API key and never return it', async () => {
   assert.equal((await personalization.json()).personalization_enabled, false)
   assert.equal(store.aiSettings?.personalization_enabled, false)
 
+  const learned = await api.request('/v1/settings/learned-actions', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: true }),
+  })
+  assert.equal(learned.status, 200)
+  assert.equal((await learned.json()).learned_actions_enabled, true)
+  assert.equal(store.aiSettings?.learned_actions_enabled, true)
+
   const tested = await api.request('/v1/settings/ai/test', { method: 'POST' })
   assert.equal(tested.status, 200)
   assert.equal(testedProvider, 'cerebras')
+})
+
+test('memory controls require exact import consent and forget confirmation', async () => {
+  const { app: api } = app()
+  const invalidImport = await api.request('/v1/memory/imports', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      connection_id: '00000000-0000-4000-8000-000000000010',
+      scope: { provider: 'gmail', after: '2026-01-01', max_messages: 100 },
+      consent: false,
+    }),
+  })
+  assert.equal(invalidImport.status, 400)
+  assert.equal((await api.request('/v1/memory/imports')).status, 200)
+  assert.equal((await api.request('/v1/memory/people')).status, 200)
+  assert.equal((await api.request('/v1/memory', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmation: 'yes' }) })).status, 400)
+  assert.equal((await api.request('/v1/memory', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmation: 'FORGET EVERYTHING' }) })).status, 200)
 })
 
 test('AI model factory selects every configured provider', () => {
@@ -778,7 +819,7 @@ test('Pod voice validates WAV and always uses the fixed transcription model', as
   const setup = app(new FakeStore(), fetcher)
   setup.store.aiSettings = {
     provider: 'openai', base_url: 'https://api.openai.com/v1', model: 'ignored-for-voice',
-    encrypted_api_key: setup.connections.encryptApiKey('voice-key'), personalization_enabled: true, updated_at: new Date().toISOString(),
+    encrypted_api_key: setup.connections.encryptApiKey('voice-key'), personalization_enabled: true, learned_actions_enabled: false, updated_at: new Date().toISOString(),
   }
   const paired = await (await setup.app.request('/v1/pod/pairing-sessions', { method: 'POST' })).json()
   const wav = new Uint8Array(44 + 3200)

@@ -2,6 +2,7 @@ import { drainCallbacks } from './callbacks.js'
 import type { ConnectionService } from './connections.js'
 import type { GraphMemoryRetriever, MemoryOutboxSync } from './graph-memory.js'
 import { RuntimeEngine } from './runtime-engine.js'
+import { MessageHistoryImporter } from './message-history.js'
 import type { RuntimeStore, Store } from './types/store.js'
 import { TelegramRuntime, telegramWorkerId } from './telegram-runtime.js'
 
@@ -13,6 +14,7 @@ export function startRuntimeLoop(
   memory?: { retriever: GraphMemoryRetriever; sync: MemoryOutboxSync },
 ) {
   const engine = new RuntimeEngine(store, connections, memory?.retriever)
+  const history = new MessageHistoryImporter(store, connections)
   const telegram = telegramConfig
     ? new TelegramRuntime(store, connections, engine, workerId, telegramConfig)
     : null
@@ -27,6 +29,7 @@ export function startRuntimeLoop(
     await drain(engine.evaluateOnce(), () => engine.evaluateOnce())
     await drain(engine.dispatchOnce(), () => engine.dispatchOnce())
     await drainCallbacks(store, connections, fetch, 10)
+    await drain(history.importOnce(), () => history.importOnce(), 5)
     if (memory) await drain(memory.sync.syncOnce(), () => memory.sync.syncOnce())
     if (Date.now() - retentionAt > 24 * 60 * 60_000) {
       await store.purgeRuntimeData()

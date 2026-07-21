@@ -49,7 +49,7 @@ function fail(error: { code?: string; message: string } | null): never {
     throw new StoreError('automation_key_name_exists', error.message)
   }
   if (error?.code === '23505') throw new StoreError('active_pod_exists', error.message)
-  const code = error?.message.match(/(pairing_rate_limited|invalid_pairing_code|invalid_bridge_pairing_code|active_pod_exists|pod_not_authorized|pod_not_found|pod_layout_conflict|invalid_pod_layout|request_not_found|request_already_resolved|request_expired|reply_not_editable|invalid_reply_revision|payload_changed|idempotency_conflict|codex_bridge_not_authorized|codex_target_not_found|codex_target_changed|rule_session_not_found|rule_session_expired|rule_session_conflict|rule_pod_unavailable|rule_connection_unavailable|rule_not_found|rule_edit_conflict|rule_review_required|invalid_rule_status|invalid_rule_definition|ping_event_conflict|invalid_ping_approval|telegram_auth_in_progress|telegram_auth_conflict)/)?.[1]
+  const code = error?.message.match(/(pairing_rate_limited|invalid_pairing_code|invalid_bridge_pairing_code|active_pod_exists|pod_not_authorized|pod_not_found|pod_layout_conflict|invalid_pod_layout|request_not_found|request_already_resolved|request_expired|reply_not_editable|invalid_reply_revision|payload_changed|idempotency_conflict|codex_bridge_not_authorized|codex_target_not_found|codex_target_changed|rule_session_not_found|rule_session_expired|rule_session_conflict|rule_pod_unavailable|rule_connection_unavailable|rule_not_found|rule_edit_conflict|rule_review_required|invalid_rule_status|invalid_rule_definition|ping_event_conflict|invalid_ping_approval|telegram_auth_in_progress|telegram_auth_conflict|memory_forget_action_in_flight)/)?.[1]
   throw new StoreError(code ?? 'database_error', error?.message)
 }
 
@@ -65,6 +65,10 @@ function missingPodLayoutSchema(error: { code?: string; message: string } | null
 
 function missingMemorySchema(error: { code?: string; message: string } | null) {
   return error?.code === '42P01' || error?.code === 'PGRST205'
+}
+
+function missingHistorySchema(error: { code?: string; message: string } | null) {
+  return error?.code === '42703' || error?.code === '42883' || error?.code === 'PGRST202'
 }
 
 export class SupabaseStore implements Store, RuntimeStore {
@@ -613,11 +617,19 @@ export class SupabaseStore implements Store, RuntimeStore {
   }
 
   async getAiSettings(ownerId: string) {
-    const { data, error } = await this.db
+    const response = await this.db
       .from('ai_settings')
-      .select('provider, base_url, model, encrypted_api_key, personalization_enabled, updated_at')
+      .select('provider, base_url, model, encrypted_api_key, personalization_enabled, learned_actions_enabled, updated_at')
       .eq('owner_id', ownerId)
       .maybeSingle()
+    if (missingHistorySchema(response.error)) {
+      const { data, error } = await this.db.from('ai_settings')
+        .select('provider, base_url, model, encrypted_api_key, personalization_enabled, updated_at')
+        .eq('owner_id', ownerId).maybeSingle()
+      if (error) fail(error)
+      return data ? { ...data, learned_actions_enabled: false } as StoredAiSettings : null
+    }
+    const { data, error } = response
     if (error) fail(error)
     return data as StoredAiSettings | null
   }
@@ -630,15 +642,31 @@ export class SupabaseStore implements Store, RuntimeStore {
     return Boolean(data)
   }
 
+  async setLearnedActions(ownerId: string, enabled: boolean) {
+    const { data, error } = await this.db.from('ai_settings')
+      .update({ learned_actions_enabled: enabled, updated_at: new Date().toISOString() })
+      .eq('owner_id', ownerId).select('owner_id').maybeSingle()
+    if (error) fail(error)
+    return Boolean(data)
+  }
+
   async saveAiSettings(
     ownerId: string,
     settings: Pick<StoredAiSettings, 'provider' | 'base_url' | 'model' | 'encrypted_api_key'>,
   ) {
-    const { data, error } = await this.db
+    const response = await this.db
       .from('ai_settings')
       .upsert({ owner_id: ownerId, ...settings, updated_at: new Date().toISOString() })
-      .select('provider, base_url, model, encrypted_api_key, personalization_enabled, updated_at')
+      .select('provider, base_url, model, encrypted_api_key, personalization_enabled, learned_actions_enabled, updated_at')
       .single()
+    if (missingHistorySchema(response.error)) {
+      const { data, error } = await this.db.from('ai_settings')
+        .upsert({ owner_id: ownerId, ...settings, updated_at: new Date().toISOString() })
+        .select('provider, base_url, model, encrypted_api_key, personalization_enabled, updated_at').single()
+      if (error || !data) fail(error)
+      return { ...data, learned_actions_enabled: false } as StoredAiSettings
+    }
+    const { data, error } = response
     if (error || !data) fail(error)
     return data as StoredAiSettings
   }
@@ -1370,7 +1398,7 @@ export class SupabaseStore implements Store, RuntimeStore {
       .limit(100)
     if (error) fail(error)
     const examples = (data ?? []) as import('./types/store.js').MemoryMessageExample[]
-    const decisionIds = [...new Set(examples.map((example) => example.decision_case_id))]
+    const decisionIds = [...new Set(examples.flatMap((example) => example.decision_case_id ? [example.decision_case_id] : []))]
     const { data: decisions, error: decisionsError } = decisionIds.length
       ? await this.db.from('memory_decision_cases').select('id, rule_id').eq('owner_id', input.ownerId).in('id', decisionIds)
       : { data: [], error: null }
@@ -1384,7 +1412,8 @@ export class SupabaseStore implements Store, RuntimeStore {
     const ruleByDecision = new Map((decisions ?? []).map((decision) => [decision.id, decision.rule_id]))
     return rankMessageExamples(examples.map((example) => ({
       example,
-      intent: intentByRule.get(ruleByDecision.get(example.decision_case_id) ?? '') ?? '',
+      intent: intentByRule.get(ruleByDecision.get(example.decision_case_id ?? '') ?? '')
+        ?? (typeof example.style_metadata.intent === 'string' ? example.style_metadata.intent : ''),
     })), input, input.limit)
   }
 
@@ -1396,6 +1425,26 @@ export class SupabaseStore implements Store, RuntimeStore {
       .limit(Math.max(1, Math.min(limit, 50)))
     if (error) fail(error)
     return (data ?? []) as import('./types/store.js').MemoryIdentityRecord[]
+  }
+
+  async listMemoryPeople(ownerId: string, limit: number) {
+    const bounded = Math.max(1, Math.min(limit, 100))
+    const { data: people, error } = await this.db.from('memory_people')
+      .select('id, owner_id, kind, encrypted_profile, version, updated_at')
+      .eq('owner_id', ownerId).is('deleted_at', null)
+      .order('updated_at', { ascending: false }).order('id', { ascending: true }).limit(bounded)
+    if (error) fail(error)
+    const ids = (people ?? []).map(({ id }) => id)
+    const { data: identities, error: identityError } = ids.length
+      ? await this.db.from('memory_identities')
+        .select('id, owner_id, person_id, connection_id, channel, encrypted_identity, version')
+        .eq('owner_id', ownerId).in('person_id', ids).is('deleted_at', null)
+      : { data: [], error: null }
+    if (identityError) fail(identityError)
+    return (people ?? []).map((person) => ({
+      ...person,
+      identities: (identities ?? []).filter((identity) => identity.person_id === person.id),
+    })) as import('./types/store.js').MemoryPersonRecord[]
   }
 
   async claimMemoryOutbox() {
@@ -1501,6 +1550,17 @@ export class SupabaseStore implements Store, RuntimeStore {
         outbox_created_at: event.created_at,
       }]
     }) as import('./types/store.js').RecentUnindexedDecision[]
+  }
+
+  async listMemoryDecisionGraphRecords(ownerId: string, limit: number, afterId?: string) {
+    let query = this.db.from('memory_decision_cases')
+      .select('id').eq('owner_id', ownerId).order('id', { ascending: true })
+      .limit(Math.max(1, Math.min(limit, 500)))
+    if (afterId) query = query.gt('id', afterId)
+    const { data, error } = await query
+    if (error) fail(error)
+    const records = await Promise.all((data ?? []).map(({ id }) => this.getMemoryDecisionGraphRecord(ownerId, id)))
+    return records.filter((record): record is import('./types/store.js').MemoryDecisionGraphRecord => Boolean(record))
   }
 
   async getMemoryIdentity(ownerId: string, identityId: string) {
@@ -1676,6 +1736,92 @@ export class SupabaseStore implements Store, RuntimeStore {
     const { data, error } = await this.db.from('agent_memories').update({ deleted_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq('id', memoryId).eq('owner_id', ownerId).is('deleted_at', null).select('id').maybeSingle()
     if (error) fail(error)
     return Boolean(data)
+  }
+
+  async configureMemoryImport(input: { ownerId: string; connectionId: string; importKind: import('./types/store.js').MemoryImport['import_kind']; scopeHash: string; encryptedScope: string; estimatedCount: number }) {
+    const { data, error } = await this.db.rpc('configure_memory_import', {
+      p_owner_id: input.ownerId,
+      p_connection_id: input.connectionId,
+      p_import_kind: input.importKind,
+      p_scope_hash: input.scopeHash,
+      p_encrypted_scope: input.encryptedScope,
+      p_estimated_count: input.estimatedCount,
+    })
+    if (error || !data) fail(error)
+    return (Array.isArray(data) ? data[0] : data) as import('./types/store.js').MemoryImport
+  }
+
+  async listMemoryImports(ownerId: string) {
+    const { data, error } = await this.db.from('memory_import_cursors')
+      .select('id, owner_id, connection_id, import_kind, status, estimated_count, imported_count, excluded_count, attempts, last_error, last_imported_at, consented_at, completed_at, updated_at')
+      .eq('owner_id', ownerId).order('updated_at', { ascending: false }).order('id', { ascending: true })
+    if (error) fail(error)
+    return (data ?? []) as import('./types/store.js').MemoryImport[]
+  }
+
+  async claimMemoryImport() {
+    const { data, error } = await this.db.rpc('claim_memory_import', { p_lease_seconds: 120 })
+    if (missingHistorySchema(error)) return null
+    if (error) fail(error)
+    const row = data?.[0]
+    return row ? {
+      importId: row.import_id,
+      ownerId: row.owner_id,
+      connectionId: row.connection_id,
+      importKind: row.import_kind,
+      encryptedScope: row.encrypted_scope,
+      encryptedCursor: row.encrypted_cursor,
+      leaseToken: row.lease_token,
+      attempts: row.attempts,
+    } as import('./types/store.js').MemoryImportClaim : null
+  }
+
+  async recordImportedMessage(input: { importId: string; leaseToken: string; providerMessageIdHash: string; conversationIdHash?: string; encryptedPayload: string; payloadHash: string; styleMetadata: Record<string, unknown>; occurredAt: string }) {
+    const { data, error } = await this.db.rpc('record_imported_message', {
+      p_import_id: input.importId,
+      p_lease_token: input.leaseToken,
+      p_provider_message_id_hash: input.providerMessageIdHash,
+      p_conversation_id_hash: input.conversationIdHash ?? null,
+      p_encrypted_payload: input.encryptedPayload,
+      p_payload_hash: input.payloadHash,
+      p_style_metadata: input.styleMetadata,
+      p_occurred_at: input.occurredAt,
+    })
+    if (error) fail(error)
+    return data === true
+  }
+
+  async completeMemoryImport(input: { importId: string; leaseToken: string; encryptedCursor?: string; excludedCount: number; hasMore: boolean }) {
+    const { data, error } = await this.db.rpc('complete_memory_import', {
+      p_import_id: input.importId,
+      p_lease_token: input.leaseToken,
+      p_encrypted_cursor: input.encryptedCursor ?? null,
+      p_excluded_count: input.excludedCount,
+      p_has_more: input.hasMore,
+    })
+    if (error) fail(error)
+    return data === true
+  }
+
+  async failMemoryImport(importId: string, leaseToken: string, errorMessage: string, retryable: boolean) {
+    const { data, error } = await this.db.rpc('fail_memory_import', {
+      p_import_id: importId,
+      p_lease_token: leaseToken,
+      p_error: errorMessage.slice(0, 500),
+      p_retryable: retryable,
+    })
+    if (error) fail(error)
+    return data === true
+  }
+
+  async forgetMemory(ownerId: string, scope: 'person' | 'connection' | 'everything', targetId?: string) {
+    const { data, error } = await this.db.rpc('forget_memory_scope', {
+      p_owner_id: ownerId,
+      p_scope: scope,
+      p_target_id: targetId ?? null,
+    })
+    if (error) fail(error)
+    return Number(data) || 0
   }
 
   async purgeRuntimeData() {
