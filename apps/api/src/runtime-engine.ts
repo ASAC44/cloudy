@@ -4,6 +4,7 @@ import { generateText, jsonSchema, Output } from 'ai'
 
 import { createAiModel } from './ai.js'
 import { ConnectionError, ConnectionService } from './connections.js'
+import type { GraphMemoryRetriever } from './graph-memory.js'
 import { memoryContext, memoryScopes, messageExampleContext } from './memory.js'
 import {
   factOnlyPresentation,
@@ -78,6 +79,7 @@ export class RuntimeEngine {
   constructor(
     private readonly store: Store & RuntimeStore,
     private readonly connections: ConnectionService,
+    private readonly graphMemory?: GraphMemoryRetriever,
   ) {}
 
   async editableReply(ownerId: string, requestId: string) {
@@ -309,13 +311,14 @@ export class RuntimeEngine {
         context.push({ schedule: { missing_fields: ['scheduling details'] } })
       }
       const githubPull = isGithubPullRequest(source) ? source : null
-      const [memories, examples] = await Promise.all([
+      const [memories, examples, graphMemory] = await Promise.all([
         this.store.listAgentMemories(rule.owner_id, memoryScopes(undefined, rule.source.provider, rule.source_connection_id), undefined, 12),
         rule.action_connection_id ? this.store.listMessageExamples(rule.owner_id, rule.action_connection_id, 5) : Promise.resolve([]),
+        this.graphMemory?.context(rule, source) ?? Promise.resolve(''),
       ])
       const voice = messageExampleContext(examples, (payload) => this.connections.decryptPrivatePayload(payload))
       const decision = await this.decide(rule, source, context, githubPull ? false : undefined,
-        [memoryContext(memories), voice].filter(Boolean).join('\n'))
+        [memoryContext(memories), graphMemory, voice].filter(Boolean).join('\n'))
       if (!decision.match) {
         await this.store.ignoreRuleEvent(event.id, claim.leaseToken, decision.summary || 'The event did not match.')
         await this.store.recordRuleRun({ ownerId: rule.owner_id, ruleId: rule.id, eventId: event.id, stage: 'evaluate', outcome: 'ignored', durationMs: Date.now() - started })

@@ -265,6 +265,29 @@ test('canonical memory data is constrained, encrypted, transactional, and rollba
   assert.match(rollback, /commit;\s*$/)
 })
 
+test('memory outbox sync is leased, owner-ordered, atomic, and reversible', async () => {
+  const migration = await readFile(new URL('supabase/migrations/20260722010000_memory_outbox_sync.sql', root), 'utf8')
+  const rollback = await readFile(new URL('supabase/rollback/20260722010000_memory_outbox_sync.sql', root), 'utf8')
+
+  assert.match(migration, /^begin;/)
+  assert.match(migration, /create or replace function public\.claim_memory_outbox/)
+  assert.match(migration, /for update of events skip locked/)
+  assert.match(migration, /earlier\.owner_id = events\.owner_id[\s\S]*earlier\.status <> 'completed'/)
+  assert.match(migration, /status = 'processing'[\s\S]*attempts = claimed_event\.attempts \+ 1[\s\S]*lease_token = token/)
+  assert.match(migration, /create or replace function public\.complete_memory_outbox/)
+  assert.match(migration, /where id = p_outbox_id and status = 'processing' and lease_token = p_lease_token[\s\S]*for update/)
+  assert.match(migration, /insert into public\.memory_graph_refs[\s\S]*update public\.memory_outbox/)
+  assert.match(migration, /create or replace function public\.fail_memory_outbox/)
+  assert.match(migration, /attempts < 8 then 'pending' else 'dead_letter'/)
+  assert.match(migration, /revoke all on function public\.claim_memory_outbox/)
+  assert.match(migration, /grant execute on function public\.claim_memory_outbox\(integer\) to service_role/)
+  assert.match(rollback, /Refusing|cannot represent/)
+  assert.match(rollback, /having count\(\*\) > 1/)
+  assert.match(rollback, /create unique index memory_graph_refs_decision/)
+  assert.match(migration, /commit;\s*$/)
+  assert.match(rollback, /commit;\s*$/)
+})
+
 test('local Supabase startup replays tracked migrations and injects local credentials', async () => {
   const config = await readFile(new URL('supabase/config.toml', root), 'utf8')
   const launcher = await readFile(new URL('scripts/local.sh', root), 'utf8')

@@ -6,13 +6,17 @@ description: Run and authenticate Cloudy's private Graphiti and Neo4j service.
 Cloudy includes a private Python memory service under `apps/memory`. It pins
 Graphiti 0.29.2, stores its derived temporal graph in Neo4j 5.26, and keeps
 Supabase Postgres as the canonical source of truth. The API-to-memory outbox
-worker is a separate integration step; adding this service alone does not turn
-on graph-backed decisions.
+worker signs every request, writes approved decision and delivery episodes, and
+retrieves owner-scoped action and voice evidence during Ping evaluation.
 
 The service never authorizes or delivers an action. It accepts bounded canonical
 facts, returns scoped evidence, and can be deleted or rebuilt from Postgres.
 Exact message examples remain encrypted in Postgres rather than being stored as
 raw Graphiti episode content.
+
+Graph evidence is advisory context only. The existing Ping definition still
+selects the source, optional context capabilities, and action capability. Memory
+cannot choose a new tool, authorize a write, or bypass Pod review.
 
 ## Local setup
 
@@ -30,6 +34,19 @@ Set every model name explicitly in `.env`, then run:
 ```sh
 uv run uvicorn cloudy_memory.app:configured_app --factory --reload --port 8000
 ```
+
+Set the same secret and the service URL on the API worker:
+
+```dotenv
+MEMORY_SERVICE_URL=http://localhost:8000
+MEMORY_INTERNAL_SECRET=replace-with-at-least-32-random-bytes
+MEMORY_REQUEST_TIMEOUT_MS=10000
+```
+
+The URL and secret must be configured together. If both are absent, the worker
+continues running fixed Pings and leaves memory-outbox records pending for a
+later deployment or rebuild. The timeout is optional and must be between 100
+and 60,000 milliseconds.
 
 `GET /health` is a process liveness check. `GET /ready` also verifies Neo4j
 connectivity. Both reveal no graph facts; every `/internal/v1/*` route requires
@@ -67,6 +84,30 @@ Timestamps outside the configured skew window, malformed nonces, duplicate
 nonces, oversized bodies, and invalid signatures fail before JSON parsing.
 Run one service replica until a shared replay store is introduced; the current
 nonce cache is deliberately process-local.
+
+## Sync and retrieval behavior
+
+Approval and delivery transitions enqueue canonical records in the same
+Postgres transaction as the user decision. The worker claims them with a
+bounded lease, preserves per-owner chronological ordering, and retries
+temporary network, timeout, rate-limit, and service failures. A permanent
+request failure or the eighth failed attempt moves the event to `dead_letter`;
+that event deliberately blocks newer events for the same owner until an
+operator repairs or rebuilds the graph, avoiding silent history gaps.
+
+Each Graphiti episode uses the outbox UUID as its stable identity, so a retry
+after a lost response is idempotent. Episodes contain capability, channel,
+approval, and delivery metadata only. Approval records use `intent_only` even
+when delivery has already happened; the later delivery event records the
+provider-confirmed outcome as a separate temporal fact.
+
+During evaluation, the worker combines owner-scoped Graphiti action and voice
+evidence with a bounded read-through of recent canonical decisions that are not
+indexed yet. Retrieved strings are labeled as untrusted data, flattened, and
+bounded before entering the model prompt. A Graphiti outage does not fail an
+existing fixed Ping: the recent canonical facts are used when available and the
+configured action remains unchanged. Exact eligible writing samples are still
+decrypted from Postgres only at draft time and are scoped to the action account.
 
 ## Isolation and ontology
 

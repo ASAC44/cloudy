@@ -196,6 +196,35 @@ export type MemoryMessageExample = {
   updated_at: string
 }
 
+export type MemoryOutboxClaim = {
+  outboxId: string
+  ownerId: string
+  aggregateType: 'decision' | 'person' | 'identity' | 'message' | 'preference' | 'user'
+  aggregateId: string
+  eventType: string
+  ontologyVersion: number
+  payload: Record<string, unknown>
+  attempts: number
+  createdAt: string
+  leaseToken: string
+}
+
+export type MemoryDecisionGraphRecord = {
+  id: string
+  owner_id: string
+  action_capability_id: string | null
+  approval_outcome: 'approved' | 'rejected' | 'expired' | 'cancelled'
+  delivery_outcome: 'pending' | 'delivered' | 'failed' | 'ambiguous' | 'superseded' | 'not_applicable'
+  occurred_at: string
+  decided_at: string
+}
+
+export type RecentUnindexedDecision = MemoryDecisionGraphRecord & {
+  event_type: string
+  event_outcome: string | null
+  outbox_created_at: string
+}
+
 export type CapabilitySafety = 'verified_read' | 'verified_write' | 'unannotated'
 export type CapabilityRole = 'source' | 'context' | 'action' | 'setup'
 export type CapabilityDelivery = 'poll' | 'event'
@@ -582,6 +611,11 @@ export interface RuntimeStore {
   getRuntimeEvent(ownerId: string, eventId: string): Promise<RuntimeEvent | null>
   listConversationEvents(ownerId: string, ruleId: string, conversationKey: string, limit: number): Promise<RuntimeEvent[]>
   listMessageExamples(ownerId: string, connectionId: string, limit: number): Promise<MemoryMessageExample[]>
+  claimMemoryOutbox(): Promise<MemoryOutboxClaim | null>
+  getMemoryDecisionGraphRecord(ownerId: string, decisionId: string): Promise<MemoryDecisionGraphRecord | null>
+  completeMemoryOutbox(outboxId: string, leaseToken: string, graphUuid?: string): Promise<boolean>
+  failMemoryOutbox(outboxId: string, leaseToken: string, error: string, retryable: boolean): Promise<boolean>
+  listRecentUnindexedDecisions(ownerId: string, limit: number): Promise<RecentUnindexedDecision[]>
   getEditableReply(ownerId: string, requestId: string): Promise<EditableReply | null>
   reviseReply(input: { ownerId: string; requestId: string; expectedHash: string; newHash: string; encryptedDraft: string; encryptedAction: string; encryptedRevision: string; revisionSource: Record<string, unknown> }): Promise<ApprovalRequest>
   ignoreRuleEvent(eventId: string, leaseToken: string, reason: string): Promise<boolean>
