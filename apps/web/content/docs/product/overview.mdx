@@ -58,13 +58,15 @@ The goal is not “write a good email.” It is: **predict what this specific us
 
 The current release combines live provider context with explicit remembered
 context. Users can save writing preferences and samples, or edit a proposed
-reply in the dashboard. Corrections are stored for that connected provider
-account and reused in later drafts.
+reply in the dashboard. An edit remains encrypted and pending until the user
+approves the action. Cloudy then reuses the approved communication as a writing
+example for that connected account, weighting successful delivery more strongly
+than approved intent that could not be delivered.
 
-Podex does not silently import sent mail or learn from ordinary approvals. See
-[Writing personalization](/docs/product/personalization) for the shipped flow
-and [Product vision](/docs/product/vision) for planned relationship-aware
-profiles and broader context.
+Cloudy does not silently import sent mail, and rejection is never treated as a
+positive writing example. See [Writing personalization](/docs/product/personalization)
+for the shipped flow and [Product vision](/docs/product/vision) for planned
+relationship-aware profiles and broader context.
 
 ## Dashboard
 

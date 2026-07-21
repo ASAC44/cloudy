@@ -177,6 +177,25 @@ export type AgentMemory = {
   updated_at: string
 }
 
+export type MemoryMessageExample = {
+  id: string
+  owner_id: string
+  decision_case_id: string
+  connection_id: string | null
+  person_id: string | null
+  identity_id: string | null
+  channel: 'gmail' | 'telegram' | 'slack' | 'discord' | 'custom'
+  language: string | null
+  source_kind: 'approved_action' | 'approved_correction' | 'imported_sent' | 'explicit'
+  eligibility: 'pending_delivery' | 'positive' | 'intent_only' | 'negative' | 'excluded'
+  encrypted_payload: string
+  payload_hash: string
+  style_metadata: Record<string, unknown>
+  occurred_at: string
+  created_at: string
+  updated_at: string
+}
+
 export type CapabilitySafety = 'verified_read' | 'verified_write' | 'unannotated'
 export type CapabilityRole = 'source' | 'context' | 'action' | 'setup'
 export type CapabilityDelivery = 'poll' | 'event'
@@ -405,6 +424,7 @@ export type RuntimeEvent = {
   encrypted_source_payload: string | null
   encrypted_draft_payload: string | null
   encrypted_action_payload: string | null
+  encrypted_revision_payload: string | null
   action_payload_hash: string | null
   approval_request_id: string | null
   delivery_idempotency_key: string
@@ -561,8 +581,9 @@ export interface RuntimeStore {
   claimRuleEvent(): Promise<{ eventId: string; ownerId: string; ruleId: string; leaseToken: string } | null>
   getRuntimeEvent(ownerId: string, eventId: string): Promise<RuntimeEvent | null>
   listConversationEvents(ownerId: string, ruleId: string, conversationKey: string, limit: number): Promise<RuntimeEvent[]>
+  listMessageExamples(ownerId: string, connectionId: string, limit: number): Promise<MemoryMessageExample[]>
   getEditableReply(ownerId: string, requestId: string): Promise<EditableReply | null>
-  reviseReply(input: { ownerId: string; requestId: string; expectedHash: string; newHash: string; encryptedDraft: string; encryptedAction: string; memoryContent: string; memorySource: Record<string, unknown> }): Promise<ApprovalRequest>
+  reviseReply(input: { ownerId: string; requestId: string; expectedHash: string; newHash: string; encryptedDraft: string; encryptedAction: string; encryptedRevision: string; revisionSource: Record<string, unknown> }): Promise<ApprovalRequest>
   ignoreRuleEvent(eventId: string, leaseToken: string, reason: string): Promise<boolean>
   failRuleEvent(eventId: string, leaseToken: string, error: string, ambiguous?: boolean): Promise<boolean>
   prepareRuleApproval(input: { eventId: string; leaseToken: string; encryptedDraft: string; encryptedAction: string; actionHash: string; title: string; source: string; summary: string; details: string; affectedContext: string; risk: 'low' | 'medium' | 'high'; warnings: string[]; expiresAt: string }): Promise<ApprovalRequest>

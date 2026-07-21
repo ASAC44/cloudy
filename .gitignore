@@ -1,3 +1,5 @@
 .DS_Store
+/mem.md
 supabase/.temp/
+supabase/.branches/
 apps/pod/build/
