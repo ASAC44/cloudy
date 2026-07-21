@@ -17,12 +17,13 @@ export function rankMessageExamples(
     return {
       example,
       bucket,
-      delivered: example.eligibility === 'positive',
+      signalRank: example.source_kind === 'approved_correction' ? 0
+        : example.eligibility === 'positive' ? 1 : 2,
       sameConnection: Boolean(input.connectionId && example.connection_id === input.connectionId),
       index,
     }
   }).sort((left, right) => left.bucket - right.bucket
-    || Number(right.delivered) - Number(left.delivered)
+    || left.signalRank - right.signalRank
     || Number(right.sameConnection) - Number(left.sameConnection)
     || left.index - right.index)
     .slice(0, Math.max(1, Math.min(limit, 10)))
