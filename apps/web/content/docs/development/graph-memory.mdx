@@ -135,6 +135,39 @@ the triggering situation, chosen or rejected communication, and the opaque
 verified-identity reference so later selections can learn contact preferences
 without putting an address or message body in Graphiti.
 
+## Release gates and observability
+
+Learned action selection has a deployment-wide switch and a deterministic
+owner rollout percentage. History import has its own deployment-wide switch.
+Both sit outside the user's controls and can only disable or narrow behavior;
+they cannot opt a user into learning. Fixed version-2 rules do not pass through
+the learned-action gate.
+
+```dotenv
+MEMORY_LEARNED_ACTIONS_ENABLED=true
+MEMORY_LEARNED_ACTIONS_ROLLOUT_PERCENT=0
+MEMORY_HISTORY_IMPORTS_ENABLED=false
+```
+
+The worker emits one-line JSON records with type `cloudy_memory_metric`. The
+allowed measurements cover action selection, voice retrieval, graph search,
+graph synchronization, graph rebuild, and history import. Fields are restricted
+to fixed outcomes, a one-way owner hash, counts, elapsed milliseconds, and
+outbox lag milliseconds. The telemetry API rejects unknown metric names or
+outcomes and has no field through which content can be logged.
+
+Run the deterministic release checks with:
+
+```sh
+pnpm --dir apps/api test:memory-release
+```
+
+The checks cover decision accuracy, calibrated abstention, unsafe selection,
+voice edit similarity, stable rollout assignment, invalid-configuration
+failure, and telemetry redaction. Production rollout still requires live
+provider and isolation checks because offline fixtures cannot prove delivery or
+tenant boundaries in deployed infrastructure.
+
 ## Isolation and ontology
 
 The caller supplies an owner UUID, never a Graphiti namespace. The service

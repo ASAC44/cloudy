@@ -107,6 +107,9 @@
 
 ## Activate graph memory
 
+- [ ] Deploy with `MEMORY_LEARNED_ACTIONS_ROLLOUT_PERCENT=0` and `MEMORY_HISTORY_IMPORTS_ENABLED=false`; verify fixed version-2 Pings, approval success rate, graph outbox lag, and p95 evaluation latency are unchanged before enabling either feature.
+- [ ] Run `pnpm --dir apps/api test:memory-release`, then progress learned actions through 5%, 25%, and 100% only after reviewing selection versus abstention, graph failures, latency, and outbox lag in memory metrics plus voice edit similarity, duplicate delivery, and approval success in canonical records; stop immediately for a wrong recipient, cross-owner evidence, or duplicate delivery.
+- [ ] Enable history imports separately after disposable Gmail and Telegram imports prove explicit scoping, bounded progress, idempotent retry, encrypted examples, forget operations, and a complete owner graph rebuild.
 - [ ] Apply `supabase/migrations/20260722050000_message_history_controls.sql` in staging before deploying the matching API worker and web build; explicitly scope a disposable Gmail import and selected Telegram-dialog import, verify estimate/consent, progress, idempotent retry, imported voice retrieval, separate learned-action disablement, person/connection/everything forget operations, graph rebuild, cross-owner isolation, and the rollback refusal while imported history exists.
 - [ ] Apply `supabase/migrations/20260722030000_voice_context_policies.sql` and `supabase/migrations/20260722040000_voice_example_lookup.sql` in staging; create required and optional context rules, verify optional failure warnings and required failure aborts, then verify both rollback scripts on a disposable database with no non-default context policy rows.
 - [ ] Apply `supabase/migrations/20260722020000_learned_communication_actions.sql` in staging before enabling version-3 rules; verify a populated rollback refuses, then verify the rollback on an empty disposable database.

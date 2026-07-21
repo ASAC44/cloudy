@@ -2,16 +2,19 @@ import { createHash } from 'node:crypto'
 
 import { ConnectionError, type ConnectionService, type MessageHistoryScope } from './connections.js'
 import type { Store } from './types/store.js'
+import { MemoryTelemetry } from './memory-telemetry.js'
 
 export class MessageHistoryImporter {
   constructor(
     private readonly store: Store,
     private readonly connections: ConnectionService,
+    private readonly telemetry: MemoryTelemetry = new MemoryTelemetry(() => undefined),
   ) {}
 
   async importOnce() {
     const claim = await this.store.claimMemoryImport()
     if (!claim) return false
+    const started = Date.now()
     try {
       const scope = this.connections.decryptPrivatePayload<MessageHistoryScope>(claim.encryptedScope)
       const cursor = claim.encryptedCursor
@@ -41,6 +44,7 @@ export class MessageHistoryImporter {
         hasMore: Boolean(page.cursor),
       })
       if (!completed) throw new ConnectionError('history_import_lease_expired')
+      this.telemetry.emit({ name: 'history_import', outcome: page.cursor ? 'continued' : 'completed', ownerId: claim.ownerId, durationMs: Date.now() - started, count: page.messages.length })
     } catch (error) {
       await this.store.failMemoryImport(
         claim.importId,
@@ -48,6 +52,7 @@ export class MessageHistoryImporter {
         safeImportError(error),
         retryableImportError(error),
       )
+      this.telemetry.emit({ name: 'history_import', outcome: 'failed', ownerId: claim.ownerId, durationMs: Date.now() - started })
     }
     return true
   }

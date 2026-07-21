@@ -7,6 +7,7 @@ import type {
   RuntimeRule,
   RuntimeStore,
 } from './types/store.js'
+import { MemoryTelemetry } from './memory-telemetry.js'
 
 type GraphEvidence = {
   evidence_id: string
@@ -142,11 +143,13 @@ export class MemoryOutboxSync {
   constructor(
     private readonly store: RuntimeStore,
     private readonly graph: GraphMemoryClient,
+    private readonly telemetry: MemoryTelemetry = new MemoryTelemetry(() => undefined),
   ) {}
 
   async syncOnce() {
     const claim = await this.store.claimMemoryOutbox()
     if (!claim) return false
+    const started = Date.now()
     try {
       if (claim.aggregateType === 'user' && claim.eventType === 'user.rebuild') {
         await this.graph.deleteUser(claim.ownerId)
@@ -167,6 +170,7 @@ export class MemoryOutboxSync {
         if (!await this.store.completeMemoryOutbox(claim.outboxId, claim.leaseToken)) {
           throw new GraphMemoryError('Memory outbox lease expired before rebuild completion', true)
         }
+        this.telemetry.emit({ name: 'graph_rebuild', outcome: 'succeeded', ownerId: claim.ownerId, durationMs: Date.now() - started, lagMs: started - new Date(claim.createdAt).getTime() })
         return true
       }
       if (claim.aggregateType !== 'decision') {
@@ -179,9 +183,11 @@ export class MemoryOutboxSync {
       if (!await this.store.completeMemoryOutbox(claim.outboxId, claim.leaseToken, graphIds[0])) {
         throw new GraphMemoryError('Memory outbox lease expired before completion', true)
       }
+      this.telemetry.emit({ name: 'graph_sync', outcome: 'succeeded', ownerId: claim.ownerId, durationMs: Date.now() - started, lagMs: started - new Date(claim.createdAt).getTime() })
     } catch (error) {
       const failure = error instanceof GraphMemoryError ? error : new GraphMemoryError('Memory sync failed', true)
       await this.store.failMemoryOutbox(claim.outboxId, claim.leaseToken, failure.message, failure.retryable)
+      this.telemetry.emit({ name: claim.eventType === 'user.rebuild' ? 'graph_rebuild' : 'graph_sync', outcome: 'failed', ownerId: claim.ownerId, durationMs: Date.now() - started, lagMs: started - new Date(claim.createdAt).getTime() })
     }
     return true
   }
@@ -191,6 +197,7 @@ export class GraphMemoryRetriever {
   constructor(
     private readonly store: RuntimeStore,
     private readonly graph: GraphMemoryClient,
+    private readonly telemetry: MemoryTelemetry = new MemoryTelemetry(() => undefined),
   ) {}
 
   async context(rule: RuntimeRule, event: Record<string, unknown>) {
@@ -198,6 +205,7 @@ export class GraphMemoryRetriever {
   }
 
   async retrieve(rule: RuntimeRule, event: Record<string, unknown>) {
+    const started = Date.now()
     const query = memoryQuery(rule, event)
     const recentPromise = this.store.listRecentUnindexedDecisions(rule.owner_id, 8).catch(() => [])
     const graphPromise = Promise.all([
@@ -206,6 +214,7 @@ export class GraphMemoryRetriever {
     ]).then(([actions, voice]) => ({ actions, voice, available: true as const }))
       .catch(() => ({ actions: [], voice: [], available: false as const }))
     const [recent, graph] = await Promise.all([recentPromise, graphPromise])
+    this.telemetry.emit({ name: 'graph_search', outcome: graph.available ? 'succeeded' : 'unavailable', ownerId: rule.owner_id, durationMs: Date.now() - started, count: graph.actions.length + graph.voice.length })
     return { context: graphMemoryContext(graph.actions, graph.voice, recent), graphAvailable: graph.available }
   }
 }
