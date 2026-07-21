@@ -3,6 +3,7 @@ import Link from "next/link";
 
 import { MorphicNavbar } from "@/components/kokonutui/morphic-navbar";
 import { Hero } from "@/components/landing/hero";
+import { SystemArchitectureSection } from "@/components/landing/system-architecture-section";
 import { Button } from "@/components/ui/button";
 import { createClient } from "@/lib/supabase/server";
 
@@ -40,6 +41,7 @@ export default async function Home() {
       </header>
       <main id="main-content">
         <Hero />
+        <SystemArchitectureSection />
       </main>
     </div>
   );
