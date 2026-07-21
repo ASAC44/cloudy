@@ -670,6 +670,15 @@ export interface RuntimeStore {
   getRuntimeEvent(ownerId: string, eventId: string): Promise<RuntimeEvent | null>
   listConversationEvents(ownerId: string, ruleId: string, conversationKey: string, limit: number): Promise<RuntimeEvent[]>
   listMessageExamples(ownerId: string, connectionId: string, limit: number): Promise<MemoryMessageExample[]>
+  listRelevantMessageExamples(input: {
+    ownerId: string
+    connectionId?: string
+    personId?: string
+    identityId?: string
+    channel?: MemoryMessageExample['channel']
+    intent: string
+    limit: number
+  }): Promise<MemoryMessageExample[]>
   claimMemoryOutbox(): Promise<MemoryOutboxClaim | null>
   getMemoryDecisionGraphRecord(ownerId: string, decisionId: string): Promise<MemoryDecisionGraphRecord | null>
   completeMemoryOutbox(outboxId: string, leaseToken: string, graphUuid?: string): Promise<boolean>

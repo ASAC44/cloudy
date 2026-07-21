@@ -1,6 +1,8 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { timingSafeEqual } from 'node:crypto'
 
+import { rankMessageExamples } from './memory.js'
+
 import {
   type AutomationKey,
   type ApprovalRequest,
@@ -1350,17 +1352,44 @@ export class SupabaseStore implements Store, RuntimeStore {
   }
 
   async listMessageExamples(ownerId: string, connectionId: string, limit: number) {
+    return this.listRelevantMessageExamples({ ownerId, connectionId, intent: '', limit })
+  }
+
+  async listRelevantMessageExamples(input: {
+    ownerId: string
+    connectionId?: string
+    personId?: string
+    identityId?: string
+    channel?: import('./types/store.js').MemoryMessageExample['channel']
+    intent: string
+    limit: number
+  }) {
     const { data, error } = await this.db.from('memory_message_examples')
       .select('id, owner_id, decision_case_id, connection_id, person_id, identity_id, channel, language, source_kind, eligibility, encrypted_payload, payload_hash, style_metadata, occurred_at, created_at, updated_at')
-      .eq('owner_id', ownerId)
-      .eq('connection_id', connectionId)
+      .eq('owner_id', input.ownerId)
       .in('eligibility', ['positive', 'intent_only'])
       .is('deleted_at', null)
       .order('occurred_at', { ascending: false })
       .order('id', { ascending: false })
-      .limit(Math.max(1, Math.min(limit, 20)))
+      .limit(100)
     if (error) fail(error)
-    return (data ?? []) as import('./types/store.js').MemoryMessageExample[]
+    const examples = (data ?? []) as import('./types/store.js').MemoryMessageExample[]
+    const decisionIds = [...new Set(examples.map((example) => example.decision_case_id))]
+    const { data: decisions, error: decisionsError } = decisionIds.length
+      ? await this.db.from('memory_decision_cases').select('id, rule_id').eq('owner_id', input.ownerId).in('id', decisionIds)
+      : { data: [], error: null }
+    if (decisionsError) fail(decisionsError)
+    const ruleIds = [...new Set((decisions ?? []).flatMap((decision) => decision.rule_id ? [decision.rule_id] : []))]
+    const { data: rules, error: rulesError } = ruleIds.length
+      ? await this.db.from('ping_rules').select('id, intent_summary').eq('owner_id', input.ownerId).in('id', ruleIds)
+      : { data: [], error: null }
+    if (rulesError) fail(rulesError)
+    const intentByRule = new Map((rules ?? []).map((rule) => [rule.id, rule.intent_summary]))
+    const ruleByDecision = new Map((decisions ?? []).map((decision) => [decision.id, decision.rule_id]))
+    return rankMessageExamples(examples.map((example) => ({
+      example,
+      intent: intentByRule.get(ruleByDecision.get(example.decision_case_id) ?? '') ?? '',
+    })), input, input.limit)
   }
 
   async listMemoryIdentities(ownerId: string, limit: number) {
