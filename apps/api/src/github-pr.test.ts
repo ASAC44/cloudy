@@ -38,8 +38,8 @@ function githubFetch(options: { merge?: 'success' | 'timeout'; mergedAfterTimeou
       if (options.merge === 'timeout') throw new TypeError('socket closed')
       return Response.json({ merged: true, sha: 'b'.repeat(40) })
     }
-    if (url.pathname === '/repos/podex/api') return Response.json(repository)
-    if (url.pathname === '/repos/podex/api/pulls/42') {
+    if (url.pathname === '/repos/cloudy/api') return Response.json(repository)
+    if (url.pathname === '/repos/cloudy/api/pulls/42') {
       return Response.json(pull({ merged: options.mergedAfterTimeout === true && mergeAttempted }))
     }
     if (url.pathname.endsWith('/reviews')) return Response.json([
@@ -61,11 +61,11 @@ test('GitHub readiness preserves authoritative facts and squash-preferred merge 
   assert.equal(chooseMergeMethod({ squash: false, rebase: true, merge: true }), 'rebase')
   assert.equal(chooseMergeMethod({ squash: false, rebase: false, merge: true }), 'merge')
 
-  const result = await new GithubClient('secret-token', githubFetch()).readyPullRequests(['podex/api'])
+  const result = await new GithubClient('secret-token', githubFetch()).readyPullRequests(['cloudy/api'])
   assert.equal(result.items.length, 1)
   const item = result.items[0]
-  assert.equal(item.event_identity, `podex/api#42@${'a'.repeat(40)}`)
-  assert.equal(item.conversation_key, 'podex/api#42')
+  assert.equal(item.event_identity, `cloudy/api#42@${'a'.repeat(40)}`)
+  assert.equal(item.conversation_key, 'cloudy/api#42')
   assert.equal(item.checks_passed, 3)
   assert.equal(item.checks_total, 3)
   assert.equal(item.approvals, 1)
@@ -82,10 +82,10 @@ test('GitHub repository scope and permissions fail closed', async () => {
   const denied = githubFetch()
   const client = new GithubClient('token', (async (input, init) => {
     const url = new URL(String(input))
-    if (url.pathname === '/repos/podex/api') return Response.json({ ...repository, permissions: { push: false } })
+    if (url.pathname === '/repos/cloudy/api') return Response.json({ ...repository, permissions: { push: false } })
     return denied(input, init)
   }) as typeof fetch)
-  await assert.rejects(() => client.readyPullRequests(['podex/api']), (error: unknown) =>
+  await assert.rejects(() => client.readyPullRequests(['cloudy/api']), (error: unknown) =>
     error instanceof GithubApiError && error.code === 'permission')
 })
 
@@ -119,7 +119,7 @@ test('merge sends the reviewed SHA and reconciles an uncertain completed respons
     return base(input, init)
   }) as typeof fetch)
   const result = await client.merge({
-    repository: 'podex/api', number: 42,
+    repository: 'cloudy/api', number: 42,
     head_sha: 'a'.repeat(40), merge_method: 'squash',
   })
   assert.equal(result.merged, true)
@@ -129,7 +129,7 @@ test('merge sends the reviewed SHA and reconciles an uncertain completed respons
 test('changed SHA can never be merged', async () => {
   const client = new GithubClient('token', githubFetch())
   await assert.rejects(() => client.merge({
-    repository: 'podex/api', number: 42,
+    repository: 'cloudy/api', number: 42,
     head_sha: 'c'.repeat(40), merge_method: 'squash',
   }), (error: unknown) => error instanceof GithubApiError && error.code === 'conflict')
 })

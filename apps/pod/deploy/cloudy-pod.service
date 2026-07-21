@@ -1,19 +1,19 @@
 [Unit]
-Description=Podex Pod kiosk
+Description=Cloudy Pod kiosk
 After=network-online.target
 Wants=network-online.target
 Conflicts=getty@tty1.service
 
 [Service]
 Type=simple
-User=podex
-Group=podex
+User=cloudy
+Group=cloudy
 SupplementaryGroups=input render video gpio
-WorkingDirectory=/opt/podex-pod
-EnvironmentFile=/etc/podex-pod.env
-Environment=PODEX_SIMULATOR=0
-Environment=XDG_RUNTIME_DIR=/run/podex-pod
-RuntimeDirectory=podex-pod
+WorkingDirectory=/opt/cloudy-pod
+EnvironmentFile=/etc/cloudy-pod.env
+Environment=CLOUDY_SIMULATOR=0
+Environment=XDG_RUNTIME_DIR=/run/cloudy-pod
+RuntimeDirectory=cloudy-pod
 RuntimeDirectoryMode=0700
 PAMName=login
 TTYPath=/dev/tty1
@@ -21,7 +21,7 @@ TTYReset=yes
 TTYVHangup=yes
 StandardInput=tty
 StandardOutput=journal
-ExecStart=/usr/bin/cage -s -- /opt/podex-pod/.venv/bin/python -m podex_pod
+ExecStart=/usr/bin/cage -s -- /opt/cloudy-pod/.venv/bin/python -m cloudy_pod
 Restart=on-failure
 RestartSec=2
 

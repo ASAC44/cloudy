@@ -96,6 +96,21 @@ test('Pod screens hold one feed and the migration trims old multi-feed slots ato
   assert.match(rollback, /commit;\s*$/)
 })
 
+test('Pod screens widen to six feeds and rollback refuses to discard assignments', async () => {
+  const migration = await readFile(new URL('supabase/migrations/20260721020000_multi_feed_screens.sql', root), 'utf8')
+  const rollback = await readFile(new URL('supabase/rollback/20260721020000_multi_feed_screens.sql', root), 'utf8')
+
+  assert.match(migration, /^begin;/)
+  assert.match(migration, /jsonb_array_length\(p_layout -> direction\) > 6/)
+  assert.match(migration, /drop constraint if exists pods_valid_screen_layout/)
+  assert.match(migration, /add constraint pods_valid_screen_layout/)
+  assert.match(migration, /commit;\s*$/)
+  assert.match(rollback, /^begin;/)
+  assert.match(rollback, /raise exception 'Refusing rollback while multi-feed Pod screens exist/)
+  assert.match(rollback, /jsonb_array_length\(p_layout -> direction\) > 1/)
+  assert.match(rollback, /commit;\s*$/)
+})
+
 test('rule builder can request first-class Linear and Stripe connections', async () => {
   const source = await readFile(new URL('apps/api/src/rule-builder.ts', root), 'utf8')
   assert.match(source, /enum: \['github', 'gmail', 'vercel', 'telegram', 'linear', 'stripe', 'custom_mcp', 'other'\]/)
@@ -105,6 +120,14 @@ test('rule builder can request first-class Linear and Stripe connections', async
 test('rule listing disambiguates the owner-scoped runtime-state relationship', async () => {
   const store = await readFile(new URL('apps/api/src/supabase-store.ts', root), 'utf8')
   assert.match(store, /ping_rule_runtime_states!ping_rule_runtime_states_owner_id_rule_id_fkey\(/)
+})
+
+test('Pod request queue preserves arrival order across attached apps', async () => {
+  const store = await readFile(new URL('apps/api/src/supabase-store.ts', root), 'utf8')
+  const currentRequest = store.match(/async currentRequest\(ownerId: string\)[\s\S]*?\n  async decideRequest/)?.[0] ?? ''
+
+  assert.doesNotMatch(currentRequest, /order\('priority'/)
+  assert.match(currentRequest, /order\('created_at', \{ ascending: true \}\)/)
 })
 
 test('runtime execution stays in the dedicated worker process', async () => {
@@ -126,4 +149,43 @@ test('agent memories are owned, scoped, bounded, and reversible', async () => {
   assert.match(migration, /unique\(owner_id, scope, scope_id, provider, memory_key\)/)
   assert.match(migration, /alter table public\.agent_memories enable row level security/)
   assert.match(rollback, /drop table if exists public\.agent_memories/)
+})
+
+test('Cloudy rebrand replaces both scheduled job names and rolls back atomically', async () => {
+  const migration = await readFile(new URL('supabase/migrations/20260721000000_cloudy_rebrand.sql', root), 'utf8')
+  const rollback = await readFile(new URL('supabase/rollback/20260721000000_cloudy_rebrand.sql', root), 'utf8')
+
+  for (const sql of [migration, rollback]) {
+    assert.match(sql, /^begin;/)
+    assert.match(sql, /cron\.unschedule/)
+    assert.match(sql, /commit;\s*$/)
+  }
+  assert.match(migration, /podex-purge-expired-rule-builder-sessions/)
+  assert.match(migration, /cloudy-purge-expired-rule-builder-sessions/)
+  assert.match(migration, /podex-purge-ping-runtime-data/)
+  assert.match(migration, /cloudy-purge-ping-runtime-data/)
+  assert.match(rollback, /'podex-purge-expired-rule-builder-sessions'/)
+  assert.match(rollback, /'podex-purge-ping-runtime-data'/)
+})
+
+test('Pod realtime invalidations are transactional, metadata-only, and reversible', async () => {
+  const migration = await readFile(new URL('supabase/migrations/20260721010000_pod_realtime_updates.sql', root), 'utf8')
+  const rollback = await readFile(new URL('supabase/rollback/20260721010000_pod_realtime_updates.sql', root), 'utf8')
+
+  assert.match(migration, /^begin;/)
+  assert.match(migration, /set search_path = ''/)
+  assert.match(migration, /realtime\.send\(/)
+  assert.match(migration, /'owner_id', owner_id/)
+  assert.match(migration, /'pod_id', pod_id/)
+  assert.match(migration, /'scope', tg_argv\[0\]/)
+  assert.doesNotMatch(migration, /realtime\.broadcast_changes/)
+  assert.match(migration, /after update of screen_layout, screen_layout_revision on public\.pods/)
+  assert.doesNotMatch(migration, /after update of last_seen_at on public\.pods/)
+  for (const table of ['approval_requests', 'pods', 'connections', 'codex_targets', 'codex_bridges']) {
+    assert.match(migration, new RegExp(`on public\\.${table}`))
+  }
+  assert.match(migration, /commit;\s*$/)
+  assert.match(rollback, /^begin;/)
+  assert.match(rollback, /drop function if exists public\.notify_pod_state_change\(\)/)
+  assert.match(rollback, /commit;\s*$/)
 })

@@ -15,7 +15,7 @@ export default async function CodexPage() {
       <header className="border-b border-border pb-10">
         <p className="mb-4 font-mono text-caption tracking-[0.16em] text-muted-foreground uppercase">Local Codex · human controlled</p>
         <h1 className="text-[clamp(2.5rem,6vw,4.5rem)] leading-none tracking-[-0.04em]">Vibecode from your Pod.</h1>
-        <p className="mt-5 max-w-2xl text-base leading-7 text-muted-foreground">Pair the bridge running beside your repositories, choose the active session here, then plan, revise, and approve work from Podex.</p>
+        <p className="mt-5 max-w-2xl text-base leading-7 text-muted-foreground">Pair the bridge running beside your repositories, choose the active session here, then plan, revise, and approve work from Cloudy.</p>
       </header>
       <CodexManager key={`${overview.target?.revision ?? 0}:${overview.bridges.length}:${overview.workspaces.length}:${overview.threads.map((thread) => thread.updated_at).join(",")}`} initial={overview} initialError={error || undefined} />
     </div>

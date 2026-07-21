@@ -1,5 +1,7 @@
 export type ScreenDirection = "left" | "right" | "down";
 export type ScreenLayout = Record<ScreenDirection, string[]>;
+export type MascotAction = "blink" | "yawn" | "sleep" | "jump";
+export type ScreenNavigation = "left" | "right" | "up" | "down" | "scroll_up" | "scroll_down";
 
 export type ScreenItem = {
   id: string;

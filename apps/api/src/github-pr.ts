@@ -247,7 +247,7 @@ export function factOnlyPresentation(pull: GithubPullRequest, aiAvailable = fals
       ['CUSTOMER IMPACT', 'No verified customer-impact description was provided.'],
       ['FAILURE MODES', 'A new commit, failed check, closed PR, or lost merge permission prevents delivery.'],
       ['REVIEW EVIDENCE', `${checks} checks passed; ${pull.approvals} approving review${pull.approvals === 1 ? '' : 's'}; GitHub merge state is clean.`],
-      ['SAFETY AND ROLLBACK', 'Podex revalidates the exact head SHA immediately before merging. Revert the merge commit to roll back.'],
+      ['SAFETY AND ROLLBACK', 'Cloudy revalidates the exact head SHA immediately before merging. Revert the merge commit to roll back.'],
       ['AFTER MERGE', 'Monitor CI, deployments, errors, and the behavior affected by the changed files.'],
     ],
     ai_available: aiAvailable,

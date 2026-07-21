@@ -227,10 +227,10 @@ grant execute on function public.purge_expired_rule_builder_sessions() to servic
 create extension if not exists pg_cron;
 
 select cron.schedule(
-  'podex-purge-expired-rule-builder-sessions',
+  'cloudy-purge-expired-rule-builder-sessions',
   '17 3 * * *',
   'select public.purge_expired_rule_builder_sessions()'
 )
 where not exists (
-  select 1 from cron.job where jobname = 'podex-purge-expired-rule-builder-sessions'
+  select 1 from cron.job where jobname = 'cloudy-purge-expired-rule-builder-sessions'
 );

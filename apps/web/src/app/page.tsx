@@ -19,13 +19,13 @@ export default async function Home() {
           className="flex w-fit items-center gap-2 text-foreground sm:absolute sm:top-1/2 sm:left-6 sm:-translate-y-1/2"
         >
           <Image
-            src="/podex-mascot.png"
+            src="/cloudy-mascot.png"
             alt=""
             width={40}
             height={40}
             priority
           />
-          <span className="font-heading text-heading-sm">Podex</span>
+          <span className="font-heading text-heading-sm">Cloudy</span>
         </Link>
         <MorphicNavbar className="mt-3 sm:mt-0" />
         <div className="absolute top-4 right-4 flex items-center gap-2 sm:top-1/2 sm:right-6 sm:-translate-y-1/2">

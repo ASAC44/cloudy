@@ -4,23 +4,24 @@ import { createApp } from './app.js'
 import { ConnectionService } from './connections.js'
 import { RuleBuilderService } from './rule-builder.js'
 import { SupabaseStore } from './supabase-store.js'
+import { SupabasePodEvents } from './pod-events.js'
 
 const supabaseUrl = process.env.SUPABASE_URL
 const supabaseSecretKey = process.env.SUPABASE_SECRET_KEY
 const connectionEncryptionKey = process.env.CONNECTION_ENCRYPTION_KEY
-const publicApiUrl = process.env.PODEX_PUBLIC_API_URL
-const webUrl = process.env.PODEX_WEB_URL
+const publicApiUrl = process.env.CLOUDY_PUBLIC_API_URL
+const webUrl = process.env.CLOUDY_WEB_URL
 
 if (!supabaseUrl) throw new Error('SUPABASE_URL is required')
 if (!supabaseSecretKey) throw new Error('SUPABASE_SECRET_KEY is required')
 if (!connectionEncryptionKey) throw new Error('CONNECTION_ENCRYPTION_KEY is required')
-if (!publicApiUrl) throw new Error('PODEX_PUBLIC_API_URL is required')
-if (!webUrl) throw new Error('PODEX_WEB_URL is required')
+if (!publicApiUrl) throw new Error('CLOUDY_PUBLIC_API_URL is required')
+if (!webUrl) throw new Error('CLOUDY_WEB_URL is required')
 
 const store = new SupabaseStore(
   supabaseUrl,
   supabaseSecretKey,
-  process.env.PODEX_LOCAL_LAYOUT_DB,
+  process.env.CLOUDY_LOCAL_LAYOUT_DB,
 )
 const connections = new ConnectionService(store, {
   encryptionKey: connectionEncryptionKey,
@@ -34,6 +35,12 @@ const connections = new ConnectionService(store, {
   telegramApiHash: process.env.TELEGRAM_API_HASH,
 })
 const ruleBuilder = new RuleBuilderService(store, connections)
-const app = createApp(supabaseUrl, store, undefined, connections, undefined, ruleBuilder, undefined, store)
+const podEvents = new SupabasePodEvents(supabaseUrl, supabaseSecretKey)
+podEvents.subscribeStatus((ready) => console.info(`Pod realtime relay ${ready ? 'connected' : 'degraded'}`))
+podEvents.start()
+const app = createApp(supabaseUrl, store, undefined, connections, undefined, ruleBuilder, undefined, store, podEvents)
 
-serve({ fetch: app.fetch, port: Number(process.env.PORT) || 3001 })
+const server = serve({ fetch: app.fetch, port: Number(process.env.PORT) || 3001 })
+for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, () => {
+  void podEvents.close().finally(() => server.close(() => process.exit(0)))
+})

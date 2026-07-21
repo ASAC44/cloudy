@@ -18,7 +18,7 @@ export function DisconnectConnectionDialog({
         <AlertDialogHeader>
           <AlertDialogTitle>Disconnect {connection?.name}?</AlertDialogTitle>
           <AlertDialogDescription>
-            Podex will permanently delete its saved credentials. Manually issued Vercel and Telegram tokens remain active at their provider until you revoke them there.
+            Cloudy will permanently delete its saved credentials. Manually issued Vercel and Telegram tokens remain active at their provider until you revoke them there.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

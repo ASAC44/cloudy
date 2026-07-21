@@ -31,7 +31,7 @@ test('a lost acknowledgement retries without creating a duplicate Codex session'
   const command = { id: 'command-1', kind: 'new_thread', workspace_id: 'remote-workspace', thread_id: null, idempotency_key: 'prompt-1', payload: {} }
   let ackAttempts = 0
   const api = { request: async (method, path, _body, headers) => {
-    if (method === 'GET') { assert.ok(headers['X-Podex-Bridge-Instance']); return { command } }
+    if (method === 'GET') { assert.ok(headers['X-Cloudy-Bridge-Instance']); return { command } }
     ackAttempts += 1
     if (ackAttempts === 1) throw new Error('response lost')
     return { ok: true }

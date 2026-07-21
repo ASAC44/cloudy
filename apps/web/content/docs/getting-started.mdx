@@ -1,6 +1,6 @@
 ---
 title: Getting started
-description: Install dependencies, configure local services, and run the complete Podex development environment.
+description: Install dependencies, configure local services, and run the complete Cloudy development environment.
 ---
 
 ## Prerequisites
@@ -36,12 +36,12 @@ The script starts the dashboard on port 3000, the Hono API on port 3001, the ded
 The first worker poll records existing provider items as its baseline without creating approvals. New items, or changed identities such as a new commit on a watched pull request, can create approvals on later polls.
 
 For local development, `scripts/dev.sh` enables a SQLite fallback at
-`apps/api/.state/podex.sqlite` when the hosted project does not yet have the
+`apps/api/.state/cloudy.sqlite` when the hosted project does not yet have the
 Pod keychain-layout migration. The fallback stores only directional app layouts; all
 pairing, requests, decisions, and credentials continue to use Supabase. Apply
 the tracked migrations before deploying because production does not enable
 this fallback. The script passes the database as an absolute
-`PODEX_LOCAL_LAYOUT_DB` path so startup does not depend on the caller's working
+`CLOUDY_LOCAL_LAYOUT_DB` path so startup does not depend on the caller's working
 directory.
 
 ## Verify the workspace

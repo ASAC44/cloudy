@@ -29,11 +29,11 @@ const mono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Podex",
+  title: "Cloudy",
   description: "Approve agent actions at a glance.",
   icons: {
-    icon: "/podex-mascot.png",
-    apple: "/podex-mascot.png",
+    icon: "/cloudy-mascot.png",
+    apple: "/cloudy-mascot.png",
   },
 };
 

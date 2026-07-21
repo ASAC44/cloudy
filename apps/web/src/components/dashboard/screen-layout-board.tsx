@@ -52,6 +52,8 @@ const appDefinitions: Array<{ provider: Connection["provider"] | "codex"; name: 
   { provider: "stripe", name: "Stripe", icon: Server },
 ];
 
+const MAX_APPS_PER_SCREEN = 6;
+
 export function ScreenLayoutBoard({
   podId,
   initialLayout,
@@ -102,12 +104,13 @@ export function ScreenLayoutBoard({
 
   function move(itemId: string, target?: ScreenDirection) {
     const current = layoutRef.current;
+    if (target && !current[target].includes(itemId) && current[target].length >= MAX_APPS_PER_SCREEN) return;
     const next: ScreenLayout = {
       left: current.left.filter((id) => id !== itemId),
       right: current.right.filter((id) => id !== itemId),
       down: current.down.filter((id) => id !== itemId),
     };
-    if (target) next[target] = [itemId];
+    if (target) next[target] = [...next[target], itemId];
     layoutRef.current = next;
     setLayout(next);
     void persist(next);
@@ -125,7 +128,7 @@ export function ScreenLayoutBoard({
       <div className="mb-6 flex items-start justify-between gap-6">
         <div>
           <h2 id="keychain-title" className="text-heading-sm">Screen layout</h2>
-          <p className="mt-1 max-w-2xl text-muted-foreground">Drag apps between screens or use their move menu. Screen 2 stays default; the mascot appears only after the Pod becomes inactive.</p>
+          <p className="mt-1 max-w-2xl text-muted-foreground">Attach up to six apps to each screen. Their pings share that screen in queue order; apps are never grouped.</p>
         </div>
         <span className={cn("shrink-0 text-caption", syncStatus === "error" ? "text-destructive" : "text-muted-foreground")} aria-live="polite">
           {syncStatus === "saving" ? "Syncing…" : syncStatus === "error" ? "Sync failed · reverted" : "Synced to Pod"}
@@ -137,7 +140,7 @@ export function ScreenLayoutBoard({
           return (
             <Card
               key={direction.id}
-              className="min-h-72 gap-0 border-border/70 bg-card/75 px-4 py-5 shadow-sm shadow-foreground/5 md:px-5"
+              className="min-h-72 gap-0 border-border/70 bg-card/75 px-5 py-5 shadow-sm shadow-foreground/5 md:px-6"
               onDragOver={(event) => event.preventDefault()}
               onDrop={(event) => drop(event, direction.id)}
             >
@@ -146,13 +149,13 @@ export function ScreenLayoutBoard({
                   <h3 className="font-sans text-sm font-medium">{direction.label}</h3>
                   <p className="mt-1 flex items-center gap-0.5 text-caption text-muted-foreground [&_svg]:size-3">{direction.gesture}</p>
                 </div>
-                <span className="text-caption text-muted-foreground">{layout[direction.id].length}/1</span>
+                <span className="text-caption text-muted-foreground">{layout[direction.id].length}/{MAX_APPS_PER_SCREEN}</span>
               </div>
               <div className="space-y-1">
                 {layout[direction.id].length ? layout[direction.id].map((itemId) => (
                   <AppRow key={itemId} item={items[itemId] ?? missingItem(itemId)} direction={direction.id} move={move} drop={drop} />
                 )) : (
-                  <p className="py-8 text-sm text-muted-foreground">Drop an app here.</p>
+                  <p className="py-8 text-sm text-muted-foreground">Attach apps whose pings should open here.</p>
                 )}
               </div>
             </Card>
@@ -161,7 +164,7 @@ export function ScreenLayoutBoard({
       </div>
 
       <div
-        className="mt-3 rounded-2xl border border-border/60 bg-card/45 px-4 py-4 shadow-sm shadow-foreground/5 sm:px-5"
+        className="mt-3 rounded-2xl border border-border/60 bg-card/45 px-5 py-4 shadow-sm shadow-foreground/5 sm:px-6"
         onDragOver={(event) => event.preventDefault()}
         onDrop={(event) => {
           event.preventDefault();

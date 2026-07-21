@@ -27,7 +27,7 @@ wheels = [
 ]
 
 [[package]]
-name = "podex-pod"
+name = "cloudy-pod"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

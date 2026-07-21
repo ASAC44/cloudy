@@ -1,9 +1,9 @@
 {
-  "name": "podex-codex-bridge",
+  "name": "cloudy-codex-bridge",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "bin": { "podex-bridge": "src/cli.js" },
+  "bin": { "cloudy-bridge": "src/cli.js" },
   "scripts": {
     "start": "node src/cli.js run",
     "schema:generate": "codex app-server generate-json-schema --out schema",

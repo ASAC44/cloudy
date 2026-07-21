@@ -160,6 +160,14 @@ export class SupabaseStore implements Store, RuntimeStore {
     return { id: data.id, ownerId: data.owner_id, screenLayout }
   }
 
+  async touchPod(podId: string) {
+    const { data, error } = await this.db.from('pods')
+      .update({ last_seen_at: new Date().toISOString() })
+      .eq('id', podId).is('revoked_at', null).select('id')
+    if (error) fail(error)
+    return Boolean(data?.length)
+  }
+
   async listPods(ownerId: string): Promise<Pod[]> {
     const response = await this.db
       .from('pods')
@@ -257,7 +265,6 @@ export class SupabaseStore implements Store, RuntimeStore {
         .select('*')
         .eq('owner_id', ownerId)
         .eq('status', 'pending')
-        .order('priority', { ascending: false })
         .order('created_at', { ascending: true })
         .limit(1)
         .maybeSingle(),

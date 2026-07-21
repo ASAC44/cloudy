@@ -151,7 +151,7 @@ export function PingRuleDefinitions({ initialRules }: { initialRules: PingRuleSu
           )) : (
             <div className="py-8 text-center">
               <p className="font-medium">No definitions saved.</p>
-              <p className="mt-1 text-sm text-muted-foreground">Describe what Podex should watch from Home.</p>
+              <p className="mt-1 text-sm text-muted-foreground">Describe what Cloudy should watch from Home.</p>
             </div>
           )}
         </div>

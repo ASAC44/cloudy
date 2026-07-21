@@ -15,7 +15,7 @@ Create local `.env` files from the examples:
   `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`.
 - `apps/api/.env`: set `SUPABASE_URL` and the server-only
   `SUPABASE_SECRET_KEY`, a random base64 `CONNECTION_ENCRYPTION_KEY`,
-  `PODEX_PUBLIC_API_URL`, and `PODEX_WEB_URL`. Generate the encryption key with
+  `CLOUDY_PUBLIC_API_URL`, and `CLOUDY_WEB_URL`. Generate the encryption key with
   `openssl rand -base64 32`; it protects stored provider credentials and must
   never be exposed to the dashboard or Pod.
 
@@ -58,8 +58,8 @@ Supabase and must not be added to this repository or Railway.
 
 ## 4. Configure Railway
 
-Add the two `NEXT_PUBLIC_*` values, `PODEX_API_URL`, and
-`PODEX_PUBLIC_API_URL` to the Next.js service. Add every required value from
+Add the two `NEXT_PUBLIC_*` values, `CLOUDY_API_URL`, and
+`CLOUDY_PUBLIC_API_URL` to the Next.js service. Add every required value from
 `apps/api/.env.example` to the Hono API service, leaving only unused provider
 OAuth values blank. Redeploy the affected services after changing them. Hono uses
 Railway's injected `PORT`; locally it falls back to `3001` while Next.js uses
@@ -93,6 +93,6 @@ for `gmail.readonly` and `gmail.send`, and set `GOOGLE_CLIENT_ID` and
 `GOOGLE_CLIENT_SECRET`. Existing read-only Gmail connections must be
 reconnected before reply actions become available.
 
-Set `PODEX_PUBLIC_API_URL` to the public API origin, `PODEX_WEB_URL` to the
+Set `CLOUDY_PUBLIC_API_URL` to the public API origin, `CLOUDY_WEB_URL` to the
 dashboard origin, and `CONNECTION_ENCRYPTION_KEY` to a stable 32-byte base64
 value. Changing that encryption key makes saved credentials unreadable.

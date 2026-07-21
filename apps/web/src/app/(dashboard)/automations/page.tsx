@@ -12,8 +12,8 @@ export default async function AutomationsPage() {
   }
 
   const apiBaseUrl = (
-    process.env.PODEX_PUBLIC_API_URL ??
-    process.env.PODEX_API_URL ??
+    process.env.CLOUDY_PUBLIC_API_URL ??
+    process.env.CLOUDY_API_URL ??
     "http://localhost:3001"
   ).replace(/\/$/, "");
 
@@ -24,7 +24,7 @@ export default async function AutomationsPage() {
           n8n · human in the loop
         </p>
         <h1 className="text-[clamp(2.5rem,6vw,4.5rem)] leading-none tracking-[-0.04em]">
-          Approve your HITL nodes from Podex!
+          Approve your HITL nodes from Cloudy!
         </h1>
         <p className="mt-5 max-w-2xl text-base leading-7 text-muted-foreground">
           Send an action to your Pod, pause n8n, then continue from the exact

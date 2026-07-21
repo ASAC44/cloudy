@@ -53,7 +53,7 @@ export function TelegramConnectionDialog({
       const result = await beginTelegramUserAuth(name.trim() || "Telegram");
       if (result.session) setSession(result.session);
       else setError(result.error === "provider not configured"
-        ? "Telegram QR sign-in is not enabled on this Podex server yet. Add the Telegram app credentials to both the API and worker service."
+        ? "Telegram QR sign-in is not enabled on this Cloudy server yet. Add the Telegram app credentials to both the API and worker service."
         : result.error ?? "Telegram setup could not start.");
     });
   }
@@ -113,7 +113,7 @@ export function TelegramConnectionDialog({
                   <Label htmlFor="telegram-user-name">Connection name</Label>
                   <Input id="telegram-user-name" value={name} onChange={(event) => setName(event.target.value)} maxLength={80} />
                 </div>
-                <p className="text-sm leading-6 text-muted-foreground">Podex uses Telegram’s QR sign-in. Your session is encrypted; Podex never marks messages read.</p>
+                <p className="text-sm leading-6 text-muted-foreground">Cloudy uses Telegram’s QR sign-in. Your session is encrypted; Cloudy never marks messages read.</p>
                 <Button onClick={begin} disabled={pending}>{pending ? <Spinner /> : <QrCode />}{pending ? "Starting…" : "Show QR code"}</Button>
               </div>
             ) : session.status === "waiting_2fa" ? (

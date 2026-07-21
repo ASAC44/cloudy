@@ -18,8 +18,8 @@ if ((telegramApiId === undefined) !== (telegramApiHash === undefined)) {
 const store = new SupabaseStore(supabaseUrl, supabaseSecretKey)
 const connections = new ConnectionService(store, {
   encryptionKey,
-  publicApiUrl: requiredEnv('PODEX_PUBLIC_API_URL'),
-  webUrl: requiredEnv('PODEX_WEB_URL'),
+  publicApiUrl: requiredEnv('CLOUDY_PUBLIC_API_URL'),
+  webUrl: requiredEnv('CLOUDY_WEB_URL'),
   githubClientId: process.env.GITHUB_CLIENT_ID,
   githubClientSecret: process.env.GITHUB_CLIENT_SECRET,
   googleClientId: process.env.GOOGLE_CLIENT_ID,

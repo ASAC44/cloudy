@@ -24,7 +24,7 @@ export default async function ConfigurePage() {
       <header className="flex flex-col gap-8 border-b border-border pb-10 sm:flex-row sm:items-end sm:justify-between">
         <div className="max-w-2xl">
           <h1 className="text-[clamp(2.5rem,6vw,4.5rem)] leading-none tracking-[-0.04em]">
-            Make Podex work your way.
+            Make Cloudy work your way.
           </h1>
           <p className="mt-5 max-w-xl text-base leading-7 text-muted-foreground">
             Set what needs approval, how the Pod behaves, and how much
@@ -51,7 +51,7 @@ export default async function ConfigurePage() {
           <div>
             <h2 className="font-sans text-lg font-medium">Approval rules</h2>
             <p className="mt-2 max-w-sm leading-6 text-muted-foreground">
-              Decide which actions can run automatically and when Podex must
+              Decide which actions can run automatically and when Cloudy must
               stop for your decision.
             </p>
           </div>
@@ -132,26 +132,12 @@ export default async function ConfigurePage() {
 
             <div className="flex flex-col gap-4 py-5 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <Label htmlFor="queue-order">Queue order</Label>
+                <p className="text-sm font-medium">Queue order</p>
                 <p className="mt-2 text-sm leading-5 text-muted-foreground">
-                  Choose which pending request appears first.
+                  Pings stay in arrival order across every attached app.
                 </p>
               </div>
-              <NativeSelect
-                id="queue-order"
-                defaultValue="urgent"
-                className="w-full sm:w-48"
-              >
-                <NativeSelectOption value="urgent">
-                  Urgent first
-                </NativeSelectOption>
-                <NativeSelectOption value="newest">
-                  Newest first
-                </NativeSelectOption>
-                <NativeSelectOption value="oldest">
-                  Oldest first
-                </NativeSelectOption>
-              </NativeSelect>
+              <span className="text-sm text-muted-foreground">Oldest Ping first</span>
             </div>
           </div>
         </section>
@@ -160,7 +146,7 @@ export default async function ConfigurePage() {
           <div>
             <h2 className="font-sans text-lg font-medium">AI behavior</h2>
             <p className="mt-2 max-w-sm leading-6 text-muted-foreground">
-              Control how Podex drafts responses and handles uncertainty.
+              Control how Cloudy drafts responses and handles uncertainty.
             </p>
           </div>
 

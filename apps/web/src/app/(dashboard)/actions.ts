@@ -1,5 +1,6 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
 import { redirect } from "next/navigation";
 
 import { createClient } from "@/lib/supabase/server";
@@ -14,6 +15,8 @@ import type {
   TelegramAuthSession,
   CodexTarget,
   ScreenLayout,
+  MascotAction,
+  ScreenNavigation,
 } from "@/types/api";
 import type { ActionState, ConnectionInput } from "@/types/actions";
 
@@ -62,9 +65,12 @@ export async function createPing(
           .map((warning) => warning.trim())
           .filter(Boolean),
         expires_in_minutes: Number(value(formData, "expires_in_minutes")),
+        mock_type: value(formData, "mock_type") || undefined,
+        screen: value(formData, "screen") || undefined,
       }),
     });
     revalidatePath("/home");
+    revalidatePath("/demo");
     return { success: "Test Ping sent." };
   } catch (error) {
     return { error: error instanceof Error ? error.message : "Ping failed" };
@@ -92,6 +98,62 @@ export async function savePodScreenLayout(
     return { revision: result.screen_layout_revision };
   } catch (error) {
     return { error: error instanceof Error ? error.message : "Screen layout could not be saved" };
+  }
+}
+
+export async function playMascotAction(
+  podId: string,
+  action: MascotAction,
+): Promise<{ success?: string; error?: string }> {
+  try {
+    await apiFetch(`/v1/pods/${podId}/mascot-action`, {
+      method: "POST",
+      body: JSON.stringify({ action }),
+    });
+    return { success: `${action[0].toUpperCase()}${action.slice(1)} queued.` };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Animation could not be sent" };
+  }
+}
+
+export async function navigatePodScreen(
+  podId: string,
+  direction: ScreenNavigation,
+): Promise<{ success?: string; error?: string }> {
+  try {
+    await apiFetch(`/v1/pods/${podId}/screen-navigation`, {
+      method: "POST",
+      body: JSON.stringify({ direction }),
+    });
+    const messages: Record<ScreenNavigation, string> = {
+      left: "Moved to the previous screen.",
+      right: "Moved to the next screen.",
+      up: "Opened notification details.",
+      down: "Returned to the notification summary.",
+      scroll_up: "Scrolled details up.",
+      scroll_down: "Scrolled details down.",
+    };
+    return { success: messages[direction] };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Screen navigation failed" };
+  }
+}
+
+export async function decidePendingPing(
+  requestId: string,
+  outcome: "approved" | "rejected",
+): Promise<{ success?: string; error?: string }> {
+  try {
+    await apiFetch(`/v1/requests/${requestId}/decision`, {
+      method: "POST",
+      body: JSON.stringify({ outcome, idempotency_key: randomUUID() }),
+    });
+    revalidatePath("/home");
+    revalidatePath("/demo");
+    revalidatePath("/logs");
+    return { success: outcome === "approved" ? "Ping approved." : "Ping rejected." };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Ping decision failed" };
   }
 }
 

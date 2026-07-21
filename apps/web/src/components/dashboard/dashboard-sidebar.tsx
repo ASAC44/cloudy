@@ -61,14 +61,14 @@ export function DashboardSidebar({ user }: { user: SidebarUser }) {
             className="flex h-12 min-w-0 flex-1 items-center gap-2 rounded-lg px-2 text-sidebar-foreground hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring"
           >
             <Image
-              src="/podex-mascot.png"
+              src="/cloudy-mascot.png"
               alt=""
               width={32}
               height={32}
               className="size-8 shrink-0"
               priority
             />
-            <span className="font-heading text-lg">Podex</span>
+            <span className="font-heading text-lg">Cloudy</span>
           </Link>
           <DashboardSidebarCollapseControl />
         </div>

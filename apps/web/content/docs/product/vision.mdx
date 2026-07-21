@@ -1,13 +1,13 @@
 ---
 title: Product vision
-description: The intended capabilities, safety rules, and success measures for Podex.
+description: The intended capabilities, safety rules, and success measures for Cloudy.
 ---
 
 > This page describes the product direction. Individual capabilities may still be under development.
 
 ## Universal approval inbox
 
-Podex receives pending actions from AI agents, n8n workflows, APIs, webhooks, and MCP clients. Every request contains:
+Cloudy receives pending actions from AI agents, n8n workflows, APIs, webhooks, and MCP clients. Every request contains:
 
 - Proposed action
 - Source agent or workflow
@@ -47,7 +47,7 @@ Authoritative values such as recipients, amounts, dates, repositories, permissio
 
 The goal is not “write a good email.” It is: **predict what this specific user would have written to this specific person.**
 
-Podex generates replies using:
+Cloudy generates replies using:
 
 - The current message and thread
 - The user's general writing profile
@@ -61,7 +61,7 @@ The generated response is displayed in full before it can be sent.
 
 ### Live truth and remembered context
 
-Podex separates information by how quickly it can change:
+Cloudy separates information by how quickly it can change:
 
 - **Live truth:** current calendar availability, latest messages, pull request and CI status, permissions, deadlines, and task state. Always read this from the connected service before generating a response.
 - **Remembered context:** relationships, communication style, projects, preferences, prior commitments, and similar approved decisions. Retrieve this from Cognee.
@@ -70,7 +70,7 @@ Live service data always overrides remembered data. Cognee provides context but 
 
 ## Learning over time
 
-Podex maintains four types of memory:
+Cloudy maintains four types of memory:
 
 - **Writing profile:** formality, directness, sentence length, greetings, sign-offs, and common phrasing.
 - **Contact profile:** relationship, preferred tone, recurring topics, and communication habits for a specific person.
@@ -95,9 +95,9 @@ Cognee is the derived context engine for this memory. It connects identities, co
 When a draft is wrong:
 
 1. Hold both buttons and dictate an instruction such as, “Make it warmer and say Friday at 3 works.”
-2. Podex transcribes the instruction.
+2. Cloudy transcribes the instruction.
 3. The agent regenerates the response using the instruction and known facts.
-4. Podex shows the revised response.
+4. Cloudy shows the revised response.
 5. The user must approve the revised version before it is sent.
 
 A rejected action can optionally accept a dictated reason. Material changes to recipients, amounts, permissions, dates, or action parameters always create a new approval request.
@@ -108,11 +108,11 @@ A rejected action can optionally accept a dictated reason. Material changes to r
 - Medium confidence: show the draft with uncertain details clearly marked.
 - Low confidence: ask one short question instead of inventing an answer.
 
-Podex must not invent availability, commitments, prices, deadlines, recipients, or attachments.
+Cloudy must not invent availability, commitments, prices, deadlines, recipients, or attachments.
 
 ## MCP and service connections
 
-The Podex backend uses OpenAI connectors and trusted remote MCP servers to read context and perform approved actions across services.
+The Cloudy backend uses OpenAI connectors and trusted remote MCP servers to read context and perform approved actions across services.
 
 Shipped first-class connections:
 
@@ -132,9 +132,9 @@ Future connection candidates:
 
 OpenAI provides connectors for Gmail and Google Calendar. Other services can use an official remote MCP server when available or a direct API integration.
 
-### Podex as an MCP client
+### Cloudy as an MCP client
 
-Podex uses connected tools to gather context and execute approved actions. Examples:
+Cloudy uses connected tools to gather context and execute approved actions. Examples:
 
 - Read an email, check Google Calendar availability, and draft a reply with valid times.
 - Read a pull request and CI status, then merge only after approval.
@@ -143,9 +143,9 @@ Podex uses connected tools to gather context and execute approved actions. Examp
 
 Read-only tools may run automatically when the user has enabled them. Sending, creating, updating, deleting, merging, paying, or changing permissions requires explicit approval.
 
-### Podex as an MCP server
+### Cloudy as an MCP server
 
-Podex exposes a small MCP interface so external agents can submit human-in-the-loop requests:
+Cloudy exposes a small MCP interface so external agents can submit human-in-the-loop requests:
 
 - `request_approval`: create a pending decision.
 - `get_decision`: retrieve its current status and result.
@@ -171,7 +171,7 @@ Retrieve relationships, preferences, and similar decisions from Cognee
 Generate a personalized reply from live facts and remembered context
           |
           v
-Show the full reply on Podex
+Show the full reply on Cloudy
           |
      Approve / Reject
           |

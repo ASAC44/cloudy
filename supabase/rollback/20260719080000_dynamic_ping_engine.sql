@@ -8,7 +8,7 @@ begin
 end;
 $$;
 
-select cron.unschedule(jobid) from cron.job where jobname = 'podex-purge-ping-runtime-data';
+select cron.unschedule(jobid) from cron.job where jobname = 'cloudy-purge-ping-runtime-data';
 
 drop trigger if exists sync_ping_event_after_approval on public.approval_requests;
 drop function if exists public.sync_ping_event_approval_status();

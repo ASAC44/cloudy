@@ -27,7 +27,7 @@ export function ConnectionList({
       <div className="mb-4 flex items-end justify-between gap-4">
         <div>
           <h2 id="saved-connections-title" className="text-heading-sm">Your connections</h2>
-          <p className="mt-1 text-muted-foreground">Credentials stay on the Podex server and are never sent to the Pod.</p>
+          <p className="mt-1 text-muted-foreground">Credentials stay on the Cloudy server and are never sent to the Pod.</p>
         </div>
         <Badge variant="outline">{searching ? `${connections.length} of ${totalCount}` : totalCount} saved</Badge>
       </div>

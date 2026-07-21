@@ -41,7 +41,7 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   if (!page) notFound();
 
   return {
-    title: `${page.data.title} · Podex docs`,
+    title: `${page.data.title} · Cloudy docs`,
     description: page.data.description,
   };
 }
