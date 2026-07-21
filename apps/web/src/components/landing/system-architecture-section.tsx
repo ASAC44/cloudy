@@ -4,11 +4,11 @@ import { ArchitectureCanvas } from "@/components/landing/architecture-canvas";
 import { Button } from "@/components/ui/button";
 
 const LAYERS = [
-  ["Sources", "bg-[#a5d8ff]"],
-  ["Control plane", "bg-[#d0bfff]"],
-  ["Data", "bg-[#96f2d7]"],
-  ["Keychain", "bg-[#b2f2bb]"],
-  ["Execution", "bg-[#ffec99]"],
+  ["Request", "bg-[#a5d8ff]"],
+  ["Cloudy", "bg-[#d0bfff]"],
+  ["Shared status", "bg-[#96f2d7]"],
+  ["Your decision", "bg-[#b2f2bb]"],
+  ["Action", "bg-[#ffec99]"],
 ] as const;
 
 export function SystemArchitectureSection() {
@@ -21,19 +21,20 @@ export function SystemArchitectureSection() {
               The whole decision loop
             </p>
             <h2 id="system-map-title" className="max-w-5xl font-serif text-[clamp(2.75rem,6vw,5.75rem)] leading-[0.94] tracking-[-0.035em]">
-              From agent signal to human approval to exact action.
+              From agent request to completed action.
             </h2>
           </div>
           <div className="space-y-6 lg:pb-1">
             <p className="max-w-xl text-base leading-7 text-muted-foreground sm:text-lg sm:leading-8">
-              Follow a Ping through Cloudy&apos;s sources, authenticated control plane, canonical data, realtime keychain experience, and guarded execution path.
+              See how an agent asks, Cloudy turns the request into a clear Ping,
+              you decide from your keychain, and the approved action gets done.
             </p>
             <Button
               nativeButton={false}
               variant="outline"
               size="lg"
               render={
-                <a href="/cloudy-system-architecture.excalidraw?v=5" download />
+                <a href="/cloudy-system-architecture.excalidraw?v=6" download />
               }
             >
               <Download aria-hidden="true" />
@@ -65,9 +66,9 @@ export function SystemArchitectureSection() {
         </div>
 
         <div className="grid gap-6 border-b border-border py-8 text-sm leading-6 text-muted-foreground md:grid-cols-3">
-          <p><span className="font-medium text-foreground">Realtime stays lightweight.</span> Events wake the Pod; the authenticated snapshot remains authoritative.</p>
-          <p><span className="font-medium text-foreground">Offline fails safely.</span> Cached context stays readable while decisions wait for HTTP to return.</p>
-          <p><span className="font-medium text-foreground">Approval binds the action.</span> Hashes, transactions, and idempotency stop stale or duplicate execution.</p>
+          <p><span className="font-medium text-foreground">Clear at a glance.</span> Cloudy turns raw agent output into one focused decision.</p>
+          <p><span className="font-medium text-foreground">Ready on the go.</span> Your last Ping stays visible and Cloudy reconnects automatically.</p>
+          <p><span className="font-medium text-foreground">Only your choice runs.</span> Nothing important happens until you approve it.</p>
         </div>
       </div>
     </section>

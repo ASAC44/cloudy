@@ -12,6 +12,10 @@
   An AI-powered keychain companion for reviewing, revising, approving, and rejecting important actions without opening your laptop or phone.
 </p>
 
+<p align="center">
+  <img src="apps/web/public/cloudy-product-flow.jpg" alt="Cloudy flow from agent request to keychain decision and approved action" width="1100" />
+</p>
+
 ## The idea
 
 AI agents can work for minutes or hours on their own, but they still pause when

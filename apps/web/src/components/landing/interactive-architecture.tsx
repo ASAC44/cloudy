@@ -9,7 +9,7 @@ import type {
 
 import "@excalidraw/excalidraw/index.css";
 
-const scene = fetch("/cloudy-system-architecture.excalidraw?v=5").then(async (response) => {
+const scene = fetch("/cloudy-system-architecture.excalidraw?v=6").then(async (response) => {
   if (!response.ok) {
     throw new Error("Cloudy system map could not be loaded");
   }
