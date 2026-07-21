@@ -1349,6 +1349,80 @@ export class SupabaseStore implements Store, RuntimeStore {
     return (data ?? []) as import('./types/store.js').MemoryMessageExample[]
   }
 
+  async claimMemoryOutbox() {
+    const { data, error } = await this.db.rpc('claim_memory_outbox', { p_lease_seconds: 120 })
+    if (error) fail(error)
+    const row = data?.[0]
+    return row ? {
+      outboxId: row.outbox_id,
+      ownerId: row.owner_id,
+      aggregateType: row.aggregate_type,
+      aggregateId: row.aggregate_id,
+      eventType: row.event_type,
+      ontologyVersion: row.ontology_version,
+      payload: row.payload ?? {},
+      attempts: row.attempts,
+      createdAt: row.created_at,
+      leaseToken: row.lease_token,
+    } as import('./types/store.js').MemoryOutboxClaim : null
+  }
+
+  async getMemoryDecisionGraphRecord(ownerId: string, decisionId: string) {
+    const { data, error } = await this.db.from('memory_decision_cases')
+      .select('id, owner_id, action_capability_id, approval_outcome, delivery_outcome, occurred_at, decided_at')
+      .eq('owner_id', ownerId).eq('id', decisionId).maybeSingle()
+    if (error) fail(error)
+    return data as import('./types/store.js').MemoryDecisionGraphRecord | null
+  }
+
+  async completeMemoryOutbox(outboxId: string, leaseToken: string, graphUuid?: string) {
+    const { data, error } = await this.db.rpc('complete_memory_outbox', {
+      p_outbox_id: outboxId,
+      p_lease_token: leaseToken,
+      p_graph_uuid: graphUuid ?? null,
+      p_graph_kind: 'episode',
+    })
+    if (error) fail(error)
+    return data === true
+  }
+
+  async failMemoryOutbox(outboxId: string, leaseToken: string, errorMessage: string, retryable: boolean) {
+    const { data, error } = await this.db.rpc('fail_memory_outbox', {
+      p_outbox_id: outboxId,
+      p_lease_token: leaseToken,
+      p_error: errorMessage.slice(0, 500),
+      p_retryable: retryable,
+    })
+    if (error) fail(error)
+    return data === true
+  }
+
+  async listRecentUnindexedDecisions(ownerId: string, limit: number) {
+    const bounded = Math.max(1, Math.min(limit, 20))
+    const { data: outbox, error: outboxError } = await this.db.from('memory_outbox')
+      .select('aggregate_id, event_type, payload, created_at')
+      .eq('owner_id', ownerId).eq('aggregate_type', 'decision')
+      .neq('status', 'completed')
+      .order('created_at', { ascending: false }).order('id', { ascending: false })
+      .limit(bounded)
+    if (outboxError) fail(outboxError)
+    const ids = [...new Set((outbox ?? []).map((event) => event.aggregate_id))]
+    if (!ids.length) return []
+    const { data: decisions, error: decisionsError } = await this.db.from('memory_decision_cases')
+      .select('id, owner_id, action_capability_id, approval_outcome, delivery_outcome, occurred_at, decided_at')
+      .eq('owner_id', ownerId).in('id', ids)
+    if (decisionsError) fail(decisionsError)
+    const byId = new Map((decisions ?? []).map((decision) => [decision.id, decision]))
+    return (outbox ?? []).flatMap((event) => {
+      const decision = byId.get(event.aggregate_id)
+      if (!decision) return []
+      const outcome = event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
+        && typeof (event.payload as Record<string, unknown>).outcome === 'string'
+        ? (event.payload as Record<string, unknown>).outcome as string : null
+      return [{ ...decision, event_type: event.event_type, event_outcome: outcome, outbox_created_at: event.created_at }]
+    }) as import('./types/store.js').RecentUnindexedDecision[]
+  }
+
   async reviseReply(input: { ownerId: string; requestId: string; expectedHash: string; newHash: string; encryptedDraft: string; encryptedAction: string; encryptedRevision: string; revisionSource: Record<string, unknown> }) {
     const { data, error } = await this.db.rpc('revise_ping_rule_reply', {
       p_owner_id: input.ownerId,

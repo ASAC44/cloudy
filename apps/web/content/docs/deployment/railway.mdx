@@ -3,15 +3,16 @@ title: Deploy on Railway
 description: Deploy the Cloudy web, API, and execution worker from the monorepo.
 ---
 
-Cloudy uses three Railway services: `web`, `api`, and `worker`. The API serves
+Cloudy uses four Railway services: `web`, `api`, `worker`, and `memory`, plus a
+Neo4j database. The API serves
 authenticated requests while the worker owns scheduling, Telegram sessions,
 AI evaluation, approvals, and delivery. The Raspberry Pi Pod and local Codex
 bridge are not Railway services.
 
-`apps/memory` also contains a deployable private Graphiti service. It is not
-connected to the API or worker yet, so the current Cloudy runtime does not
-require it. See [Graph memory service](/docs/development/graph-memory) for its
-standalone setup and security boundary.
+`memory` is private: only the worker needs its Railway private-network URL.
+Deploying without its paired environment variables keeps fixed Pings working
+and leaves graph outbox events pending. See
+[Graph memory service](/docs/development/graph-memory) for setup and security.
 
 ## Create the services
 
@@ -22,6 +23,7 @@ Connect the GitHub repository to one Railway project and create these services:
 | `web` | `/apps/web` | `/apps/web/railway.json` | From config: `pnpm start` |
 | `api` | `/apps/api` | `/apps/api/railway.json` | From config: `pnpm start` |
 | `worker` | `/apps/api` | `/apps/api/railway.worker.json` | From config: `pnpm start:worker` |
+| `memory` | `/apps/memory` | `/apps/memory/railway.json` | From config |
 
 Railway's config-file path does not inherit the root directory, so use the
 absolute config paths shown. Database leases support crash recovery and
@@ -72,6 +74,19 @@ connections are enabled; GitHub-only deployments do not require them.
 injects `PORT` into HTTP services; do not set it manually on `api`, and the
 worker does not expose an HTTP port.
 
+Set these only on `worker` when graph memory is enabled:
+
+```dotenv
+MEMORY_SERVICE_URL=http://memory.railway.internal
+MEMORY_INTERNAL_SECRET=one-shared-secret-of-at-least-32-random-bytes
+MEMORY_REQUEST_TIMEOUT_MS=10000
+```
+
+Set the identical `MEMORY_INTERNAL_SECRET` on `memory`, together with its Neo4j
+and explicit `GRAPHITI_*` model variables. Do not expose a public domain for
+`memory` or Neo4j. Keep `memory` at one replica while nonce replay protection is
+process-local.
+
 ## Database and authentication
 
 Link the repository to the production Supabase project and apply every tracked
@@ -92,6 +107,8 @@ OAuth callbacks use the public API domain.
 - Open the API root; it should return `{"name":"cloudy-api","status":"ok"}`.
 - Confirm the web and API `/` healthchecks pass and the worker remains running.
 - Activate a rule and confirm its activity log records polling and delivery.
+- Approve and deliver a staging Ping, then confirm its outbox event completes
+  and a later evaluation still succeeds while `memory` is temporarily stopped.
 - Pair a Pod against the API's public HTTPS origin and complete a Test Ping.
 
 Railway references: [monorepos](https://docs.railway.com/deployments/monorepo),
