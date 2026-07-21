@@ -5,7 +5,10 @@ description: Install dependencies, configure local services, and run the complet
 
 ## Prerequisites
 
-Install Node.js 22 or newer, pnpm 11, Python 3.13, and the Supabase CLI. Link the repository to a hosted Supabase development project before applying migrations. Docker is optional and is used only by the ARM64 Pod compatibility check.
+Install Node.js 22 or newer, pnpm 11, Python 3.13, uv, Docker, and the
+Supabase CLI. Link the repository to a hosted Supabase development project
+before applying migrations. Docker runs the local Supabase stack, the optional
+Neo4j graph-memory service, and the ARM64 Pod compatibility check.
 
 ## Configure the environment
 

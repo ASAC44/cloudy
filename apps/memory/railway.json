@@ -1,0 +1,12 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "RAILPACK",
+    "watchPatterns": ["/apps/memory/**"],
+    "buildCommand": "uv sync --frozen --no-dev"
+  },
+  "deploy": {
+    "startCommand": "uv run --no-sync uvicorn cloudy_memory.app:configured_app --factory --host 0.0.0.0 --port $PORT",
+    "healthcheckPath": "/health"
+  }
+}

@@ -103,6 +103,14 @@
 - [ ] Add signed callbacks or configurable callback authentication before integrations that cannot treat the callback URL as a bearer secret.
 - [ ] Add MCP approval tools and provider-specific SDKs only when a real consumer requires them.
 
+## Activate graph memory
+
+- [ ] Provision Neo4j 5.26+ for staging and production, create least-privilege credentials, enable backups, and verify restore into a disposable instance.
+- [ ] Deploy `apps/memory` on Railway private networking with every `GRAPHITI_*` model variable set explicitly and `GRAPHITI_TELEMETRY_ENABLED=false`.
+- [ ] Generate one 32-byte-or-longer `MEMORY_INTERNAL_SECRET`, set the same value on the API, worker, and memory service, and verify unsigned, stale, and replayed requests are rejected.
+- [ ] Keep the memory service at one replica until the process-local nonce replay cache is replaced by a shared atomic store; verify Railway does not scale it horizontally.
+- [ ] After the API memory client ships, rebuild one staging user from canonical Postgres data and verify owner-isolated search, deletion, retry, and Neo4j-outage behavior before production rollout.
+
 ## Activate Notion MCP
 
 - [ ] Create a public Notion OAuth connection and configure `NOTION_CLIENT_ID` and `NOTION_CLIENT_SECRET` in the API environment.

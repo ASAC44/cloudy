@@ -8,6 +8,11 @@ authenticated requests while the worker owns scheduling, Telegram sessions,
 AI evaluation, approvals, and delivery. The Raspberry Pi Pod and local Codex
 bridge are not Railway services.
 
+`apps/memory` also contains a deployable private Graphiti service. It is not
+connected to the API or worker yet, so the current Cloudy runtime does not
+require it. See [Graph memory service](/docs/development/graph-memory) for its
+standalone setup and security boundary.
+
 ## Create the services
 
 Connect the GitHub repository to one Railway project and create these services:

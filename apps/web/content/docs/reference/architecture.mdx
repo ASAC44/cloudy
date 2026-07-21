@@ -15,6 +15,7 @@ integration ideas belong in [Product vision](/docs/product/vision).
 | Pod | Python 3.13, pygame-ce, gpiozero | Pairing, request display, physical decisions, cached active request, audio capture, and realtime invalidation handling |
 | Codex bridge | Local Node.js process | Local `codex app-server` session, selected workspace access, and approval exchange |
 | Data store | Supabase Postgres and Auth | Canonical users, credentials, Pods, requests, decisions, integrations, rules, Codex state, and audit records |
+| Memory service | Python 3.13, Graphiti 0.29.2, Neo4j 5.26 | Private derived temporal graph ingestion, owner-scoped search, deletion, and rebuild |
 
 Local development can temporarily persist Pod screen layouts in SQLite when
 the matching Supabase migration has not been applied. This compatibility path
@@ -169,6 +170,14 @@ the decision and a durable memory-outbox event in the same Postgres transaction.
 Delivery later strengthens the precedent only if the provider confirms success.
 Outbox events are idempotent and leased so a future derived memory index can be
 rebuilt or retried without becoming canonical state.
+
+The deployable Graphiti service is now present, but the API outbox worker and
+runtime retrieval client are not connected yet. The service derives every
+namespace from the authenticated owner UUID, accepts only a fixed Cloudy
+ontology, disables Graphiti telemetry and raw episode storage, and exposes no
+raw Cypher. Its internal routes require timestamped, nonce-protected HMAC
+signatures. This service boundary is documented in
+[Graph memory service](/docs/development/graph-memory).
 
 The API exposes explicit authenticated endpoints: `POST /v1/memories` to
 write a memory, `GET /v1/memories?q=...&limit=...` to list memories, and
