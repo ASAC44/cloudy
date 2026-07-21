@@ -669,7 +669,6 @@ export interface RuntimeStore {
   claimRuleEvent(): Promise<{ eventId: string; ownerId: string; ruleId: string; leaseToken: string } | null>
   getRuntimeEvent(ownerId: string, eventId: string): Promise<RuntimeEvent | null>
   listConversationEvents(ownerId: string, ruleId: string, conversationKey: string, limit: number): Promise<RuntimeEvent[]>
-  listMessageExamples(ownerId: string, connectionId: string, limit: number): Promise<MemoryMessageExample[]>
   listRelevantMessageExamples(input: {
     ownerId: string
     connectionId?: string

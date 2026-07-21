@@ -1351,10 +1351,6 @@ export class SupabaseStore implements Store, RuntimeStore {
     return { event: event as RuntimeEvent, payloadHash: request.payload_hash }
   }
 
-  async listMessageExamples(ownerId: string, connectionId: string, limit: number) {
-    return this.listRelevantMessageExamples({ ownerId, connectionId, intent: '', limit })
-  }
-
   async listRelevantMessageExamples(input: {
     ownerId: string
     connectionId?: string
