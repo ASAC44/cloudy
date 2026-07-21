@@ -14,6 +14,7 @@ import { RuleBuilderError, type RuleBuilderService } from './rule-builder.js'
 import { memoryContext, memoryScopes } from './memory.js'
 import type { PodEvent, PodEventSource } from './pod-events.js'
 import { RuntimeEngine } from './runtime-engine.js'
+import { memoryRolloutConfig } from './memory-rollout.js'
 
 type SupabaseJwt = { sub?: unknown; email?: unknown }
 type Variables = JwtVariables<SupabaseJwt>
@@ -339,6 +340,7 @@ export function createApp(
   podEvents?: PodEventSource,
 ) {
   const app = new Hono<{ Variables: Variables }>()
+  const memoryRollout = memoryRolloutConfig()
   // ponytail: process-local is enough for playful commands; persist them only if API replicas must deliver them.
   const mascotActions = new Map<string, MascotAction>()
   const screenNavigation = new Map<string, ScreenNavigation[]>()
@@ -1514,6 +1516,7 @@ export function createApp(
     const connectionId = c.req.param('connectionId')
     if (!ownerId) return c.json({ error: 'Unauthorized' }, 401)
     if (!connectionService) return c.json({ error: 'Connections are unavailable' }, 503)
+    if (!memoryRollout.historyImportsEnabled) return c.json({ error: 'Message history imports are temporarily disabled' }, 503)
     if (!UUID_PATTERN.test(connectionId)) return c.json({ error: 'Invalid connection' }, 400)
     try {
       const capabilities = await connectionService.discoverConnectionCapabilities(ownerId, connectionId)
@@ -1529,6 +1532,7 @@ export function createApp(
     const ownerId = userId(c)
     if (!ownerId) return c.json({ error: 'Unauthorized' }, 401)
     if (!connectionService) return c.json({ error: 'Connections are unavailable' }, 503)
+    if (!memoryRollout.historyImportsEnabled) return c.json({ error: 'Message history imports are temporarily disabled' }, 503)
     const body = await c.req.json().catch(() => null)
     const connectionId = text(body?.connection_id, 36)
     const scope = historyScope(body?.scope)
@@ -1544,6 +1548,7 @@ export function createApp(
     const ownerId = userId(c)
     if (!ownerId) return c.json({ error: 'Unauthorized' }, 401)
     if (!connectionService) return c.json({ error: 'Connections are unavailable' }, 503)
+    if (!memoryRollout.historyImportsEnabled) return c.json({ error: 'Message history imports are temporarily disabled' }, 503)
     const body = await c.req.json().catch(() => null)
     const connectionId = text(body?.connection_id, 36)
     const scope = historyScope(body?.scope)

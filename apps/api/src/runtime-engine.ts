@@ -6,6 +6,8 @@ import { createAiModel } from './ai.js'
 import { ConnectionError, ConnectionService } from './connections.js'
 import type { GraphMemoryRetriever } from './graph-memory.js'
 import { memoryContext, memoryScopes, messageExampleContext } from './memory.js'
+import { memoryRolloutConfig, ownerInLearnedActionRollout, type MemoryRolloutConfig } from './memory-rollout.js'
+import { MemoryTelemetry } from './memory-telemetry.js'
 import {
   factOnlyPresentation,
   GithubApiError,
@@ -121,6 +123,8 @@ export class RuntimeEngine {
     private readonly store: Store & RuntimeStore,
     private readonly connections: ConnectionService,
     private readonly graphMemory?: GraphMemoryRetriever,
+    private readonly memoryRollout: MemoryRolloutConfig = memoryRolloutConfig(),
+    private readonly telemetry: MemoryTelemetry = new MemoryTelemetry(() => undefined),
   ) {}
 
   async editableReply(ownerId: string, requestId: string) {
@@ -313,7 +317,8 @@ export class RuntimeEngine {
 
     try {
       const source = this.connections.decryptPrivatePayload<Record<string, unknown>>(event.encrypted_source_payload)
-      const learnedEnabled = settings?.learned_actions_enabled ?? false
+      const learnedEnabled = Boolean(settings?.learned_actions_enabled)
+        && ownerInLearnedActionRollout(rule.owner_id, this.memoryRollout)
       const voiceEnabled = settings?.personalization_enabled ?? false
       const learnedMemory = rule.schema_version === 3 && learnedEnabled
         ? await this.graphMemory?.retrieve(rule, source) ?? { context: '', graphAvailable: false }
@@ -331,6 +336,10 @@ export class RuntimeEngine {
       const selectedCandidate = actionSelection?.candidate_id
         ? learnedCandidates.find(({ id }) => id === actionSelection.candidate_id) ?? null
         : null
+      if (rule.schema_version === 3) this.telemetry.emit({
+        name: 'action_selection', outcome: !learnedEnabled ? 'disabled' : selectedCandidate ? 'selected' : 'abstained',
+        ownerId: rule.owner_id, durationMs: Date.now() - started, count: learnedCandidates.length,
+      })
       const contextState: ContextState = { values: [], sources: [], warnings: [], executed: new Set() }
       await this.readContext(rule, source, contextState, { selectedCandidate })
       let context = contextState.values
@@ -396,6 +405,10 @@ export class RuntimeEngine {
             : Promise.resolve(''),
       ])
       const voice = messageExampleContext(examples, (payload) => this.connections.decryptPrivatePayload(payload))
+      if (voiceEnabled) this.telemetry.emit({
+        name: 'voice_retrieval', outcome: examples.length ? 'matched' : 'empty',
+        ownerId: rule.owner_id, durationMs: Date.now() - started, count: examples.length,
+      })
       const decision = await this.decide(rule, source, context,
         selectedCandidate ? true : githubPull ? false : rule.schema_version === 3 ? false : undefined,
         [memoryContext(memories), graphMemory].filter(Boolean).join('\n'),

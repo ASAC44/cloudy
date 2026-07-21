@@ -10,6 +10,7 @@
     "start": "node --env-file-if-exists=.env dist/index.js",
     "start:worker": "node --env-file-if-exists=.env dist/worker.js",
     "test": "tsx --test src/*.test.ts",
+    "test:memory-release": "tsx --test src/memory-release.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

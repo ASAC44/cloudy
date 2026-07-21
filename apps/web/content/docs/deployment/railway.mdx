@@ -74,6 +74,14 @@ connections are enabled; GitHub-only deployments do not require them.
 injects `PORT` into HTTP services; do not set it manually on `api`, and the
 worker does not expose an HTTP port.
 
+Set the rollout controls on both `api` and `worker`:
+
+```dotenv
+MEMORY_LEARNED_ACTIONS_ENABLED=true
+MEMORY_LEARNED_ACTIONS_ROLLOUT_PERCENT=0
+MEMORY_HISTORY_IMPORTS_ENABLED=false
+```
+
 Set these only on `worker` when graph memory is enabled:
 
 ```dotenv
@@ -86,6 +94,23 @@ Set the identical `MEMORY_INTERNAL_SECRET` on `memory`, together with its Neo4j
 and explicit `GRAPHITI_*` model variables. Do not expose a public domain for
 `memory` or Neo4j. Keep `memory` at one replica while nonce replay protection is
 process-local.
+
+The two feature switches are deployment kill switches. They only narrow what a
+user has enabled; they never override a user's separate voice or learned-action
+setting. `MEMORY_LEARNED_ACTIONS_ROLLOUT_PERCENT` assigns owners to a stable
+SHA-256 bucket, so changing the percentage does not move users randomly between
+requests. Invalid values fail startup instead of silently enabling a feature.
+
+Start with imports disabled and learned actions at `0`. After fixed version-2
+Pings and graph synchronization are healthy, raise learned actions through
+`5`, `25`, and `100`, observing each stage before continuing. Enable history
+imports separately after a disposable Gmail and Telegram scope completes,
+retries idempotently, and can be forgotten and rebuilt.
+
+Worker logs emit structured `cloudy_memory_metric` records for selection,
+voice retrieval, graph search/sync/rebuild, and history import. These contain
+only fixed enums, a one-way owner hash, counts, duration, and outbox lag—never
+message text, prompts, recipient identities, provider IDs, or graph facts.
 
 ## Database and authentication
 
@@ -109,6 +134,12 @@ OAuth callbacks use the public API domain.
 - Activate a rule and confirm its activity log records polling and delivery.
 - Approve and deliver a staging Ping, then confirm its outbox event completes
   and a later evaluation still succeeds while `memory` is temporarily stopped.
+- Run `pnpm --dir apps/api test:memory-release`. At each rollout stage, inspect
+  memory metrics for selection versus abstention, graph failures, p95 evaluation
+  latency, and outbox lag; separately compare approved-draft edits and existing
+  approval/delivery records for voice similarity and duplicate delivery.
+- Stop rollout immediately for any wrong recipient, cross-owner evidence,
+  duplicate delivery, or material drop in the existing approval success rate.
 - Pair a Pod against the API's public HTTPS origin and complete a Test Ping.
 - Import the [n8n acceptance workflow](/examples/cloudy-n8n-approval.json), then
   verify a Pod approval resumes its Wait node and a rejection reaches the safe

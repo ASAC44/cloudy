@@ -3,6 +3,8 @@ import type { ConnectionService } from './connections.js'
 import type { GraphMemoryRetriever, MemoryOutboxSync } from './graph-memory.js'
 import { RuntimeEngine } from './runtime-engine.js'
 import { MessageHistoryImporter } from './message-history.js'
+import { memoryRolloutConfig } from './memory-rollout.js'
+import { MemoryTelemetry } from './memory-telemetry.js'
 import type { RuntimeStore, Store } from './types/store.js'
 import { TelegramRuntime, telegramWorkerId } from './telegram-runtime.js'
 
@@ -13,8 +15,10 @@ export function startRuntimeLoop(
   workerId = process.env.CLOUDY_WORKER_ID?.slice(0, 160) || telegramWorkerId(),
   memory?: { retriever: GraphMemoryRetriever; sync: MemoryOutboxSync },
 ) {
-  const engine = new RuntimeEngine(store, connections, memory?.retriever)
-  const history = new MessageHistoryImporter(store, connections)
+  const rollout = memoryRolloutConfig()
+  const telemetry = new MemoryTelemetry()
+  const engine = new RuntimeEngine(store, connections, memory?.retriever, rollout, telemetry)
+  const history = new MessageHistoryImporter(store, connections, telemetry)
   const telegram = telegramConfig
     ? new TelegramRuntime(store, connections, engine, workerId, telegramConfig)
     : null
@@ -29,7 +33,7 @@ export function startRuntimeLoop(
     await drain(engine.evaluateOnce(), () => engine.evaluateOnce())
     await drain(engine.dispatchOnce(), () => engine.dispatchOnce())
     await drainCallbacks(store, connections, fetch, 10)
-    await drain(history.importOnce(), () => history.importOnce(), 5)
+    if (rollout.historyImportsEnabled) await drain(history.importOnce(), () => history.importOnce(), 5)
     if (memory) await drain(memory.sync.syncOnce(), () => memory.sync.syncOnce())
     if (Date.now() - retentionAt > 24 * 60 * 60_000) {
       await store.purgeRuntimeData()
