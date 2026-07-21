@@ -68,7 +68,11 @@ def triplet(owner_id, person: str, service: str) -> TripletRequest:
     os.getenv('CLOUDY_MEMORY_NEO4J_TEST') != '1', reason='local Neo4j integration is opt-in'
 )
 async def test_triplet_replay_and_user_deletion_are_isolated() -> None:
-    driver = Neo4jDriver('bolt://localhost:7687', 'neo4j', 'cloudy-local-password')
+    driver = Neo4jDriver(
+        os.getenv('NEO4J_URI', 'bolt://localhost:7687'),
+        os.getenv('NEO4J_USER', 'neo4j'),
+        os.getenv('NEO4J_PASSWORD', 'cloudy-local-password'),
+    )
     graph = Graphiti(
         graph_driver=driver,
         llm_client=OpenAIClient(config=LLMConfig(api_key='not-used', model='not-used')),

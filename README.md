@@ -44,6 +44,19 @@ human-in-the-loop work.
   <img src="apps/web/public/cloudy-product-flow.jpg" alt="Cloudy flow from agent request to keychain decision and approved action" width="1100" />
 </p>
 
+## Temporal memory engine
+
+Cloudy learns from reviewed outcomes and explicitly scoped sent-message
+history. Postgres keeps canonical, encrypted memory; a private Graphiti and
+Neo4j graph connects situations, people, channels, and decisions. During the
+next Ping, Cloudy ranks only server-authorized communication choices, can check
+fresh context such as Calendar availability, drafts in the user's voice, and
+still requires review of the exact recipient and message.
+
+<p align="center">
+  <img src="apps/web/public/cloudy-memory-flow.svg" alt="Cloudy memory learning flow from approved outcomes to safe prediction, voice-matched drafting, and human review" width="1100" />
+</p>
+
 ## Demo moments
 
 | Moment | What Cloudy shows | What the user can do |
@@ -81,14 +94,15 @@ messages.
 
 ## System architecture
 
-Cloudy is a monorepo with four focused applications:
+Cloudy is a monorepo with five focused applications:
 
 | Component | Role |
 | --- | --- |
 | [`apps/pod`](apps/pod) | Python and Pygame runtime for the physical Pod, framebuffer display, touch, buttons, voice capture, caching, and realtime recovery |
 | [`apps/api`](apps/api) | Hono API for authentication, Pings, decisions, integrations, realtime fan-out, and authoritative Pod snapshots |
-| [`apps/web`](apps/web) | Next.js dashboard for connections, Ping configuration, activity, Pod controls, and the pitch console |
+| [`apps/web`](apps/web) | Next.js dashboard for connections, Ping configuration, activity, Pod controls, and documentation |
 | [`apps/bridge`](apps/bridge) | Local bridge between Cloudy and Codex sessions so plans, revisions, and decisions can move safely between them |
+| [`apps/memory`](apps/memory) | Private FastAPI service that derives an owner-isolated temporal Graphiti and Neo4j graph from canonical Postgres memory |
 
 Supabase provides PostgreSQL, authentication, and metadata-only Realtime
 broadcasts. The Raspberry Pi listener uses server-sent events for immediate
@@ -125,7 +139,8 @@ the person carrying Cloudy decides whether it happens.
 
 Raspberry Pi Zero 2 W, Python, Pygame, Linux framebuffer, SPI, ILI9341,
 XPT2046, Next.js, React, TypeScript, Hono, Supabase, PostgreSQL, Supabase
-Realtime, server-sent events, OpenAI, Codex, GitHub, Gmail, and systemd.
+Realtime, server-sent events, FastAPI, Graphiti, Neo4j, OpenAI, Codex, GitHub,
+Gmail, Telegram, Google Calendar, and systemd.
 
 ## What's next
 
@@ -148,4 +163,8 @@ for every split-second decision.
 ## Documentation
 
 The complete product, architecture, integration, and Raspberry Pi documentation
-lives in [`apps/web/content/docs`](apps/web/content/docs).
+lives in [`apps/web/content/docs`](apps/web/content/docs). Start with the
+[desktop simulator](apps/web/content/docs/pod/development.mdx), use the
+[Raspberry Pi guide](apps/web/content/docs/pod/raspberry-pi.mdx) for hardware,
+and follow the [graph memory guide](apps/web/content/docs/development/graph-memory.mdx)
+for local learned-action and voice testing.

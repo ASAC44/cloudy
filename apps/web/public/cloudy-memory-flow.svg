@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title description">
+  <title id="title">How Cloudy learns from decisions without taking control away</title>
+  <desc id="description">Approved decisions and scoped sent-message history become canonical memory. A private Graphiti and Neo4j graph provides action evidence while encrypted Postgres examples provide voice. Cloudy selects only an authorized candidate or abstains, optionally checks live tools, drafts a message, and returns it to the user for review. The outcome feeds future memory.</desc>
+  <defs>
+    <marker id="arrow-purple" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#7c3aed"/></marker>
+    <marker id="arrow-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#2f855a"/></marker>
+    <marker id="arrow-amber" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#b7791f"/></marker>
+    <style>
+      .title { font: 36px "Comic Sans MS", "Segoe Print", cursive; fill: #292524; }
+      .subtitle { font: 17px "Comic Sans MS", "Segoe Print", cursive; fill: #78716c; }
+      .zone { font: 14px "Comic Sans MS", "Segoe Print", cursive; letter-spacing: 1px; }
+      .heading { font: 20px "Comic Sans MS", "Segoe Print", cursive; fill: #292524; }
+      .body { font: 15px "Comic Sans MS", "Segoe Print", cursive; fill: #44403c; }
+      .small { font: 13px "Comic Sans MS", "Segoe Print", cursive; fill: #57534e; }
+      .edge { font: 13px "Comic Sans MS", "Segoe Print", cursive; fill: #57534e; }
+      .box { stroke-width: 2; rx: 22; ry: 22; }
+      .arrow { fill: none; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="900" fill="#fffdf8"/>
+  <text x="54" y="62" class="title">Cloudy temporal memory engine</text>
+  <text x="54" y="94" class="subtitle">Every reviewed outcome improves the next recommendation, while live facts and your approval stay in control</text>
+
+  <rect x="42" y="130" width="350" height="690" rx="28" fill="#eff6ff" stroke="#93c5fd" stroke-width="2" stroke-dasharray="8 8"/>
+  <text x="62" y="160" class="zone" fill="#1e40af">1 · WHAT CLOUDY LEARNS FROM</text>
+
+  <rect x="420" y="130" width="520" height="690" rx="28" fill="#faf5ff" stroke="#c4b5fd" stroke-width="2" stroke-dasharray="8 8"/>
+  <text x="440" y="160" class="zone" fill="#5b21b6">2 · SAFE, USER-OWNED MEMORY</text>
+
+  <rect x="968" y="130" width="590" height="690" rx="28" fill="#f0fdf4" stroke="#86efac" stroke-width="2" stroke-dasharray="8 8"/>
+  <text x="988" y="160" class="zone" fill="#166534">3 · THE NEXT PING GETS SMARTER</text>
+
+  <rect class="box" x="72" y="212" width="290" height="138" fill="#dbeafe" stroke="#2563eb"/>
+  <text x="217" y="247" text-anchor="middle" class="heading">You review a Ping</text>
+  <text x="217" y="278" text-anchor="middle" class="body">approve · edit · reject</text>
+  <text x="217" y="302" text-anchor="middle" class="body">delivery succeeds or fails</text>
+  <text x="217" y="326" text-anchor="middle" class="small">Only confirmed outcomes teach Cloudy</text>
+
+  <rect class="box" x="72" y="432" width="290" height="138" fill="#e0f2fe" stroke="#0284c7"/>
+  <text x="217" y="468" text-anchor="middle" class="heading">You may import your voice</text>
+  <text x="217" y="499" text-anchor="middle" class="body">Gmail sent mail or selected</text>
+  <text x="217" y="523" text-anchor="middle" class="body">Telegram personal dialogs</text>
+  <text x="217" y="547" text-anchor="middle" class="small">Explicit scope and consent only</text>
+
+  <rect class="box" x="462" y="194" width="436" height="152" fill="#ede9fe" stroke="#7c3aed"/>
+  <text x="680" y="229" text-anchor="middle" class="heading">Postgres keeps the canonical truth</text>
+  <text x="680" y="260" text-anchor="middle" class="body">decisions · people · verified identities</text>
+  <text x="680" y="284" text-anchor="middle" class="body">preferences · encrypted message examples</text>
+  <text x="680" y="316" text-anchor="middle" class="small">Atomic, owner-scoped, forgettable, rebuildable</text>
+
+  <rect class="box" x="520" y="362" width="320" height="58" fill="#fff7ed" stroke="#d97706"/>
+  <text x="680" y="386" text-anchor="middle" class="heading">Durable memory outbox</text>
+  <text x="680" y="407" text-anchor="middle" class="small">Retries safely and preserves order</text>
+
+  <rect class="box" x="462" y="440" width="436" height="152" fill="#f3e8ff" stroke="#9333ea"/>
+  <text x="680" y="475" text-anchor="middle" class="heading">Graphiti connects the patterns</text>
+  <text x="680" y="506" text-anchor="middle" class="body">situations · contacts · channels · outcomes</text>
+  <text x="680" y="530" text-anchor="middle" class="body">in a private, owner-isolated Neo4j graph</text>
+  <text x="680" y="562" text-anchor="middle" class="small">Metadata only. Exact message text stays encrypted.</text>
+
+  <rect class="box" x="1004" y="190" width="248" height="132" fill="#dcfce7" stroke="#16a34a"/>
+  <text x="1128" y="225" text-anchor="middle" class="heading">A new signal arrives</text>
+  <text x="1128" y="256" text-anchor="middle" class="body">Vercel, Gmail, Telegram,</text>
+  <text x="1128" y="280" text-anchor="middle" class="body">or another fixed connection</text>
+  <text x="1128" y="303" text-anchor="middle" class="small">Deterministic filters run first</text>
+
+  <rect class="box" x="1280" y="190" width="242" height="132" fill="#fef3c7" stroke="#d97706"/>
+  <text x="1401" y="225" text-anchor="middle" class="heading">Live context is optional</text>
+  <text x="1401" y="256" text-anchor="middle" class="body">Calendar availability and</text>
+  <text x="1401" y="280" text-anchor="middle" class="body">other configured read-only tools</text>
+  <text x="1401" y="303" text-anchor="middle" class="small">Current facts beat remembered facts</text>
+
+  <rect class="box" x="1050" y="404" width="422" height="148" fill="#dcfce7" stroke="#16a34a"/>
+  <text x="1261" y="439" text-anchor="middle" class="heading">Cloudy predicts the action you would take</text>
+  <text x="1261" y="470" text-anchor="middle" class="body">Graph evidence ranks only server-authorized</text>
+  <text x="1261" y="494" text-anchor="middle" class="body">channel + recipient candidates</text>
+  <text x="1261" y="526" text-anchor="middle" class="small">Low confidence, ambiguity, or graph outage → abstain</text>
+
+  <rect class="box" x="1050" y="642" width="422" height="118" fill="#fef9c3" stroke="#ca8a04"/>
+  <text x="1261" y="677" text-anchor="middle" class="heading">You review the voice-matched draft</text>
+  <text x="1261" y="708" text-anchor="middle" class="body">Relevant encrypted examples shape style</text>
+  <text x="1261" y="732" text-anchor="middle" class="small">Approve, edit, or reject the exact recipient and message</text>
+
+  <path class="arrow" d="M362 280 C405 280 420 270 462 270" stroke="#7c3aed" marker-end="url(#arrow-purple)"/>
+  <text x="411" y="258" text-anchor="middle" class="edge">outcome</text>
+  <path class="arrow" d="M362 500 H400 V305 H462" stroke="#7c3aed" marker-end="url(#arrow-purple)"/>
+  <text x="414" y="405" class="edge">voice only</text>
+  <path class="arrow" d="M680 346 V362" stroke="#b7791f" marker-end="url(#arrow-amber)"/>
+  <path class="arrow" d="M680 420 V440" stroke="#7c3aed" marker-end="url(#arrow-purple)"/>
+  <path class="arrow" d="M1128 322 V370 H1261 V404" stroke="#2f855a" marker-end="url(#arrow-green)"/>
+  <text x="1168" y="360" class="edge">new situation</text>
+  <path class="arrow" d="M898 486 H1050" stroke="#2f855a" marker-end="url(#arrow-green)"/>
+  <text x="974" y="468" text-anchor="middle" class="edge">action evidence</text>
+  <path class="arrow" d="M1252 256 L1280 256" stroke="#b7791f" marker-end="url(#arrow-amber)"/>
+  <path class="arrow" d="M1401 322 V404" stroke="#b7791f" marker-end="url(#arrow-amber)"/>
+  <text x="1420" y="370" class="edge">fresh facts</text>
+  <path class="arrow" d="M1261 552 L1261 642" stroke="#2f855a" marker-end="url(#arrow-green)"/>
+  <text x="1280" y="602" class="edge">select or abstain</text>
+  <path class="arrow" d="M1261 760 V806 H54 V280 H72" stroke="#2f855a" marker-end="url(#arrow-green)"/>
+  <text x="660" y="798" text-anchor="middle" class="edge">reviewed outcome feeds the next memory update</text>
+  <rect x="54" y="844" width="1492" height="36" rx="14" fill="#f5f5f4" stroke="#d6d3d1"/>
+  <text x="800" y="868" text-anchor="middle" class="small">The reviewed outcome becomes future memory. Memory recommends. Server-owned capabilities constrain. Your approval authorizes.</text>
+</svg>

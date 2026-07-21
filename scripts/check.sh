@@ -12,6 +12,7 @@ uv --directory apps/memory run --extra dev ruff check .
 uv --directory apps/memory run --extra dev pyright
 uv --directory apps/memory run --extra dev pytest -q
 sh -n scripts/deploy-pod.sh
+sh -n scripts/start-memory.sh
 sh -n apps/pod/deploy/provision-inmp441.sh
 sh apps/pod/deploy/provision-inmp441.sh --self-check
 SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy GPIOZERO_PIN_FACTORY=mock \

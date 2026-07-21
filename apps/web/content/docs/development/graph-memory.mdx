@@ -21,37 +21,102 @@ introduce a tool or recipient, authorize a write, or bypass Pod review.
 
 ## Local setup
 
-Start Neo4j and install the locked Python environment:
+From the repository root, create the memory environment and install all locked
+dependencies:
 
 ```sh
-cd apps/memory
-docker compose up -d neo4j
-uv sync --extra dev --frozen
-cp .env.example .env
+cp apps/memory/.env.example apps/memory/.env
+./scripts/setup.sh
 ```
 
-Set every model name explicitly in `.env`, then run:
-
-```sh
-uv run uvicorn cloudy_memory.app:configured_app --factory --reload --port 8000
-```
-
-Set the same secret and the service URL on the API worker:
+Replace the placeholders in `apps/memory/.env`. Set a real
+`GRAPHITI_OPENAI_API_KEY`, keep every model name explicit, generate
+`MEMORY_INTERNAL_SECRET` with `openssl rand -base64 48`, and choose a local
+Neo4j password. For a full local learned-action test, set these in
+`apps/api/.env`:
 
 ```dotenv
-MEMORY_SERVICE_URL=http://localhost:8000
-MEMORY_INTERNAL_SECRET=replace-with-at-least-32-random-bytes
-MEMORY_REQUEST_TIMEOUT_MS=10000
+MEMORY_LEARNED_ACTIONS_ENABLED=true
+MEMORY_LEARNED_ACTIONS_ROLLOUT_PERCENT=100
+MEMORY_HISTORY_IMPORTS_ENABLED=true
 ```
 
-The URL and secret must be configured together. If both are absent, the worker
-continues running fixed Pings and leaves memory-outbox records pending for a
-later deployment or rebuild. The timeout is optional and must be between 100
-and 60,000 milliseconds.
+Then use either normal hosted-development startup or the completely local
+Supabase path:
+
+```sh
+./start.sh
+# or, for local Supabase with a fresh migration replay:
+./scripts/local.sh --reset
+```
+
+The start path detects `apps/memory/.env`, starts Neo4j with its configured
+password, loads the file into the Python process, starts the memory API on port
+8000, and exports its URL and shared secret to the API and worker. Run only the
+memory dependencies with `./scripts/start-memory.sh` when diagnosing them in a
+separate terminal.
+
+If `apps/memory/.env` is absent, the start path reports that memory was skipped.
+Fixed Pings continue working and graph outbox records remain pending. The
+`MEMORY_REQUEST_TIMEOUT_MS` setting is optional and must be between 100 and
+60,000 milliseconds.
 
 `GET /health` is a process liveness check. `GET /ready` also verifies Neo4j
 connectivity. Both reveal no graph facts; every `/internal/v1/*` route requires
 a signed internal request.
+
+Verify real Neo4j isolation, idempotent replay, and owner deletion against the
+configured local database:
+
+```sh
+cd apps/memory
+CLOUDY_MEMORY_NEO4J_TEST=1 uv run --env-file .env pytest -q -m integration
+```
+
+### End-to-end test without Raspberry Pi
+
+The desktop simulator uses the same authenticated snapshot, revision, and
+approval APIs as the physical Pod, so it can verify the complete memory backend
+without Raspberry Pi hardware.
+
+1. Start Cloudy with `./scripts/local.sh --reset`, or apply every migration to a
+   linked disposable Supabase project and run `./start.sh`.
+2. Confirm `/ready` succeeds, then pair the desktop simulator from **Home**.
+3. Connect disposable Gmail and Telegram personal accounts. If the rule needs
+   availability, connect a disposable Google Calendar too.
+4. Under **Configure → Memory controls**, enable voice and learned actions.
+   Import a small, explicitly selected sent-message scope and wait for it to
+   complete.
+5. Create a learned communication Ping that explicitly allows the Gmail and
+   Telegram candidates. Add Calendar only as optional read-only context. Send a
+   new provider event after activation because the first poll establishes a
+   baseline.
+6. Verify Cloudy either selects one authorized candidate above the configured
+   threshold or abstains. Inspect the exact recipient, channel, live-context
+   warning, and voice-matched message on the simulator before approving.
+7. Edit and approve one draft. Confirm exactly one provider delivery, then send
+   a similar event and confirm the approved outcome and final wording are
+   eligible evidence for the next proposal.
+8. Reject another draft and verify it is not learned as positive voice
+   evidence. Stop Neo4j, send another event, and verify a learned rule abstains
+   while a fixed version-2 Ping continues normally.
+9. Restart Neo4j, use the person, connection, and complete forget controls, and
+   verify the owner graph rebuild finishes without affecting another test user.
+
+Test Pings are insufficient for this acceptance flow because they deliberately
+record a decision without executing a provider action. Use disposable provider
+accounts and a real post-activation source event.
+
+### End-to-end test with Raspberry Pi
+
+Keep Supabase, API, worker, Neo4j, and the memory service on the development
+computer or deployed backend. Memory credentials never belong on the Pi.
+Provision and pair the hardware using the
+[Raspberry Pi guide](/docs/pod/raspberry-pi), then repeat steps 3 through 9
+above with the physical screen and buttons instead of the simulator. In
+addition, verify the complete recipient and draft remain readable, revised
+payloads require a fresh review, a single button release decides once, and
+network loss never permits an offline approval.
 
 ## Required variables
 

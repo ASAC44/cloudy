@@ -6,9 +6,9 @@ description: Install dependencies, configure local services, and run the complet
 ## Prerequisites
 
 Install Node.js 22 or newer, pnpm 11, Python 3.13, uv, Docker, and the
-Supabase CLI. Link the repository to a hosted Supabase development project
-before applying migrations. Docker runs the local Supabase stack, the optional
-Neo4j graph-memory service, and the ARM64 Pod compatibility check.
+[Supabase CLI](https://supabase.com/docs/guides/local-development/cli/getting-started).
+Docker runs the local Supabase stack, Neo4j memory database, and the optional
+ARM64 Pod compatibility check.
 
 ## Configure the environment
 
@@ -17,15 +17,37 @@ Copy the example files and replace their placeholder values:
 ```sh
 cp apps/api/.env.example apps/api/.env
 cp apps/web/.env.example apps/web/.env.local
+cp apps/memory/.env.example apps/memory/.env
 ```
 
 Generate a stable API encryption key with `openssl rand -base64 32`. Keep that value server-side; changing it makes saved provider credentials unreadable.
+
+For graph memory, replace every placeholder in `apps/memory/.env`, set a
+platform-owned `GRAPHITI_OPENAI_API_KEY`, and generate its shared internal
+secret with `openssl rand -base64 48`. The normal start path loads that file,
+passes the same secret and `http://localhost:8000` URL to the worker, starts
+Neo4j through Docker Compose, and starts the private Python memory service.
+Leave `apps/memory/.env` absent when intentionally developing fixed Pings
+without graph memory.
 
 For the complete Supabase and OAuth configuration, follow [Authentication setup](/docs/development/authentication).
 
 ## Install and run
 
-From the repository root:
+For the simplest fully local first run, use:
+
+```sh
+./scripts/setup.sh
+./scripts/local.sh --reset
+```
+
+The reset command starts local Supabase, replays every migration, then starts
+the application stack. Omit `--reset` on later runs to retain local data. Open
+`http://localhost:3000/login`, submit an email address, then open Mailpit at
+`http://localhost:54324` and follow the captured sign-in link. Pair the desktop
+simulator from **Home** using its eight-character code.
+
+To use a hosted Supabase development project instead:
 
 ```sh
 ./scripts/setup.sh
@@ -34,7 +56,11 @@ supabase db push
 ./start.sh
 ```
 
-The script starts the dashboard on port 3000, the Hono API on port 3001, the dedicated rule worker, and the desktop Pod simulator. It does not start the local Codex bridge. Pair the simulator from the dashboard with its eight-character code, then create a **New Ping**.
+The start path runs the dashboard on port 3000, Hono API on port 3001,
+dedicated rule worker, and desktop Pod simulator. When `apps/memory/.env`
+exists, it also starts Neo4j and the memory API on port 8000. It does not start
+the local Codex bridge. Pair the simulator from the dashboard with its
+eight-character code, then create a **New Ping**.
 
 The first worker poll records existing provider items as its baseline without creating approvals. New items, or changed identities such as a new commit on a watched pull request, can create approvals on later polls.
 
@@ -53,6 +79,13 @@ directory.
 ./scripts/check.sh
 ```
 
+When memory is configured, verify both service layers:
+
+```sh
+curl --fail http://localhost:8000/health
+curl --fail http://localhost:8000/ready
+```
+
 The optional ARM64 compatibility check requires Docker:
 
 ```sh
@@ -60,6 +93,8 @@ The optional ARM64 compatibility check requires Docker:
 ```
 
 Continue with [Pod development](/docs/pod/development) for simulator controls and local-state behavior.
+Continue with [Graph memory service](/docs/development/graph-memory) for the
+Neo4j integration check and complete learned-action test.
 
 Telegram application credentials are only required when a Telegram connection
 is used; GitHub-only rules run without them. To send Pod voice tasks to a local
