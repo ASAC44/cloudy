@@ -113,8 +113,36 @@ test('Pod screens widen to six feeds and rollback refuses to discard assignments
 
 test('rule builder can request first-class Linear and Stripe connections', async () => {
   const source = await readFile(new URL('apps/api/src/rule-builder.ts', root), 'utf8')
-  assert.match(source, /enum: \['github', 'gmail', 'vercel', 'telegram', 'linear', 'stripe', 'custom_mcp', 'other'\]/)
-  assert.match(source, /\['github', 'gmail', 'vercel', 'telegram', 'linear', 'stripe', 'custom_mcp'\]\.includes/)
+  assert.match(source, /enum: \['github', 'gmail', 'google_calendar', 'vercel', 'telegram', 'linear', 'stripe', 'notion', 'custom_mcp', 'other'\]/)
+  assert.match(source, /\['github', 'gmail', 'google_calendar', 'vercel', 'telegram', 'linear', 'stripe', 'notion', 'custom_mcp'\]\.includes/)
+})
+
+test('Google Calendar provider migration is atomic, reversible, and preserves constrained layouts', async () => {
+  const migration = await readFile(new URL('supabase/migrations/20260720040000_google_calendar_connections.sql', root), 'utf8')
+  const rollback = await readFile(new URL('supabase/rollback/20260720040000_google_calendar_connections.sql', root), 'utf8')
+
+  assert.match(migration, /^begin;/)
+  assert.match(migration, /connection_oauth_states_provider_check[\s\S]*'google_calendar'/)
+  assert.match(migration, /agent_memories_provider_check[\s\S]*'google_calendar'/)
+  assert.match(migration, /'app:google_calendar'/)
+  assert.match(migration, /commit;\s*$/)
+  assert.match(rollback, /Refusing rollback while Google Calendar data or screen assignments exist/)
+  assert.match(rollback, /check \(provider in \('github', 'gmail'\)\)/)
+  assert.match(rollback, /commit;\s*$/)
+})
+
+test('Notion provider migration is atomic, reversible, and preserves constrained layouts', async () => {
+  const migration = await readFile(new URL('supabase/migrations/20260721000000_notion_connections.sql', root), 'utf8')
+  const rollback = await readFile(new URL('supabase/rollback/20260721000000_notion_connections.sql', root), 'utf8')
+
+  assert.match(migration, /^begin;/)
+  assert.match(migration, /connection_oauth_states_provider_check[\s\S]*'notion'/)
+  assert.match(migration, /agent_memories_provider_check[\s\S]*'notion'/)
+  assert.match(migration, /'app:notion'/)
+  assert.match(migration, /commit;\s*$/)
+  assert.match(rollback, /Refusing rollback while Notion data or screen assignments exist/)
+  assert.match(rollback, /check \(provider in \('github', 'gmail', 'google_calendar'\)\)/)
+  assert.match(rollback, /commit;\s*$/)
 })
 
 test('rule listing disambiguates the owner-scoped runtime-state relationship', async () => {
@@ -188,4 +216,30 @@ test('Pod realtime invalidations are transactional, metadata-only, and reversibl
   assert.match(rollback, /^begin;/)
   assert.match(rollback, /drop function if exists public\.notify_pod_state_change\(\)/)
   assert.match(rollback, /commit;\s*$/)
+})
+
+test('reply personalization revisions are atomic, owner-scoped, and reversible', async () => {
+  const migration = await readFile(new URL('supabase/migrations/20260720050000_reply_personalization.sql', root), 'utf8')
+  const rollback = await readFile(new URL('supabase/rollback/20260720050000_reply_personalization.sql', root), 'utf8')
+
+  assert.match(migration, /personalization_enabled boolean not null default true/)
+  assert.match(migration, /where id = p_request_id and owner_id = p_owner_id\s+for update/)
+  assert.match(migration, /where owner_id = p_owner_id and approval_request_id = request\.id\s+for update/)
+  assert.match(migration, /request\.payload_hash <> p_expected_hash/)
+  assert.match(migration, /insert into public\.agent_memories[\s\S]*on conflict/)
+  assert.match(migration, /revoke all on function public\.revise_ping_rule_reply/)
+  assert.match(rollback, /drop function if exists public\.revise_ping_rule_reply/)
+  assert.match(rollback, /drop column if exists personalization_enabled/)
+})
+
+test('local Supabase startup replays tracked migrations and injects local credentials', async () => {
+  const config = await readFile(new URL('supabase/config.toml', root), 'utf8')
+  const launcher = await readFile(new URL('scripts/local.sh', root), 'utf8')
+
+  assert.match(config, /\[db\.migrations\]\s+enabled = true/)
+  assert.match(config, /\[db\.seed\]\s+enabled = false/)
+  assert.match(launcher, /supabase db reset --local/)
+  assert.match(launcher, /supabase status -o env/)
+  assert.match(launcher, /NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY/)
+  assert.match(launcher, /SUPABASE_SECRET_KEY/)
 })

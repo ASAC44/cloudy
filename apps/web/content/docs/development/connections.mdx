@@ -1,11 +1,26 @@
 ---
 title: Service connections
-description: Connect Linear, Stripe, OAuth providers, and trusted remote MCP servers safely.
+description: Connect Google Calendar, Linear, Stripe, OAuth providers, and trusted remote MCP servers safely.
 ---
 
 Cloudy stores connection credentials encrypted with `CONNECTION_ENCRYPTION_KEY`.
 The dashboard never receives a saved key after submission, and replacing a key
 runs a fresh connection test.
+
+## Connect GitHub
+
+Create a GitHub OAuth App with the callback documented in
+[Authentication setup](/docs/development/authentication), then connect it from
+the Connections page. A GitHub watch source returns only open pull requests
+that GitHub reports as clean, mergeable, and writable by the connected account.
+The first poll records a baseline without notifying; open a new pull request or
+push a new commit after activation when testing.
+
+A review-only Ping creates a Pod notification and performs no GitHub write.
+GitHub merges are available only when **Merge a GitHub pull request** is the
+configured action. Approval binds the repository, pull request number, head
+commit SHA, and merge method; a changed pull request cannot use the old
+approval.
 
 ## Connect Gmail
 
@@ -15,6 +30,38 @@ the encrypted Pod notification. The summary shows the sender and subject;
 swipe down on the Pod to read the complete email. Reply rules additionally show
 the exact proposed response. Existing inbox messages form the first polling
 baseline, so send a new message after activating a rule when testing.
+
+### Schedule-aware meeting replies
+
+Create a Ping with Gmail as the source, Google Calendar event reads as context,
+and **Reply in Gmail** as the approved action. Podex recognizes meeting,
+rescheduling, and confirmation requests, extracts the requested dates and
+duration, reads the primary calendar, and proposes up to three conflict-free
+weekday slots. It uses the calendar timezone and Monday–Friday, 09:00–17:00
+working hours. If the email omits essential details, the proposed reply asks
+for clarification instead of guessing. Every reply must be reviewed and
+approved on the Pod before Gmail sends it.
+
+## Connect Google Calendar
+
+Enable the Google Calendar API and register the
+`/v1/connections/oauth/google_calendar/callback` URL as described in
+[Authentication setup](/docs/development/authentication). Then choose
+**Google Calendar** on the Connections page and continue with Google OAuth.
+
+When using `./start.sh`, Google Calendar OAuth state and the encrypted Calendar
+connection are stored in `apps/api/.state/podex.sqlite`. This narrow local
+fallback supports connecting and retesting Calendar without local Supabase;
+creating active Calendar Pings still requires the tracked Supabase migration.
+
+Calendar rules can list available calendars and read events only inside an
+explicit RFC 3339 time window. Event creation and updates are actions: Podex
+shows the exact title, times, timezone, location, description, and attendees
+for Pod approval before calling Google. Updates also include the source event
+etag and fail if the event changed after approval. Deleting events is not
+exposed. Google Calendar uses the narrowly scoped `calendar.events` and
+`calendar.calendarlist.readonly` permissions documented in
+[Google's Calendar scope reference](https://developers.google.com/workspace/calendar/api/auth).
 
 ## Connect Linear
 
@@ -41,6 +88,34 @@ Cloudy connects only to `https://mcp.stripe.com`. Stripe controls which tools ar
 available from the permissions on that key. See [Stripe's MCP documentation](https://docs.stripe.com/mcp)
 and [key security guidance](https://docs.stripe.com/keys-best-practices).
 
+## Connect Telegram
+
+Choose **Personal account** to scan Telegram's QR code. This mode watches DMs,
+groups, and channels through the worker and requires `TELEGRAM_API_ID` plus
+`TELEGRAM_API_HASH` on both the API and worker services. Messages sent by the
+connected account are ignored so an approved reply cannot trigger the same
+Ping again.
+
+Choose **Bot** to paste a BotFather token. After `getMe` succeeds, Podex
+registers an HTTPS webhook under `PODEX_PUBLIC_API_URL` with Telegram's secret
+token header. Incoming text, captions, and attachment metadata enter the same
+deduplicated Ping engine. A bot reply is available only as an exact Pod-approved
+action; an uncertain Bot API delivery is not retried automatically. Retest an
+existing bot connection after deploying this version to register its webhook.
+See Telegram's [Bot API webhook documentation](https://core.telegram.org/bots/api#setwebhook).
+
+Telegram reply Pings keep bounded conversation context across API restarts by
+reading the previous eight encrypted events for the same Ping and chat. Incoming
+messages are available to the next draft, while an outgoing reply enters context
+only after Pod approval and confirmed delivery. Context is isolated by owner,
+Ping, and Telegram conversation. Event content is purged after seven days, so
+this is recent conversational context rather than permanent memory.
+
+For local bot testing, run `./scripts/run-ngrok.sh`, copy its HTTPS forwarding
+URL into `PODEX_PUBLIC_API_URL` in `apps/api/.env`, and restart Podex before
+connecting or retesting the bot. Keep ngrok running while Telegram sends
+webhook updates.
+
 ## Capability safety
 
 Cloudy follows MCP tool annotations instead of guessing what a tool does:
@@ -62,6 +137,8 @@ been exposed, revoke it at the provider first and replace it in Cloudy
 immediately. Disconnecting a provider deletes its encrypted credential from
 Cloudy but does not revoke the key at the provider.
 
-GitHub and Gmail continue to use OAuth. Vercel and Telegram use their existing
-token or account flows. **Custom MCP** remains available for other public HTTPS
-Streamable HTTP endpoints.
+GitHub, Gmail, and Google Calendar use OAuth. Vercel uses a token, while Telegram
+supports the bot webhook and personal-account flows above. **Custom MCP** uses
+public HTTPS Streamable HTTP endpoints: Podex discovers annotated tools, polls
+verified read tools as sources, and runs verified non-destructive writes only
+after exact Pod approval.

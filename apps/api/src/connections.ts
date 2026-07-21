@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { lookup as dnsLookup } from 'node:dns'
 import { lookup } from 'node:dns/promises'
 import { isIP, type LookupFunction } from 'node:net'
@@ -12,7 +12,7 @@ import { StringSession } from 'telegram/sessions/StringSession.js'
 import { Agent } from 'undici'
 
 import { GithubClient, type GithubMergeAction } from './github-pr.js'
-import type { Capability, CapabilityRole, Connection, ConnectionProvider, NewConnection, Store } from './types/store.js'
+import type { Capability, CapabilityRole, Connection, ConnectionProvider, NewConnection, OAuthProvider, Store } from './types/store.js'
 import type { ConnectionConfig } from './types/connections.js'
 
 export type { ConnectionConfig } from './types/connections.js'
@@ -20,10 +20,12 @@ export type { ConnectionConfig } from './types/connections.js'
 const ENDPOINTS = {
   github: 'https://api.githubcopilot.com/mcp/readonly',
   gmail: 'https://gmail.googleapis.com',
+  google_calendar: 'https://www.googleapis.com/calendar/v3',
   vercel: 'https://api.vercel.com',
   telegram: 'https://api.telegram.org',
   linear: 'https://mcp.linear.app/mcp',
   stripe: 'https://mcp.stripe.com',
+  notion: 'https://mcp.notion.com/mcp',
 } as const
 
 type Credentials = Record<string, string | number | undefined>
@@ -48,6 +50,13 @@ export class ConnectionService {
 
   telegramUserAuthAvailable() {
     return Boolean(this.config.telegramApiId && this.config.telegramApiHash)
+  }
+
+  telegramWebhookAuthorized(connectionId: string, secret: string | undefined) {
+    if (!secret) return false
+    const expected = Buffer.from(this.telegramWebhookSecret(connectionId))
+    const actual = Buffer.from(secret)
+    return expected.length === actual.length && timingSafeEqual(expected, actual)
   }
 
   async createManual(ownerId: string, input: {
@@ -136,7 +145,7 @@ export class ConnectionService {
 
     try {
       const credentials = this.decrypt(stored.encrypted_payload)
-      const result = await this.smokeTest(stored, credentials)
+      const result = await this.smokeTest(ownerId, stored, credentials)
       return await this.store.setConnectionTest(ownerId, connectionId, {
         status: 'connected',
         accountLabel: result.accountLabel,
@@ -153,16 +162,30 @@ export class ConnectionService {
     }
   }
 
+  async delete(ownerId: string, connectionId: string) {
+    const existing = await this.store.getConnection(ownerId, connectionId)
+    if (!existing) return false
+    const credentials = this.decrypt(existing.encrypted_payload)
+    const deleted = await this.store.deleteConnection(ownerId, connectionId)
+    if (deleted && existing.provider === 'telegram' && credentials.mode !== 'user' && credentials.token) {
+      await this.json(`https://api.telegram.org/bot${encodeURIComponent(String(credentials.token))}/deleteWebhook`, { method: 'POST' }).catch(() => undefined)
+    }
+    return deleted
+  }
+
   async startOAuth(
     ownerId: string,
-    provider: 'github' | 'gmail',
+    provider: OAuthProvider,
     name: string,
     connectionId: string | null,
   ) {
-    if (connectionId && !(await this.store.getConnection(ownerId, connectionId))) {
+    const existing = connectionId ? await this.store.getConnection(ownerId, connectionId) : null
+    if (connectionId && (!existing || existing.provider !== provider)) {
       throw new ConnectionError('connection_not_found')
     }
-    const clientId = provider === 'github' ? this.config.githubClientId : this.config.googleClientId
+    const clientId = provider === 'github'
+      ? this.config.githubClientId
+      : provider === 'notion' ? this.config.notionClientId : this.config.googleClientId
     if (!clientId) throw new ConnectionError('provider_not_configured')
 
     const state = randomBytes(32).toString('base64url')
@@ -178,34 +201,44 @@ export class ConnectionService {
     const callback = `${this.config.publicApiUrl.replace(/\/$/, '')}/v1/connections/oauth/${provider}/callback`
     const url = new URL(provider === 'github'
       ? 'https://github.com/login/oauth/authorize'
-      : 'https://accounts.google.com/o/oauth2/v2/auth')
+      : provider === 'notion' ? 'https://api.notion.com/v1/oauth/authorize' : 'https://accounts.google.com/o/oauth2/v2/auth')
     url.searchParams.set('client_id', clientId)
     url.searchParams.set('redirect_uri', callback)
     url.searchParams.set('state', state)
     url.searchParams.set('response_type', 'code')
-    url.searchParams.set('code_challenge', createHash('sha256').update(verifier).digest('base64url'))
-    url.searchParams.set('code_challenge_method', 'S256')
+    if (provider !== 'notion') {
+      url.searchParams.set('code_challenge', createHash('sha256').update(verifier).digest('base64url'))
+      url.searchParams.set('code_challenge_method', 'S256')
+    }
     if (provider === 'github') {
       url.searchParams.set('scope', 'read:user repo')
-    } else {
+    } else if (provider === 'notion') {
+      url.searchParams.set('owner', 'user')
+    } else if (provider === 'gmail') {
       url.searchParams.set('scope', 'openid email https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send')
+      url.searchParams.set('access_type', 'offline')
+      url.searchParams.set('prompt', 'consent')
+    } else {
+      url.searchParams.set('scope', 'https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.calendarlist.readonly')
       url.searchParams.set('access_type', 'offline')
       url.searchParams.set('prompt', 'consent')
     }
     return url.toString()
   }
 
-  async finishOAuth(provider: 'github' | 'gmail', state: string, code: string) {
+  async finishOAuth(provider: OAuthProvider, state: string, code: string) {
     const oauth = await this.store.consumeOAuthState(hash(state), provider)
     if (!oauth) throw new ConnectionError('invalid_oauth_state')
 
     const credentials = provider === 'github'
       ? await this.exchangeGithubCode(code, oauth.codeVerifier)
-      : await this.exchangeGoogleCode(code, oauth.codeVerifier)
+      : provider === 'notion'
+        ? await this.exchangeNotionCode(code)
+        : await this.exchangeGoogleCode(provider, code, oauth.codeVerifier)
     const connection: NewConnection = {
       name: oauth.connectionName,
       provider,
-      protocol: provider === 'github' ? 'mcp' : 'rest',
+      protocol: provider === 'github' || provider === 'notion' ? 'mcp' : 'rest',
       endpoint_url: ENDPOINTS[provider],
       auth_type: 'oauth',
     }
@@ -242,10 +275,15 @@ export class ConnectionService {
     const credentials = this.decrypt(connection.encrypted_payload)
     if (connection.protocol === 'rest') return restCapabilities(connection, credentials)
 
+    const current = connection.provider === 'notion'
+      ? await this.currentNotionCredentials(connection, credentials)
+      : credentials
     const token = connection.provider === 'github'
-      ? requiredCredential(credentials, 'accessToken')
+      ? requiredCredential(current, 'accessToken')
+      : connection.provider === 'notion'
+        ? requiredCredential(current, 'accessToken')
       : connection.auth_type === 'bearer'
-        ? requiredCredential(credentials, 'token')
+        ? requiredCredential(current, 'token')
         : undefined
     const tools = await this.listMcpTools(connection.endpoint_url, token, connection.provider === 'custom_mcp')
       .catch((error) => {
@@ -310,10 +348,15 @@ export class ConnectionService {
 
     if (connection.protocol === 'mcp') {
       const credentials = this.decrypt(connection.encrypted_payload)
+      const current = connection.provider === 'notion'
+        ? await this.currentNotionCredentials(connection, credentials)
+        : credentials
       const token = connection.provider === 'github'
-        ? requiredCredential(credentials, 'accessToken')
+        ? requiredCredential(current, 'accessToken')
+        : connection.provider === 'notion'
+          ? requiredCredential(current, 'accessToken')
         : connection.auth_type === 'bearer'
-          ? requiredCredential(credentials, 'token')
+          ? requiredCredential(current, 'token')
           : undefined
       return await this.withMcpClient(connection.endpoint_url, token, connection.provider === 'custom_mcp', async (client) => {
         return await client.callTool({ name: capability.name, arguments: input })
@@ -339,6 +382,24 @@ export class ConnectionService {
         headers: providerHeaders(requiredCredential(current, 'accessToken')),
       })
       return normalizeGmailThread(thread)
+    }
+    if (capability.name === 'google_calendar.list_calendars') {
+      const current = await this.currentGoogleCredentials(connection, credentials)
+      const url = new URL('https://www.googleapis.com/calendar/v3/users/me/calendarList')
+      url.searchParams.set('maxResults', String(Math.min(Number(input.limit) || 20, 50)))
+      return await this.json(url.toString(), { headers: providerHeaders(requiredCredential(current, 'accessToken')) })
+    }
+    if (capability.name === 'google_calendar.list_events') {
+      const current = await this.currentGoogleCredentials(connection, credentials)
+      const { timeMin, timeMax } = calendarTimeRange(input)
+      const url = new URL(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(requiredString(input, 'calendar_id'))}/events`)
+      url.searchParams.set('timeMin', timeMin)
+      url.searchParams.set('timeMax', timeMax)
+      url.searchParams.set('singleEvents', 'true')
+      url.searchParams.set('orderBy', 'startTime')
+      url.searchParams.set('maxResults', String(Math.min(Number(input.limit) || 20, 50)))
+      if (typeof input.query === 'string' && input.query) url.searchParams.set('q', input.query)
+      return await this.json(url.toString(), { headers: providerHeaders(requiredCredential(current, 'accessToken')) })
     }
     if (capability.name === 'vercel.list_projects') {
       const url = new URL('https://api.vercel.com/v9/projects')
@@ -401,8 +462,35 @@ export class ConnectionService {
         body: JSON.stringify({ threadId, raw: Buffer.from(raw).toString('base64url') }),
       })
     }
+    if (connection.provider === 'google_calendar' && connection.protocol === 'rest' && role === 'action') {
+      const credentials = await this.currentGoogleCredentials(connection, this.decrypt(connection.encrypted_payload))
+      const headers = { ...providerHeaders(requiredCredential(credentials, 'accessToken')), 'Content-Type': 'application/json' }
+      const calendarId = encodeURIComponent(requiredString(input, 'calendar_id'))
+      const payload = calendarEventPayload(input)
+      if (latest.name === 'google_calendar.create_event') {
+        return await this.json(`https://www.googleapis.com/calendar/v3/calendars/${calendarId}/events?sendUpdates=all`, {
+          method: 'POST', headers, body: JSON.stringify(payload),
+        })
+      }
+      if (latest.name === 'google_calendar.update_event') {
+        return await this.json(`https://www.googleapis.com/calendar/v3/calendars/${calendarId}/events/${encodeURIComponent(requiredString(input, 'event_id'))}?sendUpdates=all`, {
+          method: 'PATCH', headers: { ...headers, 'If-Match': requiredString(input, 'etag') }, body: JSON.stringify(payload),
+        })
+      }
+      throw new ConnectionError('capability_not_found')
+    }
     if (connection.provider === 'telegram' && connection.protocol === 'rest') {
       const credentials = this.decrypt(connection.encrypted_payload)
+      if (credentials.mode !== 'user') {
+        if (role !== 'action' || latest.name !== 'telegram.bot_send_text') throw new ConnectionError('capability_not_found')
+        const result = await this.json(`https://api.telegram.org/bot${encodeURIComponent(requiredCredential(credentials, 'token'))}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: requiredString(input, 'peer_id'), text: requiredString(input, 'message') }),
+        })
+        if (result.ok !== true) throw new ConnectionError('endpoint_failed', 'Telegram rejected the message.')
+        return { sent: true, message_id: (result.result as Record<string, unknown> | undefined)?.message_id }
+      }
       return await this.withTelegram(credentials, async (client) => {
         if (role === 'context' && latest.name === 'telegram.recent_thread') {
           const messages = await client.getMessages(requiredString(input, 'peer_id'), {
@@ -429,9 +517,14 @@ export class ConnectionService {
     if (role !== 'action') return await this.callSetupCapability(ownerId, { ...latest, callable_during_setup: true }, input)
     if (connection.protocol !== 'mcp') throw new ConnectionError('capability_not_found')
     const credentials = this.decrypt(connection.encrypted_payload)
+    const current = connection.provider === 'notion'
+      ? await this.currentNotionCredentials(connection, credentials)
+      : credentials
     const token = connection.provider === 'github'
-      ? requiredCredential(credentials, 'accessToken')
-      : connection.auth_type === 'bearer' ? requiredCredential(credentials, 'token') : undefined
+      ? requiredCredential(current, 'accessToken')
+      : connection.provider === 'notion'
+        ? requiredCredential(current, 'accessToken')
+        : connection.auth_type === 'bearer' ? requiredCredential(current, 'token') : undefined
     return await this.withMcpClient(connection.endpoint_url, token, connection.provider === 'custom_mcp', async (client) => {
       return await client.callTool({ name: latest.name, arguments: input })
     })
@@ -496,11 +589,11 @@ export class ConnectionService {
         endpoint_url: ENDPOINTS[input.provider],
         auth_type: 'bearer' as const,
       },
-      credentials: { token: input.token },
+      credentials: input.provider === 'telegram' ? { mode: 'bot', token: input.token } : { token: input.token },
     }
   }
 
-  private async smokeTest(connection: Connection, credentials: Credentials) {
+  private async smokeTest(ownerId: string, connection: Connection, credentials: Credentials) {
     if (connection.provider === 'github') {
       const token = requiredCredential(credentials, 'accessToken')
       const profile = await this.json('https://api.github.com/user', { headers: providerHeaders(token) })
@@ -512,6 +605,17 @@ export class ConnectionService {
         headers: providerHeaders(requiredCredential(current, 'accessToken')),
       })
       return { accountLabel: String(profile.emailAddress ?? 'Gmail'), credentials: current }
+    }
+    if (connection.provider === 'google_calendar') {
+      const current = await this.refreshGoogleCredentials(credentials)
+      const scopes = new Set(String(current.scope ?? '').split(' '))
+      if (!scopes.has('https://www.googleapis.com/auth/calendar.events') || !scopes.has('https://www.googleapis.com/auth/calendar.calendarlist.readonly')) {
+        throw new ConnectionError('authentication_failed')
+      }
+      const calendar = await this.json('https://www.googleapis.com/calendar/v3/users/me/calendarList/primary', {
+        headers: providerHeaders(requiredCredential(current, 'accessToken')),
+      })
+      return { accountLabel: String(calendar.summaryOverride ?? calendar.summary ?? 'Google Calendar'), credentials: current }
     }
     if (connection.provider === 'vercel') {
       const profile = await this.json('https://api.vercel.com/v2/user', {
@@ -532,15 +636,32 @@ export class ConnectionService {
       const token = requiredCredential(credentials, 'token')
       const profile = await this.json(`https://api.telegram.org/bot${encodeURIComponent(token)}/getMe`)
       if (profile.ok !== true || typeof profile.result !== 'object' || !profile.result) throw new ConnectionError('authentication_failed')
+      const webhook = await this.json(`https://api.telegram.org/bot${encodeURIComponent(token)}/setWebhook`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: `${this.config.publicApiUrl.replace(/\/$/, '')}/v1/webhooks/telegram/${ownerId}/${connection.id}`,
+          secret_token: this.telegramWebhookSecret(connection.id),
+          allowed_updates: ['message', 'channel_post'],
+        }),
+      })
+      if (webhook.ok !== true) throw new ConnectionError('endpoint_failed', 'Telegram rejected the webhook.')
       const bot = profile.result as Record<string, unknown>
       return { accountLabel: bot.username ? `@${bot.username}` : String(bot.first_name ?? 'Telegram bot') }
     }
+    const notionCredentials = connection.provider === 'notion'
+      ? await this.currentNotionCredentials(connection, credentials)
+      : credentials
     const tools = await this.listMcpTools(
       connection.endpoint_url,
-      connection.auth_type === 'bearer' ? requiredCredential(credentials, 'token') : undefined,
+      connection.provider === 'notion'
+        ? requiredCredential(notionCredentials, 'accessToken')
+        : connection.auth_type === 'bearer' ? requiredCredential(notionCredentials, 'token') : undefined,
       true,
     )
-    return { accountLabel: `${tools.length} tool${tools.length === 1 ? '' : 's'}` }
+    return { accountLabel: connection.provider === 'notion' && notionCredentials.workspaceName
+      ? String(notionCredentials.workspaceName)
+      : `${tools.length} tool${tools.length === 1 ? '' : 's'}`, credentials: connection.provider === 'notion' ? notionCredentials : undefined }
   }
 
   private githubClient(connection: Connection & { encrypted_payload?: string }) {
@@ -616,6 +737,14 @@ export class ConnectionService {
     }
   }
 
+  private async currentGoogleCredentials(connection: Connection, credentials: Credentials) {
+    const current = await this.refreshGoogleCredentials(credentials)
+    if (JSON.stringify(current) !== JSON.stringify(credentials)) {
+      await this.store.updateConnectionSecret(connection.id, this.encrypt(current))
+    }
+    return current
+  }
+
   private async exchangeGithubCode(code: string, verifier: string) {
     if (!this.config.githubClientId || !this.config.githubClientSecret) throw new ConnectionError('provider_not_configured')
     const response = await this.json('https://github.com/login/oauth/access_token', {
@@ -632,9 +761,9 @@ export class ConnectionService {
     return { accessToken: String(response.access_token) }
   }
 
-  private async exchangeGoogleCode(code: string, verifier: string) {
+  private async exchangeGoogleCode(provider: 'gmail' | 'google_calendar', code: string, verifier: string) {
     if (!this.config.googleClientId || !this.config.googleClientSecret) throw new ConnectionError('provider_not_configured')
-    const redirectUri = `${this.config.publicApiUrl.replace(/\/$/, '')}/v1/connections/oauth/gmail/callback`
+    const redirectUri = `${this.config.publicApiUrl.replace(/\/$/, '')}/v1/connections/oauth/${provider}/callback`
     const response = await this.json('https://oauth2.googleapis.com/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -654,6 +783,53 @@ export class ConnectionService {
       expiresAt: Date.now() + Number(response.expires_in ?? 3600) * 1000,
       scope: String(response.scope ?? ''),
     }
+  }
+
+  private async exchangeNotionCode(code: string) {
+    if (!this.config.notionClientId || !this.config.notionClientSecret) throw new ConnectionError('provider_not_configured')
+    const response = await this.json('https://api.notion.com/v1/oauth/token', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        Authorization: `Basic ${Buffer.from(`${this.config.notionClientId}:${this.config.notionClientSecret}`).toString('base64')}`,
+        'Notion-Version': '2026-03-11',
+      },
+      body: JSON.stringify({
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: `${this.config.publicApiUrl.replace(/\/$/, '')}/v1/connections/oauth/notion/callback`,
+      }),
+    })
+    if (!response.access_token) throw new ConnectionError('oauth_exchange_failed')
+    return {
+      accessToken: String(response.access_token),
+      refreshToken: response.refresh_token ? String(response.refresh_token) : undefined,
+      workspaceName: response.workspace_name ? String(response.workspace_name) : undefined,
+    }
+  }
+
+  private async currentNotionCredentials(connection: Connection, credentials: Credentials) {
+    if (!credentials.refreshToken || !this.config.notionClientId || !this.config.notionClientSecret) return credentials
+    const response = await this.json('https://api.notion.com/v1/oauth/token', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        Authorization: `Basic ${Buffer.from(`${this.config.notionClientId}:${this.config.notionClientSecret}`).toString('base64')}`,
+        'Notion-Version': '2026-03-11',
+      },
+      body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: credentials.refreshToken }),
+    })
+    if (!response.access_token) throw new ConnectionError('authentication_failed')
+    const current = {
+      ...credentials,
+      accessToken: String(response.access_token),
+      refreshToken: response.refresh_token ? String(response.refresh_token) : credentials.refreshToken,
+      workspaceName: response.workspace_name ? String(response.workspace_name) : credentials.workspaceName,
+    }
+    if (JSON.stringify(current) !== JSON.stringify(credentials)) await this.store.updateConnectionSecret(connection.id, this.encrypt(current))
+    return current
   }
 
   private async json(url: string, init?: RequestInit) {
@@ -679,6 +855,10 @@ export class ConnectionService {
     } finally {
       await client.disconnect().catch(() => undefined)
     }
+  }
+
+  private telegramWebhookSecret(connectionId: string) {
+    return createHmac('sha256', this.key).update(`telegram-webhook:${connectionId}`).digest('hex')
   }
 
   private encrypt(credentials: Credentials) {
@@ -809,7 +989,7 @@ function restCapabilities(connection: Connection, credentials: Credentials): Cap
     delivery: 'poll' as const,
     input_schema: { type: 'object', properties: { thread_id: { type: 'string' }, message: { type: 'string', minLength: 1, maxLength: 4096 } }, required: ['thread_id', 'message'], additionalProperties: false },
     output_schema: { type: 'object' },
-  }] : [])] : connection.provider === 'vercel' ? [{
+  }] : [])] : connection.provider === 'google_calendar' ? calendarCapabilities : connection.provider === 'vercel' ? [{
     name: 'vercel.list_projects',
     title: 'List Vercel projects',
     description: 'List projects visible to the connected Vercel account.',
@@ -821,10 +1001,10 @@ function restCapabilities(connection: Connection, credentials: Credentials): Cap
       additionalProperties: false,
     },
     output_schema: { type: 'object', properties: { projects: { type: 'array' } } },
-  }] : connection.provider === 'telegram' && credentials.mode === 'user' ? [{
+  }] : connection.provider === 'telegram' ? [{
     name: 'telegram.new_message',
     title: 'New Telegram message',
-    description: 'Receive new cloud messages without marking them read.',
+    description: credentials.mode === 'user' ? 'Receive new cloud messages without marking them read.' : 'Receive new bot messages through an authenticated Telegram webhook.',
     roles: ['source'] as CapabilityRole[], delivery: 'event' as const,
     input_schema: {
       type: 'object',
@@ -835,7 +1015,7 @@ function restCapabilities(connection: Connection, credentials: Credentials): Cap
       required: ['chat_types'], additionalProperties: false,
     },
     output_schema: { type: 'object' },
-  }, {
+  }, ...(credentials.mode === 'user' ? [{
     name: 'telegram.discover_dialogs',
     title: 'List Telegram chats',
     description: 'List cloud chats available to the connected account.',
@@ -849,10 +1029,10 @@ function restCapabilities(connection: Connection, credentials: Credentials): Cap
     roles: ['context'] as CapabilityRole[], delivery: 'poll' as const,
     input_schema: { type: 'object', properties: { peer_id: { type: 'string' }, limit: { type: 'number', minimum: 1, maximum: 20 } }, required: ['peer_id'], additionalProperties: false },
     output_schema: { type: 'array' },
-  }, {
-    name: 'telegram.send_text',
+  }] : []), {
+    name: credentials.mode === 'user' ? 'telegram.send_text' : 'telegram.bot_send_text',
     title: 'Send Telegram reply',
-    description: 'Send the exact approved text reply to a cloud chat.',
+    description: credentials.mode === 'user' ? 'Send the exact approved text reply to a cloud chat.' : 'Send the exact approved text reply as the connected bot.',
     roles: ['action'] as CapabilityRole[], delivery: 'event' as const,
     input_schema: { type: 'object', properties: { peer_id: { type: 'string' }, message: { type: 'string', minLength: 1, maxLength: 4096 } }, required: ['peer_id', 'message'], additionalProperties: false },
     output_schema: { type: 'object' },
@@ -878,6 +1058,88 @@ function restCapabilities(connection: Connection, credentials: Credentials): Cap
     runtime_safe: true,
     callable_during_setup: definition.roles.includes('setup'),
   }))
+}
+
+const calendarCapabilities = [{
+  name: 'google_calendar.list_calendars', title: 'List Google calendars',
+  description: 'List calendars available to the connected Google account.',
+  roles: ['context', 'setup'] as CapabilityRole[], delivery: 'poll' as const,
+  input_schema: { type: 'object', properties: { limit: { type: 'number', minimum: 1, maximum: 50 } }, additionalProperties: false },
+  output_schema: { type: 'object', properties: { items: { type: 'array' } } },
+}, {
+  name: 'google_calendar.list_events', title: 'Watch Google Calendar events',
+  description: 'Read events from one calendar inside an explicit time window.',
+  roles: ['source', 'context', 'setup'] as CapabilityRole[], delivery: 'poll' as const,
+  input_schema: {
+    type: 'object', properties: {
+      calendar_id: { type: 'string' }, time_min: { type: 'string' }, time_max: { type: 'string' },
+      query: { type: 'string' }, limit: { type: 'number', minimum: 1, maximum: 50 },
+    }, required: ['calendar_id', 'time_min', 'time_max'], additionalProperties: false,
+  },
+  output_schema: { type: 'object', properties: { items: { type: 'array' } } },
+}, {
+  name: 'google_calendar.create_event', title: 'Create Google Calendar event',
+  description: 'Create the exact approved event and notify its attendees.',
+  roles: ['action'] as CapabilityRole[], delivery: 'poll' as const,
+  input_schema: calendarEventSchema(false), output_schema: { type: 'object' },
+}, {
+  name: 'google_calendar.update_event', title: 'Update Google Calendar event',
+  description: 'Update an event only if its approved version still matches Google Calendar.',
+  roles: ['action'] as CapabilityRole[], delivery: 'poll' as const,
+  input_schema: calendarEventSchema(true), output_schema: { type: 'object' },
+}]
+
+function calendarEventSchema(update: boolean) {
+  return {
+    type: 'object', properties: {
+      calendar_id: { type: 'string' }, ...(update ? { event_id: { type: 'string' }, etag: { type: 'string' } } : {}),
+      title: { type: 'string', minLength: 1, maxLength: 1024 }, start: { type: 'string' }, end: { type: 'string' },
+      time_zone: { type: 'string' }, description: { type: 'string', maxLength: 8192 }, location: { type: 'string', maxLength: 1024 },
+      attendees: { type: 'array', minItems: 1, maxItems: 100, items: { type: 'string' } },
+    }, required: ['calendar_id', ...(update ? ['event_id', 'etag'] : []), 'title', 'start', 'end'], additionalProperties: false,
+  }
+}
+
+function calendarTimeRange(input: Record<string, unknown>) {
+  const timeMin = requiredString(input, 'time_min')
+  const timeMax = requiredString(input, 'time_max')
+  const start = Date.parse(timeMin)
+  const end = Date.parse(timeMax)
+  if (!CALENDAR_RFC3339.test(timeMin) || !CALENDAR_RFC3339.test(timeMax) || !Number.isFinite(start) || !Number.isFinite(end) || start >= end) {
+    throw new ConnectionError('invalid_capability_input')
+  }
+  return { timeMin, timeMax }
+}
+
+function calendarEventPayload(input: Record<string, unknown>) {
+  const { timeMin: start, timeMax: end } = calendarTimeRange({ time_min: input.start, time_max: input.end })
+  const timeZone = typeof input.time_zone === 'string' && input.time_zone ? input.time_zone : undefined
+  const title = requiredString(input, 'title')
+  if (title.length > 1024 || (input.time_zone !== undefined && !timeZone)) throw new ConnectionError('invalid_capability_input')
+  if (timeZone) {
+    try { new Intl.DateTimeFormat('en', { timeZone }) } catch { throw new ConnectionError('invalid_capability_input') }
+  }
+  const description = optionalString(input, 'description', 8192)
+  const location = optionalString(input, 'location', 1024)
+  const attendees = input.attendees === undefined ? undefined : stringList(input.attendees, 100)
+  if (attendees?.some((email) => email.length > 320 || !/^[^\s@]+@[^\s@]+$/.test(email))) throw new ConnectionError('invalid_capability_input')
+  return {
+    summary: title,
+    start: { dateTime: start, ...(timeZone ? { timeZone } : {}) },
+    end: { dateTime: end, ...(timeZone ? { timeZone } : {}) },
+    ...(description !== undefined ? { description } : {}),
+    ...(location !== undefined ? { location } : {}),
+    ...(attendees ? { attendees: attendees.map((email) => ({ email })) } : {}),
+  }
+}
+
+const CALENDAR_RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/
+
+function optionalString(input: Record<string, unknown>, key: string, max: number) {
+  const value = input[key]
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || value.length > max) throw new ConnectionError('invalid_capability_input')
+  return value
 }
 
 function sanitizeSchema(value: unknown): Record<string, unknown> {

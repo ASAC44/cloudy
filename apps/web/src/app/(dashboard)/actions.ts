@@ -7,6 +7,7 @@ import { createClient } from "@/lib/supabase/server";
 import { apiFetch } from "@/lib/api";
 import { revalidatePath } from "next/cache";
 import type {
+  AgentMemory,
   AutomationKey,
   Connection,
   PingRule,
@@ -227,6 +228,65 @@ export async function saveAiSettings(
   }
 }
 
+export async function setPersonalization(enabled: boolean): Promise<{ error?: string }> {
+  try {
+    await apiFetch("/v1/settings/personalization", { method: "PUT", body: JSON.stringify({ enabled }) });
+    revalidatePath("/configure");
+    return {};
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Personalization could not be updated" };
+  }
+}
+
+export async function saveMemory(input: { memoryKey?: string; content: string; kind: "preference" | "writing_sample" }): Promise<{ memory?: AgentMemory; error?: string }> {
+  try {
+    const result = await apiFetch<{ memory: AgentMemory }>("/v1/memories", {
+      method: "POST",
+      body: JSON.stringify({
+        scope: "user",
+        memory_key: input.memoryKey ?? `${input.kind}:${crypto.randomUUID()}`,
+        content: input.content,
+        source: { kind: input.kind },
+      }),
+    });
+    revalidatePath("/configure");
+    return result;
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Memory could not be saved" };
+  }
+}
+
+export async function deleteMemory(id: string): Promise<{ error?: string }> {
+  try {
+    await apiFetch(`/v1/memories/${id}`, { method: "DELETE" });
+    revalidatePath("/configure");
+    return {};
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Memory could not be deleted" };
+  }
+}
+
+export async function getEditableReply(id: string): Promise<{ reply?: string; payload_hash?: string; error?: string }> {
+  try {
+    return await apiFetch(`/v1/requests/${id}/reply`);
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Reply could not be loaded" };
+  }
+}
+
+export async function reviseReply(id: string, reply: string, expectedPayloadHash: string): Promise<{ payload_hash?: string; error?: string }> {
+  try {
+    const result = await apiFetch<{ payload_hash: string }>(`/v1/requests/${id}/reply`, {
+      method: "PUT",
+      body: JSON.stringify({ reply, expected_payload_hash: expectedPayloadHash }),
+    });
+    revalidatePath("/home");
+    return result;
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Reply could not be revised" };
+  }
+}
+
 export async function signOut() {
   const supabase = await createClient();
   await supabase.auth.signOut();
@@ -287,7 +347,7 @@ export async function removeConnection(id: string): Promise<{ error?: string }> 
 }
 
 export async function startConnectionOAuth(
-  provider: "github" | "gmail",
+  provider: "github" | "gmail" | "google_calendar" | "notion",
   name: string,
   connectionId?: string,
 ): Promise<{ authorization_url?: string; error?: string }> {
@@ -313,7 +373,7 @@ export async function createAutomationKey(
       method: "POST",
       body: JSON.stringify({ name: name.trim() }),
     });
-    revalidatePath("/automations");
+    revalidatePath("/automations/n8n");
     return result;
   } catch (error) {
     return { error: error instanceof Error ? error.message : "Key could not be created" };
@@ -323,7 +383,7 @@ export async function createAutomationKey(
 export async function revokeAutomationKey(id: string): Promise<{ error?: string }> {
   try {
     await apiFetch(`/v1/automation-keys/${id}`, { method: "DELETE" });
-    revalidatePath("/automations");
+    revalidatePath("/automations/n8n");
     return {};
   } catch (error) {
     return { error: error instanceof Error ? error.message : "Key could not be revoked" };

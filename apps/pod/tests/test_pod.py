@@ -448,6 +448,18 @@ class PodTests(unittest.TestCase):
         self.assertIn(GMAIL_NOTIFICATION["presentation"]["email"], [call.args[0] for call in wrapped.call_args_list])
         self.assertIn(520, [call.args[3] for call in wrapped.call_args_list if call.args[0] == GMAIL_NOTIFICATION["presentation"]["subject"]])
 
+    def test_telegram_and_mcp_details_render_message_and_source_event(self):
+        self.app.state = "request"
+        self.app.request = {**REQUEST, "presentation": {"sender": "@ava", "excerpt": "Need approval", "source_detail": '{"chat_type":"group"}'}}
+        self.app.review_page = 1
+
+        with patch.object(self.app, "_wrapped", wraps=self.app._wrapped) as wrapped:
+            self.app.render()
+
+        rendered = [call.args[0] for call in wrapped.call_args_list]
+        self.assertIn("Need approval", rendered)
+        self.assertIn('{"chat_type":"group"}', rendered)
+
     def test_long_gmail_headers_and_subjects_stay_inside_the_screen(self):
         header = "Mohit Madan <mohitmadan128@gmail.com> · Mon, 20 Jul 2026 15:28:58 +0530"
         subject = "hi i was interested in your business can we have a meeting to discuss the complete proposal"
@@ -931,6 +943,28 @@ class PodTests(unittest.TestCase):
         worker.close()
         worker.join(timeout=1)
 
+    def test_worker_reemits_an_existing_request_when_its_screen_changes(self):
+        responses = iter([
+            {"request": REQUEST, "queue_size": 1, "codex": {}, "request_screen": "down"},
+            {"request": REQUEST, "queue_size": 1, "codex": {}, "request_screen": "left"},
+        ])
+
+        class RequestClient:
+            def current_request(self, _token):
+                return next(responses)
+
+        self.storage.save_credentials("pod_token")
+        worker = PodWorker(RequestClient(), self.storage, poll_seconds=0.01)
+        worker.start()
+        first = worker.events.get(timeout=1)
+        self.assertEqual(first["event"], "request")
+        self.assertEqual(first["request_screen"], "down")
+        second = worker.events.get(timeout=1)
+        self.assertEqual(second["event"], "request")
+        self.assertEqual(second["request_screen"], "left")
+        worker.close()
+        worker.join(timeout=1)
+
     def test_worker_emits_idle_only_once_while_polling(self):
         class IdleClient:
             def current_request(self, _token):
@@ -961,6 +995,26 @@ class PodTests(unittest.TestCase):
         self.assertEqual(worker.events.get(timeout=1)["event"], "reconnecting")
         self.assertEqual(worker.events.get(timeout=1)["event"], "request")
 
+        worker.close()
+        worker.join(timeout=1)
+
+    def test_worker_reemits_a_request_when_its_payload_hash_changes(self):
+        class RevisedRequestClient:
+            def __init__(self):
+                self.calls = 0
+
+            def current_request(self, _token):
+                self.calls += 1
+                request = {**REQUEST, "payload_hash": ("a" if self.calls == 1 else "b") * 64}
+                return {"request": request, "queue_size": 1}
+
+        self.storage.save_credentials("pod_token")
+        worker = PodWorker(RevisedRequestClient(), self.storage, poll_seconds=0.01)
+        worker.start()
+        first = worker.events.get(timeout=1)
+        second = worker.events.get(timeout=1)
+        self.assertEqual(first["request"]["payload_hash"], "a" * 64)
+        self.assertEqual(second["request"]["payload_hash"], "b" * 64)
         worker.close()
         worker.join(timeout=1)
 
@@ -1007,6 +1061,25 @@ class PodTests(unittest.TestCase):
         self.assertEqual(worker.events.get(timeout=1)["event"], "decided")
         self.assertEqual(len(client.keys), 2)
         self.assertEqual(client.keys[0], client.keys[1])
+        worker.close()
+        worker.join(timeout=1)
+
+    def test_resolved_decision_clears_the_stale_request(self):
+        class ResolvedDecisionClient:
+            def current_request(self, _token):
+                return {"request": REQUEST, "queue_size": 1}
+
+            def decide(self, *_args):
+                raise ApiError(409, "request already resolved")
+
+        self.storage.save_credentials("pod_token")
+        self.storage.save_request(REQUEST)
+        worker = PodWorker(ResolvedDecisionClient(), self.storage, poll_seconds=0.01)
+        worker.start()
+        self.assertEqual(worker.events.get(timeout=1)["event"], "request")
+        worker.decide(REQUEST, "approved")
+        self.assertEqual(worker.events.get(timeout=1)["event"], "idle")
+        self.assertIsNone(self.storage.request())
         worker.close()
         worker.join(timeout=1)
 

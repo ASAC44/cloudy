@@ -128,7 +128,7 @@ class PodWorker(threading.Thread):
         pairing: dict[str, Any] | None = None
         saved_credentials = self.storage.credentials()
         token = saved_credentials.get("token") if saved_credentials else None
-        last_request_id: str | None = None
+        last_request_revision: tuple[str, str, str] | None = None
         idle_emitted = False
         last_codex = repr({})
         last_screen_layout = repr(None)
@@ -162,9 +162,8 @@ class PodWorker(threading.Thread):
                     command = None
                 if command and command.get("refresh"):
                     self.refresh_pending.clear()
-                    if command.get("force"):
-                        last_request_id = None
-                        idle_emitted = False
+                    last_request_revision = None
+                    idle_emitted = False
                 elif command and command.get("revoked"):
                     raise ApiError(401, "Unauthorized")
                 elif command and command.get("transcribe"):
@@ -182,7 +181,7 @@ class PodWorker(threading.Thread):
                     self.client.prompt(token, command["prompt"], command["target_revision"], command["idempotency_key"], command.get("replace_request"), command.get("decision_idempotency_key"))
                     if command.get("replace_request"):
                         self.storage.clear_request()
-                        last_request_id = None
+                        last_request_revision = None
                     self.emit("prompt_queued")
                     continue
                 elif command:
@@ -196,7 +195,7 @@ class PodWorker(threading.Thread):
                         command["idempotency_key"],
                     )
                     self.storage.clear_request()
-                    last_request_id = None
+                    last_request_revision = None
                     self.emit("decided", outcome=outcome)
                     self._wait(1.5)
                     continue
@@ -226,30 +225,32 @@ class PodWorker(threading.Thread):
                 request = current.get("request")
                 if request:
                     self.storage.save_request(request)
-                    if request["id"] != last_request_id:
+                    request_screen = str(current.get("request_screen", "down"))
+                    request_revision = (request["id"], request["payload_hash"], request_screen)
+                    if request_revision != last_request_revision:
                         self.emit(
                             "request",
                             request=request,
                             queue_size=current.get("queue_size", 1),
-                            request_screen=current.get("request_screen", "down"),
+                            request_screen=request_screen,
                         )
-                    last_request_id = request["id"]
+                    last_request_revision = request_revision
                     idle_emitted = False
                 else:
                     self.storage.clear_request()
                     if decision_animation in ("approved", "rejected"):
-                        last_request_id = None
                         idle_emitted = True
-                    elif last_request_id is not None:
+                    elif last_request_revision is not None:
+                        self.storage.clear_request()
                         self.emit("idle")
                     elif not idle_emitted:
                         self.emit("idle")
                     idle_emitted = True
-                    last_request_id = None
+                    last_request_revision = None
                 self._wait(self.safety_poll_seconds if self.realtime_connected.is_set() else self.poll_seconds)
             except ApiError as error:
                 if error.status == 0:
-                    last_request_id = None
+                    last_request_revision = None
                     idle_emitted = False
                     if command and not command.get("refresh") and not command.get("transcribe"):
                         self.commands.put(command)
@@ -261,11 +262,16 @@ class PodWorker(threading.Thread):
                     self.storage.clear_request()
                     token = None
                     pairing = None
-                    last_request_id = None
+                    last_request_revision = None
                     self.emit("revoked")
                     self._wait(1.5)
                 elif error.status == 404 and pairing:
                     pairing = None
+                elif command and command.get("request") and error.status in (404, 409):
+                    self.storage.clear_request()
+                    last_request_revision = None
+                    idle_emitted = True
+                    self.emit("idle")
                 else:
                     if error.status >= 500 and command and not command.get("refresh") and not command.get("transcribe"):
                         self.commands.put(command)

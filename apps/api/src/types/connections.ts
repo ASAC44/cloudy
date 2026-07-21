@@ -6,6 +6,8 @@ export type ConnectionConfig = {
   githubClientSecret?: string
   googleClientId?: string
   googleClientSecret?: string
+  notionClientId?: string
+  notionClientSecret?: string
   telegramApiId?: number
   telegramApiHash?: string
 }

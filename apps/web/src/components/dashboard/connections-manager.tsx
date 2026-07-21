@@ -107,7 +107,7 @@ export function ConnectionsManager({
     const endpoint = String(form.get("endpoint_url") ?? "").trim();
 
     startTransition(async () => {
-      if ((activeProvider === "github" || activeProvider === "gmail") && !editing) {
+      if ((activeProvider === "github" || activeProvider === "gmail" || activeProvider === "google_calendar" || activeProvider === "notion") && !editing) {
         const result = await startConnectionOAuth(activeProvider, name);
         if (result.authorization_url) window.location.assign(result.authorization_url);
         else showError(result.error);
@@ -155,7 +155,7 @@ export function ConnectionsManager({
   }
 
   function reconnect(connection: Connection) {
-    if (connection.provider !== "github" && connection.provider !== "gmail") return openEdit(connection);
+    if (connection.provider !== "github" && connection.provider !== "gmail" && connection.provider !== "google_calendar" && connection.provider !== "notion") return openEdit(connection);
     const provider = connection.provider;
     startTransition(async () => {
       const result = await startConnectionOAuth(provider, connection.name, connection.id);

@@ -24,6 +24,8 @@ export type GithubPullRequest = {
   merge_method: GithubMergeMethod
   viewer_can_merge: boolean
   merged: boolean
+  state: 'open' | 'closed'
+  ready_to_merge: boolean
 }
 
 export type GithubMergeAction = {

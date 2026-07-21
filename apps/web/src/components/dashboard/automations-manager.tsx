@@ -221,6 +221,9 @@ export function AutomationsManager({
           <p className="mt-2 max-w-sm leading-6 text-muted-foreground">
             Configure three built-in nodes. Expressions keep every field connected to the current execution.
           </p>
+          <p className="mt-3 max-w-sm text-sm leading-6 text-muted-foreground">
+            Self-hosted n8n must set <code className="font-mono text-foreground">WEBHOOK_URL</code> to its public HTTPS origin.
+          </p>
         </div>
 
         <div className="divide-y divide-border border-y border-border">

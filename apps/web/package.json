@@ -8,7 +8,7 @@
     "build": "next build && cp -R public .next/standalone/ && mkdir -p .next/standalone/.next && cp -R .next/static .next/standalone/.next/",
     "start": "node .next/standalone/server.js",
     "lint": "eslint",
-    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test src/components/dashboard/rule-builder-chat-state.test.ts"
+    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test src/components/dashboard/*.test.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",

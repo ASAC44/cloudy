@@ -9,6 +9,7 @@ import {
   type NewRequest,
   type NewConnection,
   type OAuthState,
+  type OAuthProvider,
   type PairingSession,
   type PairingStatus,
   type PingRule,
@@ -32,6 +33,7 @@ import {
   type Store,
 } from './types/store.js'
 import { StoreError } from './store.js'
+import { LocalGoogleCalendarStore } from './local-google-calendar.js'
 import { LocalPodLayoutStore } from './local-pod-layout.js'
 
 function fail(error: { code?: string; message: string } | null): never {
@@ -45,7 +47,7 @@ function fail(error: { code?: string; message: string } | null): never {
     throw new StoreError('automation_key_name_exists', error.message)
   }
   if (error?.code === '23505') throw new StoreError('active_pod_exists', error.message)
-  const code = error?.message.match(/(pairing_rate_limited|invalid_pairing_code|invalid_bridge_pairing_code|active_pod_exists|pod_not_authorized|pod_not_found|pod_layout_conflict|invalid_pod_layout|request_not_found|request_already_resolved|request_expired|payload_changed|idempotency_conflict|codex_bridge_not_authorized|codex_target_not_found|codex_target_changed|rule_session_not_found|rule_session_expired|rule_session_conflict|rule_pod_unavailable|rule_connection_unavailable|rule_not_found|rule_edit_conflict|rule_review_required|invalid_rule_status|invalid_rule_definition|ping_event_conflict|invalid_ping_approval|telegram_auth_in_progress|telegram_auth_conflict)/)?.[1]
+  const code = error?.message.match(/(pairing_rate_limited|invalid_pairing_code|invalid_bridge_pairing_code|active_pod_exists|pod_not_authorized|pod_not_found|pod_layout_conflict|invalid_pod_layout|request_not_found|request_already_resolved|request_expired|reply_not_editable|invalid_reply_revision|payload_changed|idempotency_conflict|codex_bridge_not_authorized|codex_target_not_found|codex_target_changed|rule_session_not_found|rule_session_expired|rule_session_conflict|rule_pod_unavailable|rule_connection_unavailable|rule_not_found|rule_edit_conflict|rule_review_required|invalid_rule_status|invalid_rule_definition|ping_event_conflict|invalid_ping_approval|telegram_auth_in_progress|telegram_auth_conflict)/)?.[1]
   throw new StoreError(code ?? 'database_error', error?.message)
 }
 
@@ -65,13 +67,17 @@ function missingMemorySchema(error: { code?: string; message: string } | null) {
 
 export class SupabaseStore implements Store, RuntimeStore {
   private readonly db: SupabaseClient
+  private readonly localGoogleCalendar?: LocalGoogleCalendarStore
   private readonly localPodLayouts?: LocalPodLayoutStore
 
   constructor(url: string, secretKey: string, localPodLayoutPath?: string) {
     this.db = createClient(url, secretKey, {
       auth: { persistSession: false, autoRefreshToken: false },
     })
-    if (localPodLayoutPath) this.localPodLayouts = new LocalPodLayoutStore(localPodLayoutPath)
+    if (localPodLayoutPath) {
+      this.localGoogleCalendar = new LocalGoogleCalendarStore(localPodLayoutPath)
+      this.localPodLayouts = new LocalPodLayoutStore(localPodLayoutPath)
+    }
   }
 
   async createPairingSession(input: {
@@ -447,10 +453,12 @@ export class SupabaseStore implements Store, RuntimeStore {
       .eq('owner_id', ownerId)
       .order('created_at', { ascending: true })
     if (error) fail(error)
-    return data as Connection[]
+    return [...data as Connection[], ...(this.localGoogleCalendar?.list(ownerId) ?? [])]
   }
 
   async getConnection(ownerId: string, connectionId: string) {
+    const local = this.localGoogleCalendar?.get(ownerId, connectionId)
+    if (local) return local
     const { data: connection, error } = await this.db
       .from('connections')
       .select('id, name, provider, protocol, endpoint_url, auth_type, status, account_label, last_error, last_tested_at, created_at, updated_at')
@@ -470,6 +478,9 @@ export class SupabaseStore implements Store, RuntimeStore {
   }
 
   async createConnection(ownerId: string, connection: NewConnection, encryptedPayload: string) {
+    if (connection.provider === 'google_calendar' && this.localGoogleCalendar) {
+      return this.localGoogleCalendar.create(ownerId, connection, encryptedPayload)
+    }
     const { data, error } = await this.db.rpc('create_connection_with_secret', {
       p_owner_id: ownerId,
       p_name: connection.name,
@@ -490,6 +501,9 @@ export class SupabaseStore implements Store, RuntimeStore {
     changes: Partial<Pick<Connection, 'name' | 'endpoint_url' | 'auth_type'>>,
     encryptedPayload?: string,
   ) {
+    if (this.localGoogleCalendar?.get(ownerId, connectionId)) {
+      return this.localGoogleCalendar.update(ownerId, connectionId, changes.name, encryptedPayload)
+    }
     const { data, error } = await this.db.rpc('update_connection_with_secret', {
       p_owner_id: ownerId,
       p_connection_id: connectionId,
@@ -503,6 +517,10 @@ export class SupabaseStore implements Store, RuntimeStore {
   }
 
   async updateConnectionSecret(connectionId: string, encryptedPayload: string) {
+    if (this.localGoogleCalendar?.has(connectionId)) {
+      this.localGoogleCalendar.updateSecret(connectionId, encryptedPayload)
+      return
+    }
     const { error } = await this.db
       .from('connection_secrets')
       .update({ encrypted_payload: encryptedPayload, updated_at: new Date().toISOString() })
@@ -520,6 +538,9 @@ export class SupabaseStore implements Store, RuntimeStore {
       encryptedPayload?: string
     },
   ) {
+    if (this.localGoogleCalendar?.get(ownerId, connectionId)) {
+      return this.localGoogleCalendar.setTest(ownerId, connectionId, result)
+    }
     const { data, error } = await this.db.rpc('set_connection_test_result', {
       p_owner_id: ownerId,
       p_connection_id: connectionId,
@@ -533,6 +554,9 @@ export class SupabaseStore implements Store, RuntimeStore {
   }
 
   async deleteConnection(ownerId: string, connectionId: string) {
+    if (this.localGoogleCalendar?.get(ownerId, connectionId)) {
+      return this.localGoogleCalendar.delete(ownerId, connectionId)
+    }
     const { data, error } = await this.db.rpc('delete_connection_with_layout_cleanup', {
       p_owner_id: ownerId,
       p_connection_id: connectionId,
@@ -547,6 +571,10 @@ export class SupabaseStore implements Store, RuntimeStore {
   }
 
   async createOAuthState(stateHash: string, state: OAuthState, expiresAt: string) {
+    if (state.provider === 'google_calendar' && this.localGoogleCalendar) {
+      this.localGoogleCalendar.createOAuthState(stateHash, state, expiresAt)
+      return
+    }
     const { error } = await this.db.from('connection_oauth_states').insert({
       state_hash: stateHash,
       owner_id: state.ownerId,
@@ -559,7 +587,10 @@ export class SupabaseStore implements Store, RuntimeStore {
     if (error) fail(error)
   }
 
-  async consumeOAuthState(stateHash: string, provider: 'github' | 'gmail') {
+  async consumeOAuthState(stateHash: string, provider: OAuthProvider) {
+    if (provider === 'google_calendar' && this.localGoogleCalendar) {
+      return this.localGoogleCalendar.consumeOAuthState(stateHash)
+    }
     const { data, error } = await this.db
       .from('connection_oauth_states')
       .update({ used_at: new Date().toISOString() })
@@ -582,11 +613,19 @@ export class SupabaseStore implements Store, RuntimeStore {
   async getAiSettings(ownerId: string) {
     const { data, error } = await this.db
       .from('ai_settings')
-      .select('provider, base_url, model, encrypted_api_key, updated_at')
+      .select('provider, base_url, model, encrypted_api_key, personalization_enabled, updated_at')
       .eq('owner_id', ownerId)
       .maybeSingle()
     if (error) fail(error)
     return data as StoredAiSettings | null
+  }
+
+  async setPersonalization(ownerId: string, enabled: boolean) {
+    const { data, error } = await this.db.from('ai_settings')
+      .update({ personalization_enabled: enabled, updated_at: new Date().toISOString() })
+      .eq('owner_id', ownerId).select('owner_id').maybeSingle()
+    if (error) fail(error)
+    return Boolean(data)
   }
 
   async saveAiSettings(
@@ -596,7 +635,7 @@ export class SupabaseStore implements Store, RuntimeStore {
     const { data, error } = await this.db
       .from('ai_settings')
       .upsert({ owner_id: ownerId, ...settings, updated_at: new Date().toISOString() })
-      .select('provider, base_url, model, encrypted_api_key, updated_at')
+      .select('provider, base_url, model, encrypted_api_key, personalization_enabled, updated_at')
       .single()
     if (error || !data) fail(error)
     return data as StoredAiSettings
@@ -1267,6 +1306,48 @@ export class SupabaseStore implements Store, RuntimeStore {
       .maybeSingle()
     if (error) fail(error)
     return data as RuntimeEvent | null
+  }
+
+  async listConversationEvents(ownerId: string, ruleId: string, conversationKey: string, limit: number) {
+    const { data, error } = await this.db
+      .from('ping_rule_events')
+      .select('id, owner_id, rule_id, event_identity, conversation_key, provider_event_id, occurred_at, status, encrypted_source_payload, encrypted_draft_payload, encrypted_action_payload, action_payload_hash, approval_request_id, delivery_idempotency_key, telegram_random_id, attempts')
+      .eq('owner_id', ownerId)
+      .eq('rule_id', ruleId)
+      .eq('conversation_key', conversationKey)
+      .not('status', 'in', '(detected,evaluating)')
+      .not('encrypted_source_payload', 'is', null)
+      .order('occurred_at', { ascending: false })
+      .order('id', { ascending: false })
+      .limit(Math.max(1, Math.min(limit, 20)))
+    if (error) fail(error)
+    return (data ?? []) as RuntimeEvent[]
+  }
+
+  async getEditableReply(ownerId: string, requestId: string) {
+    const { data, error } = await this.db.from('ping_rule_events')
+      .select('id, owner_id, rule_id, event_identity, conversation_key, provider_event_id, occurred_at, status, encrypted_source_payload, encrypted_draft_payload, encrypted_action_payload, action_payload_hash, approval_request_id, delivery_idempotency_key, telegram_random_id, attempts, approval_requests!inner(status, payload_hash)')
+      .eq('owner_id', ownerId).eq('approval_request_id', requestId).maybeSingle()
+    if (error) fail(error)
+    const request = Array.isArray(data?.approval_requests) ? data.approval_requests[0] : data?.approval_requests
+    if (!data || data.status !== 'pending_approval' || request?.status !== 'pending' || !request.payload_hash) return null
+    const { approval_requests: _request, ...event } = data
+    return { event: event as RuntimeEvent, payloadHash: request.payload_hash }
+  }
+
+  async reviseReply(input: { ownerId: string; requestId: string; expectedHash: string; newHash: string; encryptedDraft: string; encryptedAction: string; memoryContent: string; memorySource: Record<string, unknown> }) {
+    const { data, error } = await this.db.rpc('revise_ping_rule_reply', {
+      p_owner_id: input.ownerId,
+      p_request_id: input.requestId,
+      p_expected_hash: input.expectedHash,
+      p_new_hash: input.newHash,
+      p_encrypted_draft_payload: input.encryptedDraft,
+      p_encrypted_action_payload: input.encryptedAction,
+      p_memory_content: input.memoryContent,
+      p_memory_source: input.memorySource,
+    })
+    if (error || !data) fail(error)
+    return (Array.isArray(data) ? data[0] : data) as ApprovalRequest
   }
 
   async ignoreRuleEvent(eventId: string, leaseToken: string, reason: string) {

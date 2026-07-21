@@ -6,10 +6,12 @@ export type { ProviderDefinition } from "@/types/connections";
 export const PROVIDERS: ProviderDefinition[] = [
   { key: "github", label: "GitHub", description: "Repositories, pull requests, and Actions through GitHub’s read-only MCP." },
   { key: "gmail", label: "Gmail", description: "Read threads and send only the exact reply approved on your Pod." },
+  { key: "google_calendar", label: "Google Calendar", description: "Watch schedules and create or update only exact Pod-approved events." },
   { key: "vercel", label: "Vercel", description: "Verify an expiring Vercel access token against your account." },
   { key: "telegram", label: "Telegram", description: "Connect your personal account by QR, or use a BotFather bot." },
   { key: "linear", label: "Linear", description: "Watch and update issues, projects, and comments through Linear’s official MCP." },
   { key: "stripe", label: "Stripe", description: "Inspect Stripe and run approved actions with a restricted API key." },
+  { key: "notion", label: "Notion", description: "Search and update your workspace through Notion’s official MCP." },
   { key: "custom_mcp", label: "Custom MCP", description: "Connect any public HTTPS Streamable HTTP MCP endpoint." },
 ];
 

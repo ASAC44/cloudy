@@ -365,6 +365,7 @@ function RuleChatDialog({
   }
 
   const reply = session?.reply;
+  const reviewing = Boolean(!complete && reply?.phase === "review" && reply.draft.ready);
   const transcript = session?.messages ?? [];
   const leadingMessages = transcript.at(-1)?.role === "assistant" ? transcript.slice(0, -1) : transcript;
   const showPingStarters = Boolean(
@@ -389,7 +390,7 @@ function RuleChatDialog({
       </DialogTrigger>
       <DialogContent
         showCloseButton={false}
-        className="inset-0 h-dvh w-full max-w-none translate-x-0 translate-y-0 gap-0 rounded-none border-0 bg-background p-0 text-foreground ring-0 sm:max-w-none"
+        className="inset-0 h-dvh min-h-0 w-full min-w-0 max-w-none translate-x-0 translate-y-0 gap-0 overflow-x-hidden overflow-y-hidden rounded-none border-0 bg-background p-0 text-foreground ring-0 sm:max-w-none"
       >
         <DialogTitle className="sr-only">Create a Ping</DialogTitle>
         <DialogDescription className="sr-only">
@@ -419,10 +420,17 @@ function RuleChatDialog({
             </div>
           </header>
 
+          {reviewing && reply ? (
+            <main className="min-h-0 flex-1 overflow-y-auto px-5 pt-24 pb-8 sm:px-8 sm:pt-28">
+              <div className="mx-auto w-full max-w-3xl">
+                <RuleReview reply={reply} podName={podName} pending={pending} onSave={startWatching} />
+              </div>
+            </main>
+          ) : (
           <MessageScrollerProvider autoScroll>
             <MessageScroller className="flex-1">
               <MessageScrollerViewport>
-                <MessageScrollerContent className="mx-auto w-full max-w-3xl justify-end px-5 pt-24 pb-40 sm:px-8 sm:pt-28 sm:pb-44">
+                <MessageScrollerContent className="mx-auto w-full min-w-0 max-w-3xl justify-end px-5 pt-24 pb-40 sm:px-8 sm:pt-28 sm:pb-44">
                   {leadingMessages.map((message, index) => (
                     <MessageScrollerItem key={`${message.role}-${index}`}>
                       {message.role === "user"
@@ -492,9 +500,6 @@ function RuleChatDialog({
                             onConnect={() => connectProvider(reply.connection_requirement!.provider)}
                           />
                         ) : null}
-                        {reply.phase === "review" && reply.draft.ready ? (
-                          <RuleReview reply={reply} podName={podName} pending={pending} onSave={startWatching} />
-                        ) : null}
                         {error && !reply.connection_requirement ? <p className="mt-4 text-sm text-destructive">{error}</p> : null}
                         {pending && !outgoingMessage ? (
                           <Attachment state="processing" className="mt-5 max-w-sm bg-background/60 motion-reduce:[&_.shimmer]:animate-none">
@@ -532,10 +537,11 @@ function RuleChatDialog({
               <MessageScrollerButton />
             </MessageScroller>
           </MessageScrollerProvider>
+          )}
 
-          {!complete ? (
+          {!complete && !reviewing ? (
             <footer className="pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-background via-background/95 to-transparent px-5 pt-10 pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:px-8">
-              <form onSubmit={submitMessage} className="pointer-events-auto mx-auto max-w-3xl">
+            <form onSubmit={submitMessage} className="pointer-events-auto mx-auto w-full min-w-0 max-w-3xl">
                 <InputGroup className="border-border bg-white shadow-lg has-disabled:bg-white has-disabled:opacity-100 dark:bg-background dark:has-disabled:bg-background">
                   <InputGroupTextarea
                     value={input}
@@ -724,25 +730,31 @@ function RuleReview({
 }) {
   const definition = reply.draft.definition;
   return (
-    <section className="mt-6 max-w-2xl" aria-label="Ping review">
-      <Separator />
-      <dl className="divide-y divide-border">
-        <ReviewRow label="Name" value={reply.draft.title} />
-        <ReviewRow label="Purpose" value={reply.draft.intent_summary} />
-        <ReviewRow label="Source" value={reply.draft.capability_name} />
-        <ReviewRow label="Scope" value={definitionValue(definition, "scope")} />
-        <ReviewRow label="Match when" value={definitionValue(definition, "match")} />
-        <ReviewRow label="Context" value={definitionValue(definition, "context")} />
-        <ReviewRow label="Action" value={definitionValue(definition, "action")} />
-        <ReviewRow label="Cadence" value={definitionValue(definition, "cadence")} />
-        <ReviewRow label="Approval" value="Every write needs approval on your Pod" />
-        <ReviewRow label="Destination" value={podName} />
-        <ReviewRow label="New events" value="Starts from now; historical items are ignored" />
-      </dl>
-      <Button className="mt-5" onClick={onSave} disabled={pending}>
-        {pending ? <Spinner /> : <Radar />}
-        {pending ? "Starting…" : "Start watching"}
-      </Button>
+    <section aria-label="Ping review">
+      <div className="py-4">
+        <p className="font-medium">Review this Ping</p>
+        <p className="mt-1 text-sm text-muted-foreground">Confirm what Podex will watch and the action that still requires your approval.</p>
+        <Separator className="mt-4" />
+        <dl className="divide-y divide-border">
+          <ReviewRow label="Name" value={reply.draft.title} />
+          <ReviewRow label="Purpose" value={reply.draft.intent_summary} />
+          <ReviewRow label="Source" value={reply.draft.capability_name} />
+          <ReviewRow label="Scope" value={definitionValue(definition, "scope")} />
+          <ReviewRow label="Match when" value={definitionValue(definition, "match")} />
+          <ReviewRow label="Context" value={definitionValue(definition, "context")} />
+          <ReviewRow label="Action" value={definitionValue(definition, "action")} />
+          <ReviewRow label="Cadence" value={definitionValue(definition, "cadence")} />
+          <ReviewRow label="Approval" value="Every write needs approval on your Pod" />
+          <ReviewRow label="Destination" value={podName} />
+          <ReviewRow label="New events" value="Starts from now; historical items are ignored" />
+        </dl>
+      </div>
+      <div className="border-t border-border py-4">
+        <Button onClick={onSave} disabled={pending}>
+          {pending ? <Spinner /> : <Radar />}
+          {pending ? "Starting…" : "Start watching"}
+        </Button>
+      </div>
     </section>
   );
 }
@@ -819,11 +831,21 @@ function definitionValue(definition: Record<string, unknown>, key: string) {
   const value = definition[key];
   if (typeof value === "string") return value;
   if (!value) return "—";
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return "Configured";
+  if (key === "match" && isRecord(value) && typeof value.instructions === "string") return value.instructions;
+  if (key === "action" && isRecord(value) && typeof value.capability_name === "string") return value.capability_name;
+  if (key === "context" && Array.isArray(value)) {
+    const names = value.flatMap((item) => isRecord(item) && typeof item.capability_name === "string" ? [item.capability_name] : []);
+    return names.length ? names.join(", ") : "No additional context";
   }
+  if (key === "cadence" && isRecord(value) && typeof value.seconds === "number") {
+    const source = definition.source;
+    return isRecord(source) && source.delivery === "event" ? "Realtime" : `Every ${value.seconds} seconds`;
+  }
+  return "Configured";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function providerName(provider: "github" | "gmail") {

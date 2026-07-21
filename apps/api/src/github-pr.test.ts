@@ -16,6 +16,7 @@ const pull = (overrides: Record<string, unknown> = {}) => ({
   body: 'Adds bounded payment retries.',
   draft: false,
   merged: false,
+  state: 'open',
   mergeable: true,
   mergeable_state: 'clean',
   updated_at: '2026-07-19T18:00:00Z',
@@ -70,7 +71,11 @@ test('GitHub readiness preserves authoritative facts and squash-preferred merge 
   assert.equal(item.checks_total, 3)
   assert.equal(item.approvals, 1)
   assert.equal(item.merge_method, 'squash')
+  assert.equal(item.state, 'open')
+  assert.equal(item.ready_to_merge, true)
   assert.equal(isReadyPullRequest(item), true)
+  assert.equal(isReadyPullRequest({ ...item, ready_to_merge: true, mergeable: false }), false)
+  assert.equal(isReadyPullRequest({ ...item, ready_to_merge: true, state: 'closed' }), false)
   const presentation = factOnlyPresentation(item)
   assert.equal(presentation.kind, 'github_pr_v1')
   assert.match(presentation.summary, /14 files/)

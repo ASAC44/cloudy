@@ -37,9 +37,9 @@ Each request shows enough information to make a safe decision, including:
 
 ## Shipped integrations
 
-The current release accepts approval requests through automation keys and supports GitHub, Gmail, Vercel, Telegram, Linear, Stripe, and trusted remote MCP connections. A local Codex bridge can turn dictated Pod tasks into read-only plans and route implementation approvals back to the device.
+The current release accepts approval requests through automation keys and supports GitHub, Gmail, Google Calendar, Vercel, Telegram, Linear, Stripe, Notion, and trusted remote MCP connections. A local Codex bridge can turn dictated Pod tasks into read-only plans and route implementation approvals back to the device.
 
-Broader n8n, Discord, WhatsApp, Notion, Slack, and universal MCP workflows are
+Broader n8n, Discord, WhatsApp, Slack, and universal MCP workflows are
 part of the clearly labeled [Product vision](/docs/product/vision), not the
 current compatibility list.
 
@@ -47,17 +47,24 @@ Example actions include:
 
 - Approving and merging a pull request
 - Reviewing and sending a drafted email reply
+- Suggesting available meeting times from Google Calendar in an approved Gmail reply
 - Adding a detected event to Notion
 - Authorizing a deployment or workflow step
 - Rejecting an unwanted or risky action
 
-## Personalized communication direction
+## Personalized communication
 
 The goal is not “write a good email.” It is: **predict what this specific user would have written to this specific person.**
 
-The product direction combines live information with remembered context. Live sources would provide the current email thread, calendar availability, pull request status, and other changing facts. Learned context would provide the user's writing style, relationships, projects, commitments, and previously approved or corrected responses.
+The current release combines live provider context with explicit remembered
+context. Users can save writing preferences and samples, or edit a proposed
+reply in the dashboard. Corrections are stored for that connected provider
+account and reused in later drafts.
 
-This is planned behavior; the current release does not ship a memory engine or learned writing profiles. See [Product vision](/docs/product/vision) for the intended boundaries.
+Podex does not silently import sent mail or learn from ordinary approvals. See
+[Writing personalization](/docs/product/personalization) for the shipped flow
+and [Product vision](/docs/product/vision) for planned relationship-aware
+profiles and broader context.
 
 ## Dashboard
 

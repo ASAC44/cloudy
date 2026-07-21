@@ -1,0 +1,40 @@
+---
+title: Writing personalization
+description: Teach Podex with explicit preferences, writing samples, and corrected replies.
+---
+
+Podex can reuse writing guidance across reply drafts without reading or learning
+from an inbox silently. Personalization uses only information you explicitly
+save or text you correct in the dashboard.
+
+## Add writing guidance
+
+Open **Pod settings → AI behavior** and enable **Personalize drafted replies**.
+You can add either:
+
+- A direct preference, such as “Keep replies under three sentences.”
+- A representative message that demonstrates your usual wording and tone.
+
+Every remembered item is visible on the same page and can be edited or deleted.
+Turning personalization off stops new automatic correction memories and removes
+all writing memories from future prompts; it does not delete existing items.
+
+## Correct a proposed reply
+
+For a pending reply action, select **Edit** in the dashboard, replace the exact
+reply, and save it. Podex remembers the before-and-after correction for that
+specific connected account. The changed reply receives a new payload hash, so
+the Pod must display and approve the revised exact text before anything is sent.
+
+## Boundaries
+
+- Podex uses at most 12 relevant memories and 6,000 characters per draft.
+- Corrections stay scoped to their provider connection; Gmail examples do not
+  automatically affect Telegram drafts.
+- Ordinary approvals are not treated as writing samples.
+- Contact profiles, sent-mail import, embeddings, and semantic search are not
+  part of the current implementation.
+- Memories provide context only and never authorize an external action.
+
+The authenticated memory API is documented in the
+[architecture reference](/docs/reference/architecture#shared-agent-memory).

@@ -4,6 +4,12 @@ set -eu
 repo_dir=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 cd "$repo_dir"
 
+if [ -f "$repo_dir/apps/pod/.env" ]; then
+  set -a
+  . "$repo_dir/apps/pod/.env"
+  set +a
+fi
+
 cleanup() {
   kill "$api_pid" "$worker_pid" "$web_pid" "$pod_pid" 2>/dev/null || true
 }

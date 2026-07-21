@@ -24,6 +24,8 @@ const connections = new ConnectionService(store, {
   githubClientSecret: process.env.GITHUB_CLIENT_SECRET,
   googleClientId: process.env.GOOGLE_CLIENT_ID,
   googleClientSecret: process.env.GOOGLE_CLIENT_SECRET,
+  notionClientId: process.env.NOTION_CLIENT_ID,
+  notionClientSecret: process.env.NOTION_CLIENT_SECRET,
   telegramApiId,
   telegramApiHash,
 })

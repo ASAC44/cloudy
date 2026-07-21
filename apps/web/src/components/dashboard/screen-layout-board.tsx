@@ -4,6 +4,7 @@ import { type DragEvent, type ReactNode, useRef, useState } from "react";
 import {
   Bot,
   Box,
+  CalendarDays,
   ChevronLeft,
   ChevronRight,
   CircleDot,
@@ -27,6 +28,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import type { CodexOverview, Connection, ScreenDirection, ScreenLayout } from "@/types/api";
+import { moveScreenItem } from "./screen-layout-state";
 
 type AppItem = {
   id: string;
@@ -45,11 +47,13 @@ const directions: Array<{ id: ScreenDirection; label: string; gesture: ReactNode
 const appDefinitions: Array<{ provider: Connection["provider"] | "codex"; name: string; icon: LucideIcon }> = [
   { provider: "github", name: "GitHub", icon: GitPullRequest },
   { provider: "gmail", name: "Gmail", icon: Mail },
+  { provider: "google_calendar", name: "Google Calendar", icon: CalendarDays },
   { provider: "codex", name: "Codex", icon: Bot },
   { provider: "vercel", name: "Vercel", icon: Box },
   { provider: "telegram", name: "Telegram", icon: Send },
   { provider: "linear", name: "Linear", icon: CircleDot },
   { provider: "stripe", name: "Stripe", icon: Server },
+  { provider: "notion", name: "Notion", icon: MoreHorizontal },
 ];
 
 const MAX_APPS_PER_SCREEN = 6;
@@ -103,14 +107,7 @@ export function ScreenLayoutBoard({
   }
 
   function move(itemId: string, target?: ScreenDirection) {
-    const current = layoutRef.current;
-    if (target && !current[target].includes(itemId) && current[target].length >= MAX_APPS_PER_SCREEN) return;
-    const next: ScreenLayout = {
-      left: current.left.filter((id) => id !== itemId),
-      right: current.right.filter((id) => id !== itemId),
-      down: current.down.filter((id) => id !== itemId),
-    };
-    if (target) next[target] = [...next[target], itemId];
+    const next = moveScreenItem(layoutRef.current, itemId, target);
     layoutRef.current = next;
     setLayout(next);
     void persist(next);
@@ -128,7 +125,7 @@ export function ScreenLayoutBoard({
       <div className="mb-6 flex items-start justify-between gap-6">
         <div>
           <h2 id="keychain-title" className="text-heading-sm">Screen layout</h2>
-          <p className="mt-1 max-w-2xl text-muted-foreground">Attach up to six apps to each screen. Their pings share that screen in queue order; apps are never grouped.</p>
+          <p className="mt-1 max-w-2xl text-muted-foreground">Drag apps between screens or use their move menu. Attach up to six apps to each screen; their pings share that screen in queue order and apps are never grouped.</p>
         </div>
         <span className={cn("shrink-0 text-caption", syncStatus === "error" ? "text-destructive" : "text-muted-foreground")} aria-live="polite">
           {syncStatus === "saving" ? "Syncing…" : syncStatus === "error" ? "Sync failed · reverted" : "Synced to Pod"}

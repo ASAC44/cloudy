@@ -1,0 +1,37 @@
+---
+title: n8n automations
+description: Pause an n8n workflow until its action is approved or rejected on a Pod.
+---
+
+Open `/automations/n8n` in Podex to create a revocable automation key and copy
+the API endpoint and request body.
+
+## Configure n8n
+
+1. Create a Header Auth credential with the header `Authorization` and value
+   `Bearer YOUR_PODEX_KEY`.
+2. Add an HTTP Request node that sends `POST /v1/automation/approvals` using
+   JSON body mode. Set `Idempotency-Key` to `{{$execution.id}}`.
+3. Add a Wait node configured for **On Webhook Call**, `POST`, and an immediate
+   response. Send its `{{$execution.resumeUrl}}` value as `callback_url` in the
+   approval request.
+4. After the Wait node, branch on `{{$json.body.status}}`. Terminal statuses are
+   `approved`, `rejected`, `expired`, and `cancelled`.
+
+The HTTP Request node and Wait node must run in the same execution because n8n
+generates a unique resume URL for each execution. For self-hosted n8n behind a
+reverse proxy, configure `WEBHOOK_URL` with the public HTTPS origin and set
+`N8N_PROXY_HOPS=1`. Podex rejects localhost, private-network, non-HTTPS, and
+redirecting callback URLs.
+
+## API behavior
+
+The automation key is shown once and stored by Podex only as a hash. Reusing an
+idempotency key with the same action returns the existing approval; reusing it
+with a different action returns `409`. Podex encrypts the resume URL, queues one
+callback after the request reaches a terminal state, and retries failed delivery
+with a bounded backoff.
+
+Use `GET /v1/automation/approvals/:id` to inspect a request or
+`DELETE /v1/automation/approvals/:id` to cancel a pending request. Both use the
+same bearer automation key.

@@ -56,9 +56,9 @@ export default async function ConnectionsPage({
 }
 
 function providerName(value: string) {
-  return value === "github" ? "GitHub" : value === "gmail" ? "Gmail" : "Provider";
+  return value === "github" ? "GitHub" : value === "gmail" ? "Gmail" : value === "google_calendar" ? "Google Calendar" : value === "notion" ? "Notion" : "Provider";
 }
 
 function isProvider(value?: string): value is Connection["provider"] {
-  return Boolean(value && ["github", "gmail", "vercel", "telegram", "linear", "stripe", "custom_mcp"].includes(value));
+  return Boolean(value && ["github", "gmail", "google_calendar", "vercel", "telegram", "linear", "stripe", "notion", "custom_mcp"].includes(value));
 }

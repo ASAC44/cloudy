@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import test from 'node:test'
 
-import { gmailNotificationPresentation, gmailReviewPresentation, RuntimeEngine, pointerValue, resolveArguments } from './runtime-engine.js'
-import type { RuntimeRule, RuntimeStore, Store } from './types/store.js'
+import { availableCalendarSlots, gmailNotificationPresentation, gmailReviewPresentation, makeGithubActionEnvelope, RuntimeEngine, pointerValue, resolveArguments, telegramConversationContext } from './runtime-engine.js'
+import type { GithubPullRequest } from './types/github.js'
+import type { RuntimeEvent, RuntimeRule, RuntimeStore, Store } from './types/store.js'
 
 const rule = (): RuntimeRule => ({
   id: 'rule-1', owner_id: 'owner-1', destination_pod_id: 'pod-1', source_connection_id: 'connection-1',
@@ -38,7 +40,37 @@ test('JSON pointers and immutable bindings support RFC 6901 escaping', () => {
     text: { from: 'decision', pointer: '/draft' },
     fixed: 'literal',
   }, event, { draft: 'Exact reply' }), { peer: '42', text: 'Exact reply', fixed: 'literal' })
+  assert.deepEqual(resolveArguments({ peer_id: { from: 'event', pointer: '/chat/id' } }, event, {}), { peer_id: '42' })
   assert.throws(() => resolveArguments({ missing: { from: 'event', pointer: '/none' } }, event, {}), /could not be resolved/)
+})
+
+test('Telegram conversation context is chronological and includes only delivered replies', () => {
+  const action = (message: string) => ({
+    kind: 'capability' as const, rule_id: 'rule-1', rule_revision: 1, event_identity: 'message-1',
+    connection_id: 'connection-1', capability_id: 'send', capability_schema_hash: 'hash', arguments: { message },
+  })
+  assert.deepEqual(telegramConversationContext([
+    { id: '2', occurred_at: '2026-07-21T10:01:00Z', status: 'rejected', source: { sender_name: 'M_M', text: 'Send the final one' }, action: action('Rejected draft') },
+    { id: '1', occurred_at: '2026-07-21T10:00:00Z', status: 'delivered', source: { sender_name: 'M_M', text: 'Which report?' }, action: action('The July report?') },
+  ]), [
+    { direction: 'incoming', text: 'Which report?', sender: 'M_M', occurred_at: '2026-07-21T10:00:00Z' },
+    { direction: 'outgoing', text: 'The July report?', occurred_at: '2026-07-21T10:00:00Z' },
+    { direction: 'incoming', text: 'Send the final one', sender: 'M_M', occurred_at: '2026-07-21T10:01:00Z' },
+  ])
+})
+
+test('schedule slots exclude calendar conflicts and return three weekday openings', () => {
+  const slots = availableCalendarSlots([
+    { items: [{ start: { dateTime: '2026-07-21T09:00:00Z' }, end: { dateTime: '2026-07-21T10:00:00Z' } }] },
+  ], {
+    relevant: true, duration_minutes: 60, start_date: '2026-07-21', end_date: '2026-07-21', timezone: 'UTC', missing_fields: [],
+  }, 'UTC')
+
+  assert.deepEqual(slots.map(({ start, end }) => [start, end]), [
+    ['2026-07-21T10:00:00.000Z', '2026-07-21T11:00:00.000Z'],
+    ['2026-07-21T10:30:00.000Z', '2026-07-21T11:30:00.000Z'],
+    ['2026-07-21T11:00:00.000Z', '2026-07-21T12:00:00.000Z'],
+  ])
 })
 
 test('polling establishes a baseline, then enqueues only unseen deterministic identities', async () => {
@@ -82,6 +114,7 @@ test('all-incoming Gmail rules do not ask AI to infer sender metadata from IDs',
     claimRuleEvent: async () => ({ eventId: 'event-1', ownerId: runtimeRule.owner_id, ruleId: runtimeRule.id, leaseToken: 'lease' }),
     getRuntimeRule: async () => runtimeRule,
     getRuntimeEvent: async () => ({ id: 'event-1', event_identity: 'identity', encrypted_source_payload: JSON.stringify(event) }),
+    getAiSettings: async () => ({ personalization_enabled: true }),
     listAgentMemories: async () => [],
     prepareRuleApproval: async (input: { encryptedDraft: string }) => { encryptedDraft = input.encryptedDraft },
     recordRuleRun: async () => undefined,
@@ -98,6 +131,50 @@ test('all-incoming Gmail rules do not ask AI to infer sender metadata from IDs',
     kind: 'gmail_notification_v1', sender: 'ava@example.com', time: 'Today', subject: 'Review',
     summary: 'A new incoming Gmail message matched this Ping.', email: 'Complete original email.',
   })
+})
+
+test('reply corrections replace draft-bound arguments and retain a scoped before-after example', async () => {
+  const runtimeRule = rule()
+  runtimeRule.action_connection_id = 'connection-1'
+  runtimeRule.action_capability_id = 'send-reply'
+  runtimeRule.action_capability_name = 'Send reply'
+  runtimeRule.action_capability_schema_hash = 'b'.repeat(64)
+  runtimeRule.action_capability_safety = 'verified_write'
+  runtimeRule.definition.action = {
+    connection_id: 'connection-1', capability_id: 'send-reply', capability_name: 'Send reply',
+    capability_schema_hash: 'b'.repeat(64), arguments: { message: { from: 'decision', pointer: '/draft' }, thread_id: 'thread-1' },
+  }
+  const action = {
+    kind: 'capability', rule_id: runtimeRule.id, rule_revision: runtimeRule.revision, event_identity: 'message-1',
+    connection_id: 'connection-1', capability_id: 'send-reply', capability_schema_hash: 'b'.repeat(64),
+    arguments: { message: 'Old reply', thread_id: 'thread-1' },
+  }
+  const canonical = (value: unknown): string => Array.isArray(value) ? `[${value.map(canonical).join(',')}]`
+    : value && typeof value === 'object' ? `{${Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`).join(',')}}`
+      : JSON.stringify(value)
+  const payloadHash = createHash('sha256').update(canonical(action)).digest('hex')
+  let revision: Parameters<RuntimeStore['reviseReply']>[0] | undefined
+  const event = {
+    id: 'event-1', owner_id: 'owner-1', rule_id: runtimeRule.id, event_identity: 'message-1', status: 'pending_approval',
+    encrypted_draft_payload: JSON.stringify({ proposed_reply: 'Old reply' }), encrypted_action_payload: JSON.stringify(action),
+    action_payload_hash: payloadHash, approval_request_id: 'request-1',
+  }
+  const store = {
+    getEditableReply: async () => ({ event, payloadHash }),
+    getRuntimeRule: async () => runtimeRule,
+    reviseReply: async (input: Parameters<RuntimeStore['reviseReply']>[0]) => { revision = input; return {} },
+  } as unknown as Store & RuntimeStore
+  const engine = new RuntimeEngine(store, {
+    decryptPrivatePayload: (value: string) => JSON.parse(value),
+    encryptPrivatePayload: (value: unknown) => JSON.stringify(value),
+  } as never)
+
+  assert.deepEqual(await engine.editableReply('owner-1', 'request-1'), { reply: 'Old reply', payload_hash: payloadHash })
+  const result = await engine.reviseReply('owner-1', 'request-1', payloadHash, 'New reply')
+  assert.equal(JSON.parse(revision!.encryptedAction).arguments.message, 'New reply')
+  assert.match(revision!.memoryContent, /Before:\nOld reply[\s\S]*After:\nNew reply/)
+  assert.deepEqual(revision!.memorySource, { kind: 'correction', request_id: 'request-1', rule_id: 'rule-1', provider: 'custom_mcp', connection_id: 'connection-1' })
+  assert.equal(result.payload_hash, revision!.newHash)
 })
 
 test('GitHub polling also establishes a baseline without alerting on existing pull requests', async () => {
@@ -128,6 +205,33 @@ test('GitHub polling also establishes a baseline without alerting on existing pu
 
   assert.equal(await engine.pollOnce('worker'), true)
   assert.equal(enqueued.length, 0)
+})
+
+test('GitHub notification-only rules do not require a merge action', () => {
+  const runtimeRule = rule()
+  runtimeRule.source.provider = 'github'
+  const event = { event_identity: 'podex/api#42@abc' } as RuntimeEvent
+  const pull = {
+    repository: 'podex/api', number: 42, head_sha: 'a'.repeat(40), merge_method: 'squash',
+  } as GithubPullRequest
+
+  assert.deepEqual(makeGithubActionEnvelope(runtimeRule, event, pull), {
+    kind: 'none', rule_id: runtimeRule.id, rule_revision: runtimeRule.revision,
+    event_identity: event.event_identity, connection_id: null, capability_id: null,
+    capability_schema_hash: null, arguments: {},
+  })
+
+  runtimeRule.action_connection_id = 'connection-1'
+  runtimeRule.action_capability_id = 'merge-pr'
+  runtimeRule.action_capability_name = 'Merge a GitHub pull request'
+  runtimeRule.action_capability_schema_hash = 'b'.repeat(64)
+  runtimeRule.definition.action = {
+    connection_id: 'connection-1', capability_id: 'merge-pr', capability_name: 'Merge a GitHub pull request',
+    capability_schema_hash: 'b'.repeat(64), arguments: {},
+  }
+  assert.deepEqual(makeGithubActionEnvelope(runtimeRule, event, pull).arguments, {
+    repository: 'podex/api', number: 42, head_sha: 'a'.repeat(40), merge_method: 'squash',
+  })
 })
 
 test('event delivery ignores history from before activation', async () => {
