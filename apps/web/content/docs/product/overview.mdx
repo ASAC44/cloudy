@@ -67,6 +67,11 @@ approves the action. Cloudy then reuses the approved communication as a writing
 example for that connected account, weighting successful delivery more strongly
 than approved intent that could not be delivered.
 
+Voice matching now prefers examples for the same verified identity or person,
+channel, and intent, then broadens carefully to same-channel, same-intent, and
+global voice. Approved corrections are the strongest style signal. Exact
+examples remain encrypted until the bounded draft-time retrieval.
+
 Cloudy does not silently import sent mail, and rejection is never treated as a
 positive writing example. See [Writing personalization](/docs/product/personalization)
 for the shipped flow and [Product vision](/docs/product/vision) for planned

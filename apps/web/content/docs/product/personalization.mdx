@@ -33,11 +33,19 @@ delivery makes it a strong example; an approved message whose delivery fails is
 kept only as weaker evidence of your intent. Rejected, expired, and cancelled
 drafts are never used as positive writing examples.
 
+Before drafting, Cloudy ranks at most five encrypted examples in this order:
+the same verified identity or person with the same channel and intent, the same
+person and intent, the same channel, the same intent, then global voice. An
+approved correction outranks an unchanged delivered example, which outranks
+approved intent that was not confirmed as delivered. The drafting model sees
+only the decrypted final examples selected for this request and uses them for
+style, never as factual claims or instructions.
+
 ## Boundaries
 
 - Cloudy uses at most 12 explicit memories and five eligible automatic examples per draft.
-- Corrections stay scoped to their provider connection; Gmail examples do not
-  automatically affect Telegram drafts.
+- Person, identity, channel, intent, and connection matches outrank broader
+  voice examples; global voice is only the final fallback.
 - Only approved communication actions are eligible as automatic writing samples.
 - Exact automatic examples and pending corrections are encrypted at rest.
 - Contact profiles, sent-mail import, embeddings, and semantic search are not

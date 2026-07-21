@@ -108,7 +108,10 @@ indexed yet. Retrieved strings are labeled as untrusted data, flattened, and
 bounded before entering the model prompt. A Graphiti outage does not fail an
 existing fixed Ping: the recent canonical facts are used when available and the
 configured action remains unchanged. Exact eligible writing samples are still
-decrypted from Postgres only at draft time and are scoped to the action account.
+decrypted from Postgres only at draft time. Cloudy ranks them by exact identity
+or person, channel, intent, and connection before using global voice as the
+last fallback. Corrections and confirmed delivery carry more weight than
+unconfirmed approved intent.
 
 Learned communication rules fail closed instead: if Graphiti is unavailable,
 the model returns an unknown candidate, confidence is below the rule threshold,

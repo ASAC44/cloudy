@@ -113,6 +113,7 @@
 
 ## Activate graph memory
 
+- [ ] Apply `supabase/migrations/20260722030000_voice_context_policies.sql` and `supabase/migrations/20260722040000_voice_example_lookup.sql` in staging; create required and optional context rules, verify optional failure warnings and required failure aborts, then verify both rollback scripts on a disposable database with no non-default context policy rows.
 - [ ] Apply `supabase/migrations/20260722020000_learned_communication_actions.sql` in staging before enabling version-3 rules; verify a populated rollback refuses, then verify the rollback on an empty disposable database.
 - [ ] Provision Neo4j 5.26+ for staging and production, create least-privilege credentials, enable backups, and verify restore into a disposable instance.
 - [ ] Deploy `apps/memory` on Railway private networking with every `GRAPHITI_*` model variable set explicitly and `GRAPHITI_TELEMETRY_ENABLED=false`.
