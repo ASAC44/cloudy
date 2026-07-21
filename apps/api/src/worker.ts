@@ -1,4 +1,5 @@
 import { ConnectionService } from './connections.js'
+import { GraphMemoryClient, GraphMemoryRetriever, graphMemoryConfig, MemoryOutboxSync } from './graph-memory.js'
 import { startRuntimeLoop } from './runtime-loop.js'
 import { SupabaseStore } from './supabase-store.js'
 
@@ -16,6 +17,10 @@ if ((telegramApiId === undefined) !== (telegramApiHash === undefined)) {
 }
 
 const store = new SupabaseStore(supabaseUrl, supabaseSecretKey)
+const memoryConfig = graphMemoryConfig()
+const graphMemory = memoryConfig
+  ? new GraphMemoryClient(memoryConfig.url, memoryConfig.secret, fetch, memoryConfig.timeoutMs)
+  : null
 const connections = new ConnectionService(store, {
   encryptionKey,
   publicApiUrl: requiredEnv('CLOUDY_PUBLIC_API_URL'),
@@ -33,6 +38,8 @@ const stop = startRuntimeLoop(
   store,
   connections,
   telegramApiId && telegramApiHash ? { apiId: telegramApiId, apiHash: telegramApiHash } : undefined,
+  undefined,
+  graphMemory ? { retriever: new GraphMemoryRetriever(store, graphMemory), sync: new MemoryOutboxSync(store, graphMemory) } : undefined,
 )
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {

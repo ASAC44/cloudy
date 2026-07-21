@@ -15,6 +15,7 @@ integration ideas belong in [Product vision](/docs/product/vision).
 | Pod | Python 3.13, pygame-ce, gpiozero | Pairing, request display, physical decisions, cached active request, audio capture, and realtime invalidation handling |
 | Codex bridge | Local Node.js process | Local `codex app-server` session, selected workspace access, and approval exchange |
 | Data store | Supabase Postgres and Auth | Canonical users, credentials, Pods, requests, decisions, integrations, rules, Codex state, and audit records |
+| Memory service | Python 3.13, Graphiti 0.29.2, Neo4j 5.26 | Private derived temporal graph ingestion, owner-scoped search, deletion, and rebuild |
 
 Local development can temporarily persist Pod screen layouts in SQLite when
 the matching Supabase migration has not been applied. This compatibility path
@@ -165,6 +166,34 @@ sessions. Memories may be scoped to a user, workspace, or provider and can
 include a source pointer. They are bounded context only: they never authorize
 an action, replace a provider read, or bypass Pod approval.
 
+The Ping runtime also keeps a normalized, owner-scoped learning ledger for
+people, verified channel identities, decisions, writing examples, preferences,
+provider import cursors, and future graph references. Sensitive profiles,
+identities, message examples, and decision situations are encrypted. Row-level
+security and owner constraints prevent records from linking across users.
+
+Approval and delivery are separate facts. The exact approval transition writes
+the decision and a durable memory-outbox event in the same Postgres transaction.
+Delivery later strengthens the precedent only if the provider confirms success.
+Outbox events are idempotent and leased. The worker preserves per-owner event
+order, writes metadata-only temporal episodes to Graphiti, and stores the
+derived graph reference atomically when it completes an event. Recent unindexed
+decisions provide read-through consistency while the graph catches up.
+
+The runtime retrieves bounded owner-scoped action and voice evidence. Existing
+version-2 Pings remain fixed. Version-3 learned communication Pings can select
+only an opaque candidate from a normalized, owner-scoped allowlist containing
+Gmail and Telegram writes. The server, not the model, binds the capability,
+connection, current-event recipient or verified identity, and exact arguments.
+Unknown candidates, low confidence, identity drift, capability drift, and graph
+outages all cause learned-action abstention. No selection authorizes delivery;
+the hash-bound Pod approval remains authoritative. The service derives every
+namespace from the authenticated owner UUID, accepts only a fixed Cloudy
+ontology, disables Graphiti telemetry and raw episode storage, and exposes no
+raw Cypher. Its internal routes require timestamped, nonce-protected HMAC
+signatures. This boundary is documented in
+[Graph memory service](/docs/development/graph-memory).
+
 The API exposes explicit authenticated endpoints: `POST /v1/memories` to
 write a memory, `GET /v1/memories?q=...&limit=...` to list memories, and
 `DELETE /v1/memories/:id` to soft-delete one. Workspace and provider memories
@@ -174,12 +203,22 @@ Integrations do not silently save arbitrary conversation text.
 `PUT /v1/settings/personalization` controls collection and prompt injection.
 For editable Ping replies, `GET /v1/requests/:id/reply` returns the current
 exact text and hash, while `PUT /v1/requests/:id/reply` atomically replaces the
-encrypted draft, encrypted action, payload hash, and provider-scoped correction
-memory. A Pod holding the previous hash cannot approve the changed action.
+encrypted draft, encrypted action, payload hash, and encrypted pending
+correction. The correction becomes learning evidence only after approval. A Pod
+holding the previous hash cannot approve the changed action.
 
-Reply prompts receive no more than 12 memories or 6,000 characters. General
-preferences apply across providers; corrections use the source connection ID
-so examples from separate accounts do not mix.
+Reply prompts receive no more than 12 explicit memories, bounded graph and
+read-through evidence, plus five eligible approved writing examples, each
+under a bounded character budget. Examples are ranked by identity/person,
+channel, intent, connection, approval correction, and confirmed delivery before
+falling back to global voice.
+
+Context capabilities remain fixed at rule setup. Each normalized binding is
+required or optional and activates always, for scheduling intent, for a selected
+recipient, or for a selected thread. Required failures stop drafting; optional
+failures appear as warnings. Calendar event reads wait for structured
+scheduling intent, current calendar data overrides memory, and missing dates,
+duration, or timezone produce a clarification instead of a guessed slot.
 
 ## Decision guarantees
 
@@ -187,6 +226,8 @@ so examples from separate accounts do not mix.
 - Decisions include the displayed payload hash and an idempotency key.
 - Expired, revoked, changed, or already-resolved requests fail closed.
 - Approved provider actions and callbacks use durable delivery identities.
+- Learned communication candidates are capped at eight and revalidated before
+  approval creation and again before delivery.
 - Test Pings record a decision but deliberately execute no external action.
 - Sensitive credentials stay encrypted server-side and are never returned by
   read endpoints.

@@ -105,11 +105,21 @@
 - [ ] Add signed callbacks or configurable callback authentication before integrations that cannot treat the callback URL as a bearer secret.
 - [ ] Add MCP approval tools and provider-specific SDKs only when a real consumer requires them.
 
+## Activate graph memory
+
+- [ ] Apply `supabase/migrations/20260722030000_voice_context_policies.sql` and `supabase/migrations/20260722040000_voice_example_lookup.sql` in staging; create required and optional context rules, verify optional failure warnings and required failure aborts, then verify both rollback scripts on a disposable database with no non-default context policy rows.
+- [ ] Apply `supabase/migrations/20260722020000_learned_communication_actions.sql` in staging before enabling version-3 rules; verify a populated rollback refuses, then verify the rollback on an empty disposable database.
+- [ ] Provision Neo4j 5.26+ for staging and production, create least-privilege credentials, enable backups, and verify restore into a disposable instance.
+- [ ] Deploy `apps/memory` on Railway private networking with every `GRAPHITI_*` model variable set explicitly and `GRAPHITI_TELEMETRY_ENABLED=false`.
+- [ ] Generate one 32-byte-or-longer `MEMORY_INTERNAL_SECRET`, set the same value on the worker and memory service, and verify unsigned, stale, and replayed requests are rejected.
+- [ ] Keep the memory service at one replica until the process-local nonce replay cache is replaced by a shared atomic store; verify Railway does not scale it horizontally.
+- [ ] Rebuild one staging user from canonical Postgres data and verify owner-isolated search, deletion, retry, read-through, dead-letter recovery, and Neo4j-outage behavior before production rollout.
+
 ## Activate Notion MCP
 
 - [ ] Create a public Notion OAuth connection and configure `NOTION_CLIENT_ID` and `NOTION_CLIENT_SECRET` in the API environment.
 - [ ] Register `${PODEX_PUBLIC_API_URL}/v1/connections/oauth/notion/callback` as an allowed Notion OAuth redirect URI.
-- [ ] Apply `supabase/migrations/20260721000000_notion_connections.sql` before deploying the matching API build.
+- [ ] Apply `supabase/migrations/20260721030000_notion_connections.sql` before deploying the matching API build.
 - [ ] Connect a staging Notion workspace, verify tool discovery and workspace labeling, then approve one read and one write action through the Pod.
 - [ ] Verify production Notion OAuth, token refresh/reconnection, screen assignment, and rollback safety before marking this section complete.
 

@@ -1,0 +1,136 @@
+---
+title: Graph memory service
+description: Run and authenticate Cloudy's private Graphiti and Neo4j service.
+---
+
+Cloudy includes a private Python memory service under `apps/memory`. It pins
+Graphiti 0.29.2, stores its derived temporal graph in Neo4j 5.26, and keeps
+Supabase Postgres as the canonical source of truth. The API-to-memory outbox
+worker signs every request, writes approved decision and delivery episodes, and
+retrieves owner-scoped action and voice evidence during Ping evaluation.
+
+The service never authorizes or delivers an action. It accepts bounded canonical
+facts, returns scoped evidence, and can be deleted or rebuilt from Postgres.
+Exact message examples remain encrypted in Postgres rather than being stored as
+raw Graphiti episode content.
+
+Graph evidence is advisory context only. Existing version-2 Pings still select
+one fixed action. A version-3 learned communication Ping may choose only among
+the exact Gmail or Telegram candidates authorized in that rule. Memory cannot
+introduce a tool or recipient, authorize a write, or bypass Pod review.
+
+## Local setup
+
+Start Neo4j and install the locked Python environment:
+
+```sh
+cd apps/memory
+docker compose up -d neo4j
+uv sync --extra dev --frozen
+cp .env.example .env
+```
+
+Set every model name explicitly in `.env`, then run:
+
+```sh
+uv run uvicorn cloudy_memory.app:configured_app --factory --reload --port 8000
+```
+
+Set the same secret and the service URL on the API worker:
+
+```dotenv
+MEMORY_SERVICE_URL=http://localhost:8000
+MEMORY_INTERNAL_SECRET=replace-with-at-least-32-random-bytes
+MEMORY_REQUEST_TIMEOUT_MS=10000
+```
+
+The URL and secret must be configured together. If both are absent, the worker
+continues running fixed Pings and leaves memory-outbox records pending for a
+later deployment or rebuild. The timeout is optional and must be between 100
+and 60,000 milliseconds.
+
+`GET /health` is a process liveness check. `GET /ready` also verifies Neo4j
+connectivity. Both reveal no graph facts; every `/internal/v1/*` route requires
+a signed internal request.
+
+## Required variables
+
+| Variable | Purpose |
+| --- | --- |
+| `MEMORY_INTERNAL_SECRET` | At least 32 random bytes shared only with the API and worker |
+| `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD` | Neo4j connection |
+| `NEO4J_DATABASE` | Explicit database name; defaults to `neo4j` |
+| `GRAPHITI_OPENAI_API_KEY` | Platform-owned Graphiti inference key, separate from user drafting settings |
+| `GRAPHITI_LLM_MODEL` | Extraction model |
+| `GRAPHITI_SMALL_MODEL` | Smaller extraction model |
+| `GRAPHITI_EMBEDDING_MODEL` | Embedding model |
+| `GRAPHITI_RERANKER_MODEL` | Search reranker model |
+
+`GRAPHITI_OPENAI_BASE_URL` is optional for an OpenAI-compatible platform
+endpoint. `GRAPHITI_MAX_COROUTINES`, `MEMORY_MAX_BODY_BYTES`, and
+`MEMORY_AUTH_MAX_SKEW_SECONDS` are bounded tuning settings. Graphiti telemetry
+is disabled by the service and raw episode content is not retained.
+
+## Request signing
+
+The caller sends `X-Cloudy-Timestamp`, `X-Cloudy-Nonce`, and
+`X-Cloudy-Signature`. The signature is `v1=` followed by the hexadecimal
+HMAC-SHA256 of:
+
+```text
+timestamp\nnonce\nMETHOD\n/path?query\nsha256(raw_body)
+```
+
+Timestamps outside the configured skew window, malformed nonces, duplicate
+nonces, oversized bodies, and invalid signatures fail before JSON parsing.
+Run one service replica until a shared replay store is introduced; the current
+nonce cache is deliberately process-local.
+
+## Sync and retrieval behavior
+
+Approval and delivery transitions enqueue canonical records in the same
+Postgres transaction as the user decision. The worker claims them with a
+bounded lease, preserves per-owner chronological ordering, and retries
+temporary network, timeout, rate-limit, and service failures. A permanent
+request failure or the eighth failed attempt moves the event to `dead_letter`;
+that event deliberately blocks newer events for the same owner until an
+operator repairs or rebuilds the graph, avoiding silent history gaps.
+
+Each Graphiti episode uses the outbox UUID as its stable identity, so a retry
+after a lost response is idempotent. Episodes contain capability, channel,
+approval, and delivery metadata only. Approval records use `intent_only` even
+when delivery has already happened; the later delivery event records the
+provider-confirmed outcome as a separate temporal fact.
+
+During evaluation, the worker combines owner-scoped Graphiti action and voice
+evidence with a bounded read-through of recent canonical decisions that are not
+indexed yet. Retrieved strings are labeled as untrusted data, flattened, and
+bounded before entering the model prompt. A Graphiti outage does not fail an
+existing fixed Ping: the recent canonical facts are used when available and the
+configured action remains unchanged. Exact eligible writing samples are still
+decrypted from Postgres only at draft time. Cloudy ranks them by exact identity
+or person, channel, intent, and connection before using global voice as the
+last fallback. Corrections and confirmed delivery carry more weight than
+unconfirmed approved intent.
+
+Learned communication rules fail closed instead: if Graphiti is unavailable,
+the model returns an unknown candidate, confidence is below the rule threshold,
+or a recipient/capability has changed, Cloudy abstains and prepares a
+notification-only review. The model sees opaque candidate IDs. The server
+resolves recipients, rechecks capability schemas and identity versions, and
+binds the exact action before hashing it for review. Approval episodes connect
+the triggering situation, chosen or rejected communication, and the opaque
+verified-identity reference so later selections can learn contact preferences
+without putting an address or message body in Graphiti.
+
+## Isolation and ontology
+
+The caller supplies an owner UUID, never a Graphiti namespace. The service
+derives `owner_<uuid-without-dashes>` and supplies it on every ingest, search,
+delete, and rebuild operation. Entity and relationship types are fixed by the
+Cloudy ontology; there is no raw Cypher or caller-defined graph namespace.
+
+Mutating and searching one owner's graph is serialized for consistency while
+different owners can proceed concurrently. Verified triplets use deterministic
+UUIDs and a single Neo4j transaction, so Graphiti's LLM cannot merge verified
+people or channel identities.

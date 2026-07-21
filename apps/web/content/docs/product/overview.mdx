@@ -62,13 +62,25 @@ The goal is not “write a good email.” It is: **predict what this specific us
 
 The current release combines live provider context with explicit remembered
 context. Users can save writing preferences and samples, or edit a proposed
-reply in the dashboard. Corrections are stored for that connected provider
-account and reused in later drafts.
+reply in the dashboard. An edit remains encrypted and pending until the user
+approves the action. Cloudy then reuses the approved communication as a writing
+example for that connected account, weighting successful delivery more strongly
+than approved intent that could not be delivered.
 
-Podex does not silently import sent mail or learn from ordinary approvals. See
-[Writing personalization](/docs/product/personalization) for the shipped flow
-and [Product vision](/docs/product/vision) for planned relationship-aware
-profiles and broader context.
+Voice matching now prefers examples for the same verified identity or person,
+channel, and intent, then broadens carefully to same-channel, same-intent, and
+global voice. Approved corrections are the strongest style signal. Exact
+examples remain encrypted until the bounded draft-time retrieval.
+
+Cloudy does not silently import sent mail, and rejection is never treated as a
+positive writing example. See [Writing personalization](/docs/product/personalization)
+for the shipped flow and [Product vision](/docs/product/vision) for planned
+relationship-aware profiles and broader context.
+
+Rules can also explicitly opt into learned communication selection. This is
+limited to pre-authorized Gmail and Telegram candidates; existing rules stay
+fixed. Cloudy abstains when graph evidence is unavailable or weak, and every
+selected recipient, channel, and exact message is still shown for Pod review.
 
 ## Dashboard
 

@@ -1,11 +1,11 @@
 ---
 title: Writing personalization
-description: Teach Podex with explicit preferences, writing samples, and corrected replies.
+description: Teach Cloudy with explicit preferences, writing samples, and approved corrections.
 ---
 
-Podex can reuse writing guidance across reply drafts without reading or learning
+Cloudy can reuse writing guidance across reply drafts without reading or learning
 from an inbox silently. Personalization uses only information you explicitly
-save or text you correct in the dashboard.
+save, text you approve, or corrected replies you approve in the dashboard.
 
 ## Add writing guidance
 
@@ -22,16 +22,32 @@ all writing memories from future prompts; it does not delete existing items.
 ## Correct a proposed reply
 
 For a pending reply action, select **Edit** in the dashboard, replace the exact
-reply, and save it. Podex remembers the before-and-after correction for that
-specific connected account. The changed reply receives a new payload hash, so
+reply, and save it. The edit remains encrypted pending evidence and is not
+learned yet. After you approve it, Cloudy records the final text and the
+before-and-after correction for that specific connected account. The changed
+reply receives a new payload hash, so
 the Pod must display and approve the revised exact text before anything is sent.
+
+Approved communication text becomes eligible as a writing example. Successful
+delivery makes it a strong example; an approved message whose delivery fails is
+kept only as weaker evidence of your intent. Rejected, expired, and cancelled
+drafts are never used as positive writing examples.
+
+Before drafting, Cloudy ranks at most five encrypted examples in this order:
+the same verified identity or person with the same channel and intent, the same
+person and intent, the same channel, the same intent, then global voice. An
+approved correction outranks an unchanged delivered example, which outranks
+approved intent that was not confirmed as delivered. The drafting model sees
+only the decrypted final examples selected for this request and uses them for
+style, never as factual claims or instructions.
 
 ## Boundaries
 
-- Podex uses at most 12 relevant memories and 6,000 characters per draft.
-- Corrections stay scoped to their provider connection; Gmail examples do not
-  automatically affect Telegram drafts.
-- Ordinary approvals are not treated as writing samples.
+- Cloudy uses at most 12 explicit memories and five eligible automatic examples per draft.
+- Person, identity, channel, intent, and connection matches outrank broader
+  voice examples; global voice is only the final fallback.
+- Only approved communication actions are eligible as automatic writing samples.
+- Exact automatic examples and pending corrections are encrypted at rest.
 - Contact profiles, sent-mail import, embeddings, and semantic search are not
   part of the current implementation.
 - Memories provide context only and never authorize an external action.

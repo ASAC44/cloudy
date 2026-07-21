@@ -177,6 +177,68 @@ export type AgentMemory = {
   updated_at: string
 }
 
+export type MemoryMessageExample = {
+  id: string
+  owner_id: string
+  decision_case_id: string
+  connection_id: string | null
+  person_id: string | null
+  identity_id: string | null
+  channel: 'gmail' | 'telegram' | 'slack' | 'discord' | 'custom'
+  language: string | null
+  source_kind: 'approved_action' | 'approved_correction' | 'imported_sent' | 'explicit'
+  eligibility: 'pending_delivery' | 'positive' | 'intent_only' | 'negative' | 'excluded'
+  encrypted_payload: string
+  payload_hash: string
+  style_metadata: Record<string, unknown>
+  occurred_at: string
+  created_at: string
+  updated_at: string
+}
+
+export type MemoryOutboxClaim = {
+  outboxId: string
+  ownerId: string
+  aggregateType: 'decision' | 'person' | 'identity' | 'message' | 'preference' | 'user'
+  aggregateId: string
+  eventType: string
+  ontologyVersion: number
+  payload: Record<string, unknown>
+  attempts: number
+  createdAt: string
+  leaseToken: string
+}
+
+export type MemoryDecisionGraphRecord = {
+  id: string
+  owner_id: string
+  rule_id: string | null
+  rule_intent: string | null
+  source_provider: ConnectionProvider | null
+  selected_identity_id: string | null
+  action_capability_id: string | null
+  approval_outcome: 'approved' | 'rejected' | 'expired' | 'cancelled'
+  delivery_outcome: 'pending' | 'delivered' | 'failed' | 'ambiguous' | 'superseded' | 'not_applicable'
+  occurred_at: string
+  decided_at: string
+}
+
+export type RecentUnindexedDecision = MemoryDecisionGraphRecord & {
+  event_type: string
+  event_outcome: string | null
+  outbox_created_at: string
+}
+
+export type MemoryIdentityRecord = {
+  id: string
+  owner_id: string
+  person_id: string
+  connection_id: string | null
+  channel: 'gmail' | 'telegram' | 'slack' | 'discord' | 'custom'
+  encrypted_identity: string
+  version: number
+}
+
 export type CapabilitySafety = 'verified_read' | 'verified_write' | 'unannotated'
 export type CapabilityRole = 'source' | 'context' | 'action' | 'setup'
 export type CapabilityDelivery = 'poll' | 'event'
@@ -210,15 +272,44 @@ export type JsonPointerBinding = {
 
 export type BoundArguments = Record<string, unknown | JsonPointerBinding>
 
+export type ContextPolicy = {
+  required: boolean
+  activation: 'always' | 'scheduling_intent' | 'selected_recipient' | 'selected_thread'
+  failure_policy: 'abort' | 'continue_with_warning'
+}
+
 export type RuleContextBindingDraft = {
   connection_id: string
   capability_id: string
   capability_name: string
   capability_schema_hash: string
   arguments: BoundArguments
+  policy: ContextPolicy
 }
 
-export type RuleActionDraft = RuleContextBindingDraft
+export type RuleActionDraft = Omit<RuleContextBindingDraft, 'policy'>
+
+export type CommunicationDescriptor = {
+  channel: 'gmail' | 'telegram'
+  mode: 'reply' | 'new_message'
+  recipient_argument: 'thread_id' | 'peer_id' | 'to'
+  body_argument: 'message'
+  subject_argument?: 'subject'
+}
+
+export type LearnedActionDraft = RuleActionDraft & {
+  descriptor: CommunicationDescriptor
+  identity_id?: string
+  identity_version?: number
+}
+
+export type ActionPolicy = {
+  mode: 'learned_communication'
+  allowed_actions: LearnedActionDraft[]
+  recipient_scope: 'event_participants' | 'verified_responsible_contacts' | 'explicit_allowlist'
+  allowed_identity_ids?: string[]
+  minimum_confidence: number
+}
 
 export type RuleDefinitionV2 = {
   schema_version: 2
@@ -250,6 +341,12 @@ export type RuleDefinitionV2 = {
   assumptions: string[]
 }
 
+export type RuleDefinitionV3 = Omit<RuleDefinitionV2, 'schema_version' | 'action'> & {
+  schema_version: 3
+  action: null
+  action_policy: ActionPolicy
+}
+
 export type RuleQuestion = {
   id: string
   prompt: string
@@ -268,6 +365,7 @@ export type RuleDraft = {
   definition: Record<string, unknown>
   context_bindings?: RuleContextBindingDraft[]
   action?: RuleActionDraft | null
+  action_policy?: ActionPolicy | null
   ready: boolean
 }
 
@@ -313,7 +411,7 @@ export type PingRule = {
   capability_schema_hash: string
   capability_safety: CapabilitySafety
   definition: Record<string, unknown>
-  schema_version: 1 | 2
+  schema_version: 1 | 2 | 3
   status?: 'active' | 'paused' | 'needs_attention'
   action_connection_id?: string | null
   action_capability_id?: string | null
@@ -381,9 +479,10 @@ export type TelegramAuthSession = {
 
 export type RuntimeRule = PingRule & {
   owner_id: string
-  definition: RuleDefinitionV2
+  definition: RuleDefinitionV2 | RuleDefinitionV3
   source: StoredConnection
   contexts: RuleContextBindingDraft[]
+  action_candidates: LearnedActionDraft[]
   runtime: {
     cursor: Record<string, unknown>
     baseline_completed: boolean
@@ -405,11 +504,19 @@ export type RuntimeEvent = {
   encrypted_source_payload: string | null
   encrypted_draft_payload: string | null
   encrypted_action_payload: string | null
+  encrypted_revision_payload: string | null
   action_payload_hash: string | null
   approval_request_id: string | null
   delivery_idempotency_key: string
   telegram_random_id: string | null
   attempts: number
+  selected_candidate_id?: string | null
+  selected_candidate_position?: number | null
+  selected_action_connection_id?: string | null
+  selected_action_capability_id?: string | null
+  selected_person_id?: string | null
+  selected_identity_id?: string | null
+  selected_identity_version?: number | null
 }
 
 export type EditableReply = {
@@ -534,6 +641,7 @@ export interface Store {
   ): Promise<PingRule>
   deleteRule(ownerId: string, ruleId: string): Promise<boolean>
   listAgentMemories(ownerId: string, scopes?: Array<{ scope: AgentMemory['scope']; scopeId?: string; provider?: ConnectionProvider }>, query?: string, limit?: number): Promise<AgentMemory[]>
+  listMemoryIdentities(ownerId: string, limit: number): Promise<MemoryIdentityRecord[]>
   upsertAgentMemory(input: { ownerId: string; scope: AgentMemory['scope']; scopeId?: string; provider?: ConnectionProvider; memoryKey: string; content: string; source?: Record<string, unknown> }): Promise<AgentMemory>
   deleteAgentMemory(ownerId: string, memoryId: string): Promise<boolean>
 }
@@ -561,11 +669,26 @@ export interface RuntimeStore {
   claimRuleEvent(): Promise<{ eventId: string; ownerId: string; ruleId: string; leaseToken: string } | null>
   getRuntimeEvent(ownerId: string, eventId: string): Promise<RuntimeEvent | null>
   listConversationEvents(ownerId: string, ruleId: string, conversationKey: string, limit: number): Promise<RuntimeEvent[]>
+  listRelevantMessageExamples(input: {
+    ownerId: string
+    connectionId?: string
+    personId?: string
+    identityId?: string
+    channel?: MemoryMessageExample['channel']
+    intent: string
+    limit: number
+  }): Promise<MemoryMessageExample[]>
+  claimMemoryOutbox(): Promise<MemoryOutboxClaim | null>
+  getMemoryDecisionGraphRecord(ownerId: string, decisionId: string): Promise<MemoryDecisionGraphRecord | null>
+  completeMemoryOutbox(outboxId: string, leaseToken: string, graphUuid?: string): Promise<boolean>
+  failMemoryOutbox(outboxId: string, leaseToken: string, error: string, retryable: boolean): Promise<boolean>
+  listRecentUnindexedDecisions(ownerId: string, limit: number): Promise<RecentUnindexedDecision[]>
+  getMemoryIdentity(ownerId: string, identityId: string): Promise<MemoryIdentityRecord | null>
   getEditableReply(ownerId: string, requestId: string): Promise<EditableReply | null>
-  reviseReply(input: { ownerId: string; requestId: string; expectedHash: string; newHash: string; encryptedDraft: string; encryptedAction: string; memoryContent: string; memorySource: Record<string, unknown> }): Promise<ApprovalRequest>
+  reviseReply(input: { ownerId: string; requestId: string; expectedHash: string; newHash: string; encryptedDraft: string; encryptedAction: string; encryptedRevision: string; revisionSource: Record<string, unknown> }): Promise<ApprovalRequest>
   ignoreRuleEvent(eventId: string, leaseToken: string, reason: string): Promise<boolean>
   failRuleEvent(eventId: string, leaseToken: string, error: string, ambiguous?: boolean): Promise<boolean>
-  prepareRuleApproval(input: { eventId: string; leaseToken: string; encryptedDraft: string; encryptedAction: string; actionHash: string; title: string; source: string; summary: string; details: string; affectedContext: string; risk: 'low' | 'medium' | 'high'; warnings: string[]; expiresAt: string }): Promise<ApprovalRequest>
+  prepareRuleApproval(input: { eventId: string; leaseToken: string; encryptedDraft: string; encryptedAction: string; actionHash: string; title: string; source: string; summary: string; details: string; affectedContext: string; risk: 'low' | 'medium' | 'high'; warnings: string[]; expiresAt: string; selection?: { candidateId: string; candidatePosition: number } }): Promise<ApprovalRequest>
   claimApprovedAction(): Promise<{ eventId: string; ownerId: string; ruleId: string; leaseToken: string } | null>
   completeAction(eventId: string, leaseToken: string, result: { delivered: boolean; retryable?: boolean; ambiguous?: boolean; superseded?: boolean; error?: string }): Promise<boolean>
   recordRuleRun(input: { ownerId: string; ruleId: string; eventId?: string; stage: string; outcome: string; errorCode?: string; errorMessage?: string; durationMs?: number }): Promise<void>

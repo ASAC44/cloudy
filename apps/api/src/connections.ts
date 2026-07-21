@@ -448,13 +448,21 @@ export class ConnectionService {
       }
       throw new ConnectionError('capability_not_found')
     }
-    if (connection.provider === 'gmail' && connection.protocol === 'rest' && role === 'action' && latest.name === 'gmail.send_reply') {
+    if (connection.provider === 'gmail' && connection.protocol === 'rest' && role === 'action'
+      && ['gmail.send_reply', 'gmail.send_message'].includes(latest.name)) {
       const credentials = this.decrypt(connection.encrypted_payload)
       const current = await this.refreshGoogleCredentials(credentials)
       if (JSON.stringify(current) !== JSON.stringify(credentials)) await this.store.updateConnectionSecret(connection.id, this.encrypt(current))
       const token = requiredCredential(current, 'accessToken')
-      const threadId = requiredString(input, 'thread_id')
       const message = requiredString(input, 'message')
+      if (latest.name === 'gmail.send_message') {
+        const raw = gmailMessageRaw(requiredString(input, 'to'), requiredString(input, 'subject'), message)
+        return await this.json('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+          method: 'POST', headers: { ...providerHeaders(token), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ raw: Buffer.from(raw).toString('base64url') }),
+        })
+      }
+      const threadId = requiredString(input, 'thread_id')
       const thread = await this.json(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(threadId)}?format=metadata`, { headers: providerHeaders(token) })
       const raw = gmailReplyRaw(threadId, message, thread)
       return await this.json('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
@@ -989,6 +997,22 @@ function restCapabilities(connection: Connection, credentials: Credentials): Cap
     delivery: 'poll' as const,
     input_schema: { type: 'object', properties: { thread_id: { type: 'string' }, message: { type: 'string', minLength: 1, maxLength: 4096 } }, required: ['thread_id', 'message'], additionalProperties: false },
     output_schema: { type: 'object' },
+  }, {
+    name: 'gmail.send_message',
+    title: 'Send a new Gmail message',
+    description: 'Send an exact approved message to a server-verified recipient.',
+    roles: ['action'] as CapabilityRole[],
+    delivery: 'poll' as const,
+    input_schema: {
+      type: 'object',
+      properties: {
+        to: { type: 'string', minLength: 3, maxLength: 320 },
+        subject: { type: 'string', minLength: 1, maxLength: 998 },
+        message: { type: 'string', minLength: 1, maxLength: 4096 },
+      },
+      required: ['to', 'subject', 'message'], additionalProperties: false,
+    },
+    output_schema: { type: 'object' },
   }] : [])] : connection.provider === 'google_calendar' ? calendarCapabilities : connection.provider === 'vercel' ? [{
     name: 'vercel.list_projects',
     title: 'List Vercel projects',
@@ -1206,6 +1230,20 @@ export function gmailReplyRaw(threadId: string, message: string, thread: Record<
   return [
     `To: ${recipient}`, `Subject: ${subject}`, `Message-ID: ${messageId}`,
     `In-Reply-To: ${inReplyTo}`, `References: ${[header('References'), inReplyTo].filter(Boolean).join(' ')}`,
+    'MIME-Version: 1.0', 'Content-Type: text/plain; charset=UTF-8',
+    'Content-Transfer-Encoding: 8bit', '', message,
+  ].join('\r\n')
+}
+
+export function gmailMessageRaw(to: string, subject: string, message: string) {
+  const recipient = to.trim()
+  if (!/^[^\s<>@,]+@[^\s<>@,]+\.[^\s<>@,]+$/u.test(recipient) || recipient.length > 320) {
+    throw new ConnectionError('invalid_capability_input')
+  }
+  const safeSubject = subject.replace(/[\r\n]+/g, ' ').trim().slice(0, 998)
+  if (!safeSubject || !message.trim()) throw new ConnectionError('invalid_capability_input')
+  return [
+    `To: ${recipient}`, `Subject: ${safeSubject}`,
     'MIME-Version: 1.0', 'Content-Type: text/plain; charset=UTF-8',
     'Content-Transfer-Encoding: 8bit', '', message,
   ].join('\r\n')

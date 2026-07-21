@@ -132,8 +132,8 @@ test('Google Calendar provider migration is atomic, reversible, and preserves co
 })
 
 test('Notion provider migration is atomic, reversible, and preserves constrained layouts', async () => {
-  const migration = await readFile(new URL('supabase/migrations/20260721000000_notion_connections.sql', root), 'utf8')
-  const rollback = await readFile(new URL('supabase/rollback/20260721000000_notion_connections.sql', root), 'utf8')
+  const migration = await readFile(new URL('supabase/migrations/20260721030000_notion_connections.sql', root), 'utf8')
+  const rollback = await readFile(new URL('supabase/rollback/20260721030000_notion_connections.sql', root), 'utf8')
 
   assert.match(migration, /^begin;/)
   assert.match(migration, /connection_oauth_states_provider_check[\s\S]*'notion'/)
@@ -230,6 +230,109 @@ test('reply personalization revisions are atomic, owner-scoped, and reversible',
   assert.match(migration, /revoke all on function public\.revise_ping_rule_reply/)
   assert.match(rollback, /drop function if exists public\.revise_ping_rule_reply/)
   assert.match(rollback, /drop column if exists personalization_enabled/)
+})
+
+test('canonical memory data is constrained, encrypted, transactional, and rollback-safe', async () => {
+  const migration = await readFile(new URL('supabase/migrations/20260722000000_memory_data_model.sql', root), 'utf8')
+  const rollback = await readFile(new URL('supabase/rollback/20260722000000_memory_data_model.sql', root), 'utf8')
+
+  assert.match(migration, /^begin;/)
+  for (const table of [
+    'memory_people', 'memory_identities', 'memory_decision_cases', 'memory_message_examples',
+    'memory_preferences', 'memory_graph_refs', 'memory_import_cursors', 'memory_outbox',
+  ]) {
+    assert.match(migration, new RegExp(`create table public\\.${table}`))
+    assert.match(migration, new RegExp(`alter table public\\.${table} enable row level security`))
+    assert.match(rollback, new RegExp(`drop table if exists public\\.${table}`))
+  }
+  assert.match(migration, /foreign key \(owner_id, person_id\)[\s\S]*references public\.memory_people\(owner_id, id\)/)
+  assert.match(migration, /memory_identities_active_external[\s\S]*where deleted_at is null/)
+  assert.match(migration, /memory_outbox_claim_queue[\s\S]*where status in \('pending', 'processing'\)/)
+  assert.match(migration, /check \(\(lease_token is null\) = \(leased_until is null\)\)/)
+  assert.match(migration, /num_nonnulls\(person_id, identity_id, decision_case_id, message_example_id, preference_id\) = 1/)
+  assert.match(migration, /create or replace function public\.record_ping_memory_decision/)
+  assert.match(migration, /'decision\.' \|\| p_outcome[\s\S]*on conflict \(owner_id, dedupe_key\) do nothing/)
+  assert.match(migration, /'delivery\.' \|\| final_status[\s\S]*on conflict \(owner_id, dedupe_key\) do nothing/)
+  assert.match(migration, /encrypted_revision_payload = p_memory_content/)
+  assert.match(migration, /coalesce\(decisions\.outcome, requests\.status\) as outcome/)
+  assert.match(migration, /cases\.delivery_outcome in \('delivered', 'failed', 'ambiguous', 'superseded'\)/)
+  const revisedReply = migration.match(/create or replace function public\.revise_ping_rule_reply\([\s\S]*?\n\$\$;/)?.[0] ?? ''
+  assert.doesNotMatch(revisedReply, /insert into public\.agent_memories/)
+  assert.match(rollback, /Refusing rollback while canonical memory data exists/)
+  assert.match(rollback, /create or replace function public\.sync_ping_event_approval_status/)
+  assert.match(rollback, /create or replace function public\.complete_ping_action/)
+  assert.match(migration, /commit;\s*$/)
+  assert.match(rollback, /commit;\s*$/)
+})
+
+test('memory outbox sync is leased, owner-ordered, atomic, and reversible', async () => {
+  const migration = await readFile(new URL('supabase/migrations/20260722010000_memory_outbox_sync.sql', root), 'utf8')
+  const rollback = await readFile(new URL('supabase/rollback/20260722010000_memory_outbox_sync.sql', root), 'utf8')
+
+  assert.match(migration, /^begin;/)
+  assert.match(migration, /create or replace function public\.claim_memory_outbox/)
+  assert.match(migration, /for update of events skip locked/)
+  assert.match(migration, /earlier\.owner_id = events\.owner_id[\s\S]*earlier\.status <> 'completed'/)
+  assert.match(migration, /status = 'processing'[\s\S]*attempts = claimed_event\.attempts \+ 1[\s\S]*lease_token = token/)
+  assert.match(migration, /create or replace function public\.complete_memory_outbox/)
+  assert.match(migration, /where id = p_outbox_id and status = 'processing' and lease_token = p_lease_token[\s\S]*for update/)
+  assert.match(migration, /insert into public\.memory_graph_refs[\s\S]*update public\.memory_outbox/)
+  assert.match(migration, /create or replace function public\.fail_memory_outbox/)
+  assert.match(migration, /attempts < 8 then 'pending' else 'dead_letter'/)
+  assert.match(migration, /revoke all on function public\.claim_memory_outbox/)
+  assert.match(migration, /grant execute on function public\.claim_memory_outbox\(integer\) to service_role/)
+  assert.match(rollback, /Refusing|cannot represent/)
+  assert.match(rollback, /having count\(\*\) > 1/)
+  assert.match(rollback, /create unique index memory_graph_refs_decision/)
+  assert.match(migration, /commit;\s*$/)
+  assert.match(rollback, /commit;\s*$/)
+})
+
+test('learned communication rules constrain candidates and preserve selected-action learning', async () => {
+  const migration = await readFile(new URL('supabase/migrations/20260722020000_learned_communication_actions.sql', root), 'utf8')
+  const rollback = await readFile(new URL('supabase/rollback/20260722020000_learned_communication_actions.sql', root), 'utf8')
+  assert.match(migration, /^begin;/)
+  assert.match(migration, /schema_version in \(1, 2, 3\)/)
+  assert.match(migration, /create table public\.ping_rule_action_candidates/)
+  assert.match(migration, /foreign key \(owner_id, rule_id\).*ping_rules\(owner_id, id\)/)
+  assert.match(migration, /foreign key \(owner_id, identity_id\).*memory_identities\(owner_id, id\)/)
+  assert.match(migration, /check \(\(identity_id is null\) = \(identity_version is null\)\)/)
+  assert.match(migration, /jsonb_array_length\(p_action_candidates\) not between 1 and 8/)
+  assert.match(migration, /identities\.version = \(candidate->>'identity_version'\)::integer/)
+  assert.match(migration, /create or replace function public\.prepare_ping_rule_approval_v3/)
+  assert.match(migration, /selected_action_connection_id = candidate\.connection_id/)
+  assert.match(migration, /coalesce\(event\.selected_action_connection_id, rule\.action_connection_id\)/)
+  assert.match(migration, /encrypted_candidate_payload/)
+  assert.match(migration, /rules\.schema_version in \(2, 3\)/)
+  assert.match(rollback, /Refusing rollback while learned communication rules exist/)
+  assert.match(rollback, /drop table if exists public\.ping_rule_action_candidates/)
+  assert.match(rollback, /schema_version in \(1, 2\)/)
+  assert.match(migration, /commit;\s*$/)
+  assert.match(rollback, /commit;\s*$/)
+})
+
+test('live context policies are normalized, fail-safe, indexed, and reversible', async () => {
+  const migration = await readFile(new URL('supabase/migrations/20260722030000_voice_context_policies.sql', root), 'utf8')
+  const rollback = await readFile(new URL('supabase/rollback/20260722030000_voice_context_policies.sql', root), 'utf8')
+  assert.match(migration, /^begin;/)
+  assert.match(migration, /add column required boolean not null default true/)
+  assert.match(migration, /activation in \('always', 'scheduling_intent', 'selected_recipient', 'selected_thread'\)/)
+  assert.match(migration, /required and failure_policy = 'abort'/)
+  assert.match(migration, /create trigger apply_ping_context_policy_before_write/)
+  assert.match(migration, /rules\.definition->'context'->new\.position->'policy'/)
+  assert.match(rollback, /Refusing rollback while context policies would be lost/)
+  assert.match(rollback, /drop trigger if exists apply_ping_context_policy_before_write/)
+  assert.match(migration, /commit;\s*$/)
+  assert.match(rollback, /commit;\s*$/)
+})
+
+test('voice example lookup has an owner-scoped eligible recency index', async () => {
+  const migration = await readFile(new URL('supabase/migrations/20260722040000_voice_example_lookup.sql', root), 'utf8')
+  const rollback = await readFile(new URL('supabase/rollback/20260722040000_voice_example_lookup.sql', root), 'utf8')
+  assert.match(migration, /memory_message_examples_owner_eligible_recent/)
+  assert.match(migration, /owner_id, eligibility, occurred_at desc, id desc/)
+  assert.match(migration, /where deleted_at is null/)
+  assert.match(rollback, /drop index if exists public\.memory_message_examples_owner_eligible_recent/)
 })
 
 test('local Supabase startup replays tracked migrations and injects local credentials', async () => {
