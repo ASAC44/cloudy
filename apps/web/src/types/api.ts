@@ -60,8 +60,42 @@ export type AiSettings = {
   model: string;
   has_api_key: boolean;
   personalization_enabled: boolean;
+  learned_actions_enabled: boolean;
   updated_at: string;
 };
+
+export type MemoryImport = {
+  id: string;
+  connection_id: string;
+  import_kind: "sent_messages" | "dialog_messages";
+  status: "idle" | "running" | "paused" | "failed" | "completed";
+  estimated_count: number | null;
+  imported_count: number;
+  excluded_count: number;
+  attempts: number;
+  last_error: string | null;
+  last_imported_at: string | null;
+  consented_at: string;
+  completed_at: string | null;
+  updated_at: string;
+};
+
+export type MemoryPerson = {
+  id: string;
+  kind: "person" | "organization";
+  name: string;
+  version: number;
+  updated_at: string;
+  identities: Array<{
+    id: string;
+    channel: "gmail" | "telegram" | "slack" | "discord" | "custom";
+    label: string;
+    connection_id: string | null;
+    version: number;
+  }>;
+};
+
+export type TelegramHistoryDialog = { id: string; title: string; kind: "dm" | "group" | "channel" | "chat" };
 
 export type CodexBridge = { id: string; name: string; version: string | null; last_error: string | null; paired_at: string; last_seen_at: string | null; online?: boolean };
 export type CodexWorkspace = { id: string; bridge_id: string; local_id: string; label: string; available: boolean; updated_at: string };

@@ -30,6 +30,24 @@ const ENDPOINTS = {
 
 type Credentials = Record<string, string | number | undefined>
 
+export type MessageHistoryScope =
+  | { provider: 'gmail'; after: string; max_messages: number }
+  | { provider: 'telegram'; dialog_ids: string[]; max_messages_per_dialog: number }
+
+export type SentHistoryMessage = {
+  providerId: string
+  conversationId: string | null
+  text: string
+  occurredAt: string
+  styleMetadata: Record<string, unknown>
+}
+
+export type MessageHistoryPage = {
+  messages: SentHistoryMessage[]
+  excludedCount: number
+  cursor: Record<string, unknown> | null
+}
+
 export class ConnectionError extends Error {
   constructor(readonly code: string, message = code) {
     super(message)
@@ -562,6 +580,101 @@ export class ConnectionService {
       throw new ConnectionError('authentication_failed')
     }
     return client
+  }
+
+  async estimateMessageHistory(ownerId: string, connectionId: string, scope: MessageHistoryScope) {
+    const connection = await this.store.getConnection(ownerId, connectionId)
+    if (!connection || connection.status !== 'connected' || connection.provider !== scope.provider) {
+      throw new ConnectionError('connection_not_found')
+    }
+    if (scope.provider === 'telegram') {
+      validateTelegramHistoryScope(scope)
+      const credentials = this.decrypt(connection.encrypted_payload)
+      if (credentials.mode !== 'user') throw new ConnectionError('capability_not_found')
+      return scope.dialog_ids.length * scope.max_messages_per_dialog
+    }
+    validateGmailHistoryScope(scope)
+    const credentials = this.decrypt(connection.encrypted_payload)
+    const current = await this.refreshGoogleCredentials(credentials)
+    if (JSON.stringify(current) !== JSON.stringify(credentials)) await this.store.updateConnectionSecret(connection.id, this.encrypt(current))
+    const url = new URL('https://gmail.googleapis.com/gmail/v1/users/me/messages')
+    url.searchParams.set('q', `in:sent after:${scope.after.replaceAll('-', '/')}`)
+    url.searchParams.set('maxResults', '1')
+    const result = await this.json(url.toString(), { headers: providerHeaders(requiredCredential(current, 'accessToken')) })
+    return Math.min(Number(result.resultSizeEstimate) || 0, scope.max_messages)
+  }
+
+  async readMessageHistoryPage(ownerId: string, connectionId: string, scope: MessageHistoryScope, cursor: Record<string, unknown> | null): Promise<MessageHistoryPage> {
+    const connection = await this.store.getConnection(ownerId, connectionId)
+    if (!connection || connection.status !== 'connected' || connection.provider !== scope.provider) throw new ConnectionError('connection_not_found')
+    if (scope.provider === 'gmail') {
+      validateGmailHistoryScope(scope)
+      const credentials = this.decrypt(connection.encrypted_payload)
+      const current = await this.refreshGoogleCredentials(credentials)
+      if (JSON.stringify(current) !== JSON.stringify(credentials)) await this.store.updateConnectionSecret(connection.id, this.encrypt(current))
+      const processed = Math.max(0, Number(cursor?.processed) || 0)
+      const remaining = scope.max_messages - processed
+      if (remaining <= 0) return { messages: [], excludedCount: 0, cursor: null }
+      const url = new URL('https://gmail.googleapis.com/gmail/v1/users/me/messages')
+      url.searchParams.set('q', `in:sent after:${scope.after.replaceAll('-', '/')}`)
+      url.searchParams.set('maxResults', String(Math.min(remaining, 25)))
+      if (typeof cursor?.page_token === 'string' && cursor.page_token) url.searchParams.set('pageToken', cursor.page_token)
+      const list = await this.json(url.toString(), { headers: providerHeaders(requiredCredential(current, 'accessToken')) })
+      const references = Array.isArray(list.messages) ? list.messages.slice(0, 25) as Array<Record<string, unknown>> : []
+      const messages = await Promise.all(references.map(async (reference) => {
+        const id = String(reference.id ?? '')
+        if (!id) return null
+        return await this.json(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(id)}?format=full`, {
+          headers: providerHeaders(requiredCredential(current, 'accessToken')),
+        })
+      }))
+      const normalized = messages.flatMap((message) => message ? normalizeSentGmailMessage(message) : [])
+      const nextToken = typeof list.nextPageToken === 'string' && processed + references.length < scope.max_messages ? list.nextPageToken : null
+      return {
+        messages: normalized,
+        excludedCount: references.length - normalized.length,
+        cursor: nextToken ? { page_token: nextToken, processed: processed + references.length } : null,
+      }
+    }
+
+    validateTelegramHistoryScope(scope)
+    const credentials = this.decrypt(connection.encrypted_payload)
+    if (credentials.mode !== 'user') throw new ConnectionError('capability_not_found')
+    const dialogIndex = Math.max(0, Number(cursor?.dialog_index) || 0)
+    if (dialogIndex >= scope.dialog_ids.length) return { messages: [], excludedCount: 0, cursor: null }
+    const peerId = scope.dialog_ids[dialogIndex]!
+    const offsetId = Math.max(0, Number(cursor?.offset_id) || 0)
+    const dialogProcessed = Math.max(0, Number(cursor?.dialog_processed) || 0)
+    const pageLimit = Math.min(scope.max_messages_per_dialog - dialogProcessed, 50)
+    if (pageLimit <= 0) {
+      return { messages: [], excludedCount: 0, cursor: dialogIndex + 1 < scope.dialog_ids.length ? { dialog_index: dialogIndex + 1 } : null }
+    }
+    return await this.withTelegram(credentials, async (client) => {
+      const page = await client.getMessages(peerId, { limit: pageLimit, ...(offsetId ? { offsetId } : {}) })
+      const outgoing = page.flatMap((message) => {
+        const text = cleanSentText(message.message ?? '')
+        if (!message.out || !text) return []
+        return [{
+          providerId: String(message.id),
+          conversationId: peerId,
+          text,
+          occurredAt: new Date(Number(message.date) * 1_000).toISOString(),
+          styleMetadata: { channel: 'telegram', imported: true },
+        }]
+      })
+      const lastId = page.at(-1)?.id
+      const nextProcessed = dialogProcessed + page.length
+      const hasMoreInDialog = page.length === pageLimit
+        && Boolean(lastId) && nextProcessed < scope.max_messages_per_dialog
+      const nextDialog = hasMoreInDialog ? dialogIndex : dialogIndex + 1
+      return {
+        messages: outgoing,
+        excludedCount: page.length - outgoing.length,
+        cursor: nextDialog < scope.dialog_ids.length
+          ? { dialog_index: nextDialog, ...(hasMoreInDialog ? { offset_id: lastId, dialog_processed: nextProcessed } : {}) }
+          : null,
+      }
+    })
   }
 
   private async manualDefinition(input: {
@@ -1273,6 +1386,57 @@ function safeTestError(error: unknown) {
   }
   if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) return 'The endpoint did not respond within 10 seconds.'
   return 'The connection test failed.'
+}
+
+function validateGmailHistoryScope(scope: Extract<MessageHistoryScope, { provider: 'gmail' }>) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(scope.after)
+    || !Number.isInteger(scope.max_messages) || scope.max_messages < 1 || scope.max_messages > 500) {
+    throw new ConnectionError('invalid_history_scope')
+  }
+}
+
+function validateTelegramHistoryScope(scope: Extract<MessageHistoryScope, { provider: 'telegram' }>) {
+  if (!Array.isArray(scope.dialog_ids) || scope.dialog_ids.length < 1 || scope.dialog_ids.length > 20
+    || scope.dialog_ids.some((id) => typeof id !== 'string' || !id || id.length > 160)
+    || new Set(scope.dialog_ids).size !== scope.dialog_ids.length
+    || !Number.isInteger(scope.max_messages_per_dialog)
+    || scope.max_messages_per_dialog < 1 || scope.max_messages_per_dialog > 100) {
+    throw new ConnectionError('invalid_history_scope')
+  }
+}
+
+function normalizeSentGmailMessage(message: Record<string, unknown>): SentHistoryMessage[] {
+  const id = String(message.id ?? '')
+  const threadId = String(message.threadId ?? '')
+  const payload = message.payload && typeof message.payload === 'object' ? message.payload as Record<string, unknown> : {}
+  const headers = Array.isArray(payload.headers) ? payload.headers as Array<Record<string, unknown>> : []
+  const header = (name: string) => String(headers.find((item) => String(item.name ?? '').toLowerCase() === name)?.value ?? '').trim()
+  const autoSubmitted = header('auto-submitted').toLowerCase()
+  const subject = header('subject').slice(0, 998)
+  const text = cleanSentText(gmailBody(payload))
+  if (!id || !threadId || !text || (autoSubmitted && autoSubmitted !== 'no') || /^(fwd?|forwarded):/i.test(subject)) return []
+  const internalDate = Number(message.internalDate)
+  if (!Number.isFinite(internalDate) || internalDate <= 0) return []
+  return [{
+    providerId: id,
+    conversationId: threadId,
+    text,
+    occurredAt: new Date(internalDate).toISOString(),
+    styleMetadata: { channel: 'gmail', imported: true, ...(subject ? { intent: subject } : {}) },
+  }]
+}
+
+export function cleanSentText(value: string) {
+  const lines = value.replace(/\r\n?/g, '\n').split('\n')
+  const kept: string[] = []
+  for (const line of lines) {
+    if (/^\s*>/.test(line)
+      || /^On .{1,200}wrote:\s*$/i.test(line)
+      || /^-{2,}\s*(Original|Forwarded) Message\s*-{2,}$/i.test(line)) break
+    if (/^--\s*$/.test(line) && kept.length) break
+    kept.push(line)
+  }
+  return kept.join('\n').replace(/\n{3,}/g, '\n\n').trim().slice(0, 12_000)
 }
 
 export async function validatePublicEndpoint(value: string) {

@@ -84,6 +84,11 @@ export class GraphMemoryClient {
     return this.search('/internal/v1/search/voice', ownerId, query, limit)
   }
 
+  async deleteUser(ownerId: string) {
+    const response = await this.request('DELETE', `/internal/v1/users/${encodeURIComponent(ownerId)}`, {})
+    if (!isRecord(response) || response.deleted !== true) throw new GraphMemoryError('Memory service returned an invalid deletion response', true)
+  }
+
   private async search(path: string, ownerId: string, query: string, limit: number) {
     const response = await this.request('POST', path, {
       owner_id: ownerId,
@@ -143,6 +148,27 @@ export class MemoryOutboxSync {
     const claim = await this.store.claimMemoryOutbox()
     if (!claim) return false
     try {
+      if (claim.aggregateType === 'user' && claim.eventType === 'user.rebuild') {
+        await this.graph.deleteUser(claim.ownerId)
+        let afterId: string | undefined
+        do {
+          const decisions = await this.store.listMemoryDecisionGraphRecords(claim.ownerId, 500, afterId)
+          for (const decision of decisions) {
+            await this.graph.addEpisode(decisionEpisode({
+              ...claim,
+              aggregateType: 'decision',
+              aggregateId: decision.id,
+              outboxId: decision.id,
+              eventType: decision.delivery_outcome === 'delivered' ? 'delivery.delivered' : `decision.${decision.approval_outcome}`,
+            }, decision))
+          }
+          afterId = decisions.length === 500 ? decisions.at(-1)?.id : undefined
+        } while (afterId)
+        if (!await this.store.completeMemoryOutbox(claim.outboxId, claim.leaseToken)) {
+          throw new GraphMemoryError('Memory outbox lease expired before rebuild completion', true)
+        }
+        return true
+      }
       if (claim.aggregateType !== 'decision') {
         throw new GraphMemoryError(`Unsupported memory aggregate: ${claim.aggregateType}`, false)
       }

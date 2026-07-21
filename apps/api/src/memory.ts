@@ -61,7 +61,8 @@ export function messageExampleContext(
     try { payload = decrypt(example.encrypted_payload) } catch { return [] }
     const sample = writingSample(payload)
     if (!sample) return []
-    const weight = example.eligibility === 'positive' ? 'delivered' : 'approved'
+    const weight = example.source_kind === 'imported_sent' ? 'imported user-sent'
+      : example.eligibility === 'positive' ? 'delivered' : 'approved'
     const line = `- [${weight} ${example.channel} writing sample] ${sample}`
     if (used + line.length > maxCharacters) return []
     used += line.length
@@ -72,8 +73,9 @@ export function messageExampleContext(
 
 function voiceProfile(examples: MemoryMessageExample[]) {
   const languages = [...new Set(examples.flatMap((example) => example.language ? [example.language] : []))].slice(0, 3)
+  const allowed = new Set(['tone', 'greeting', 'signoff', 'directness', 'punctuation', 'length', 'formality'])
   const conventions = examples.flatMap((example) => Object.entries(example.style_metadata ?? {}).flatMap(([key, value]) => {
-    if (!/^[a-z0-9_]{1,40}$/i.test(key) || !['string', 'number', 'boolean'].includes(typeof value)) return []
+    if (!allowed.has(key) || !['string', 'number', 'boolean'].includes(typeof value)) return []
     return [`${key}=${String(value).replace(/[\r\n\t]+/g, ' ').slice(0, 120)}`]
   })).slice(0, 8)
   if (!languages.length && !conventions.length) return ''
@@ -86,6 +88,9 @@ function voiceProfile(examples: MemoryMessageExample[]) {
 function writingSample(payload: unknown) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null
   const record = payload as Record<string, unknown>
+  if (typeof record.final_message === 'string' && record.final_message.trim()) {
+    return record.final_message.trim().slice(0, 2_000)
+  }
   if (record.kind === 'correction' && typeof record.final === 'string' && record.final.trim()) {
     const original = typeof record.original === 'string' && record.original.trim()
       ? `\n  Correction note: avoid the earlier wording: ${record.original.trim().slice(0, 1_000)}` : ''

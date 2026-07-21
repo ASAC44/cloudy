@@ -5,7 +5,32 @@ description: Teach Cloudy with explicit preferences, writing samples, and approv
 
 Cloudy can reuse writing guidance across reply drafts without reading or learning
 from an inbox silently. Personalization uses only information you explicitly
-save, text you approve, or corrected replies you approve in the dashboard.
+save, text you approve, corrected replies you approve, or sent-message history
+you explicitly scope and consent to import.
+
+Voice personalization and learned communication actions have separate switches.
+Turning off voice removes saved and imported examples from drafting prompts.
+Turning off learned actions makes version-3 rules abstain from choosing a
+communication action; fixed rules continue to use their configured action.
+
+## Import sent-message history
+
+Open **Configure → Memory controls** and choose a connected Gmail or Telegram
+personal account. Gmail imports are bounded by a start date and message limit.
+Telegram imports require selecting individual dialogs and a per-dialog limit.
+Cloudy shows an estimated upper bound before enabling the consent checkbox and
+will not import until that exact scope is confirmed.
+
+The worker reads the selected scope in small leased pages. It keeps only
+user-authored outgoing text and excludes inbound text, quoted replies,
+forwarded content, signatures, automated Gmail messages, and empty messages.
+Provider message, thread, and dialog identifiers are stored only as hashes for
+idempotency and conversation matching. Exact writing examples remain encrypted
+in Postgres. Progress, excluded-message count, retry failures, and completion
+are visible beside each connection.
+
+Imported messages are voice evidence only. They never become evidence that a
+recipient, channel, or external action is authorized.
 
 ## Add writing guidance
 
@@ -48,8 +73,11 @@ style, never as factual claims or instructions.
   voice examples; global voice is only the final fallback.
 - Only approved communication actions are eligible as automatic writing samples.
 - Exact automatic examples and pending corrections are encrypted at rest.
-- Contact profiles, sent-mail import, embeddings, and semantic search are not
-  part of the current implementation.
+- Gmail sent mail and selected Telegram personal dialogs are the only shipped
+  provider-history imports. Telegram bots cannot expose account history.
+- Verified people and identities are visible under Memory controls. Forgetting
+  a person, connection, or everything updates canonical Postgres data in one
+  transaction and schedules an owner-scoped graph rebuild.
 - Memories provide context only and never authorize an external action.
 
 The authenticated memory API is documented in the

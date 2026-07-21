@@ -113,6 +113,18 @@ or person, channel, intent, and connection before using global voice as the
 last fallback. Corrections and confirmed delivery carry more weight than
 unconfirmed approved intent.
 
+Explicit sent-history imports are also canonical Postgres writing examples.
+The import worker claims one consent record with `FOR UPDATE SKIP LOCKED`, reads
+a bounded provider page, and records each example idempotently using a hashed
+provider message ID. A failure retains the last encrypted provider cursor and
+uses bounded retry backoff. Imported exact text is never written to Graphiti.
+
+Forget operations lock the owner's import work, update or remove canonical
+records transactionally, and enqueue one `user.rebuild` event. The graph worker
+deletes that owner's derived graph, replays the remaining canonical decision
+episodes, and completes the same durable outbox lease. Different owners remain
+isolated throughout deletion and rebuild.
+
 Learned communication rules fail closed instead: if Graphiti is unavailable,
 the model returns an unknown candidate, confidence is below the rule threshold,
 or a recipient/capability has changed, Cloudy abstains and prepares a

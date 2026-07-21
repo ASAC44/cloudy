@@ -107,6 +107,7 @@
 
 ## Activate graph memory
 
+- [ ] Apply `supabase/migrations/20260722050000_message_history_controls.sql` in staging before deploying the matching API worker and web build; explicitly scope a disposable Gmail import and selected Telegram-dialog import, verify estimate/consent, progress, idempotent retry, imported voice retrieval, separate learned-action disablement, person/connection/everything forget operations, graph rebuild, cross-owner isolation, and the rollback refusal while imported history exists.
 - [ ] Apply `supabase/migrations/20260722030000_voice_context_policies.sql` and `supabase/migrations/20260722040000_voice_example_lookup.sql` in staging; create required and optional context rules, verify optional failure warnings and required failure aborts, then verify both rollback scripts on a disposable database with no non-default context policy rows.
 - [ ] Apply `supabase/migrations/20260722020000_learned_communication_actions.sql` in staging before enabling version-3 rules; verify a populated rollback refuses, then verify the rollback on an empty disposable database.
 - [ ] Provision Neo4j 5.26+ for staging and production, create least-privilege credentials, enable backups, and verify restore into a disposable instance.

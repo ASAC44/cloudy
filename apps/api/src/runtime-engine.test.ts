@@ -150,6 +150,7 @@ test('optional live context warns while required live context stops drafting', a
     claimRuleEvent: async () => ({ eventId: 'event-1', ownerId: runtimeRule.owner_id, ruleId: runtimeRule.id, leaseToken: 'lease' }),
     getRuntimeRule: async () => runtimeRule,
     getRuntimeEvent: async () => ({ id: 'event-1', event_identity: 'identity', encrypted_source_payload: JSON.stringify({ threadId: 'thread-1' }) }),
+    getAiSettings: async () => ({ personalization_enabled: false, learned_actions_enabled: false }),
     listAgentMemories: async () => [],
     prepareRuleApproval: async (input: { encryptedDraft: string }) => { presentation = JSON.parse(input.encryptedDraft); return {} },
     failRuleEvent: async (_id: string, _lease: string, error: string) => { failed = error; return true },
@@ -198,6 +199,7 @@ test('learned communication abstains when graph memory is unavailable', async ()
     claimRuleEvent: async () => ({ eventId: 'event-1', ownerId: runtimeRule.owner_id, ruleId: runtimeRule.id, leaseToken: 'lease' }),
     getRuntimeRule: async () => runtimeRule,
     getRuntimeEvent: async () => ({ id: 'event-1', event_identity: 'identity', encrypted_source_payload: JSON.stringify({ threadId: 'thread-1', from: 'anne@example.com' }) }),
+    getAiSettings: async () => ({ personalization_enabled: false, learned_actions_enabled: true }),
     listAgentMemories: async () => [],
     prepareRuleApproval: async (input: { encryptedAction: string; encryptedDraft: string }) => {
       savedAction = JSON.parse(input.encryptedAction); savedPresentation = JSON.parse(input.encryptedDraft); return {}
