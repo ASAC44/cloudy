@@ -33,7 +33,7 @@ export function SystemArchitectureSection() {
               variant="outline"
               size="lg"
               render={
-                <a href="/cloudy-system-architecture.excalidraw?v=3" download />
+                <a href="/cloudy-system-architecture.excalidraw?v=5" download />
               }
             >
               <Download aria-hidden="true" />

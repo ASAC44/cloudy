@@ -9,7 +9,7 @@ import type {
 
 import "@excalidraw/excalidraw/index.css";
 
-const scene = fetch("/cloudy-system-architecture.excalidraw?v=3").then(async (response) => {
+const scene = fetch("/cloudy-system-architecture.excalidraw?v=5").then(async (response) => {
   if (!response.ok) {
     throw new Error("Cloudy system map could not be loaded");
   }
@@ -32,7 +32,7 @@ export function InteractiveArchitecture() {
       requestAnimationFrame(() => {
         api.scrollToContent(api.getSceneElements(), {
           fitToViewport: true,
-          viewportZoomFactor: 0.92,
+          viewportZoomFactor: 0.98,
         });
       });
     });
