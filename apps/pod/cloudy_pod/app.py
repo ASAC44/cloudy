@@ -304,7 +304,7 @@ class PodApp:
         self.settings_slider: str | None = None
         self.transcript = ""
         self.voice_revision_request: dict[str, Any] | None = None
-        self.recorder = Recorder(storage.root)
+        self.recorder = Recorder(storage.root, device=os.getenv("CLOUDY_MIC_DEVICE") or None)
         self.chord = ButtonChord(self.choose, self.start_recording, self.stop_recording)
         self.wrap_cache: dict[tuple[int, str, int, int | None], list[str]] = {}
         self.idle_mascots = (high_res_mascot(False), high_res_mascot(True))
@@ -376,11 +376,18 @@ class PodApp:
             return
         from gpiozero import Button
 
-        approve = Button(int(os.getenv("CLOUDY_APPROVE_PIN", "5")), pull_up=True, bounce_time=0.05)
-        reject = Button(int(os.getenv("CLOUDY_REJECT_PIN", "6")), pull_up=True, bounce_time=0.05)
+        try:
+            hold_seconds = float(os.getenv("CLOUDY_BUTTON_HOLD_SECONDS", "0.6"))
+        except ValueError:
+            hold_seconds = 0.6
+        hold_seconds = min(3.0, max(0.2, hold_seconds))
+        approve = Button(int(os.getenv("CLOUDY_APPROVE_PIN", "5")), pull_up=True, bounce_time=0.05, hold_time=hold_seconds)
+        reject = Button(int(os.getenv("CLOUDY_REJECT_PIN", "6")), pull_up=True, bounce_time=0.05, hold_time=hold_seconds)
         approve.when_pressed = lambda: self.chord.press("approve")
+        approve.when_held = lambda: self.chord.hold("approve")
         approve.when_released = lambda: self.chord.release("approve")
         reject.when_pressed = lambda: self.chord.press("reject")
+        reject.when_held = lambda: self.chord.hold("reject")
         reject.when_released = lambda: self.chord.release("reject")
         self.buttons = [approve, reject]
 
@@ -441,20 +448,29 @@ class PodApp:
         self.last_interaction_at = time.monotonic()
         if self.demo or self.offline or self.state in ("pairing", "startup", "submitting", "transcribing"):
             return
+        payload = self.request.get("action_payload", {}) if self.request else {}
+        if payload.get("mock_type") != "codex" and not (self.codex.get("target") or {}).get("revision"):
+            self.state = "target_unavailable"
+            return
         try:
-            payload = self.request.get("codex_payload", {}) if self.request else {}
-            self.voice_revision_request = self.request if payload.get("plan") else None
+            codex_payload = self.request.get("codex_payload", {}) if self.request else {}
+            self.voice_revision_request = self.request if codex_payload.get("plan") else None
             self.recorder.start()
             self.state = "recording"
         except OSError:
             self.state = "error"
-            self.message = "Microphone unavailable"
+            self.message = "Microphone capture failed"
 
     def stop_recording(self) -> None:
         self.needs_render = True
         if self.state != "recording":
             return
-        path = self.recorder.stop()
+        try:
+            path = self.recorder.stop()
+        except OSError:
+            self.state = "error"
+            self.message = "Microphone capture failed"
+            return
         if path:
             self.worker.transcribe(str(path))
             self.state = "transcribing"
@@ -696,7 +712,7 @@ class PodApp:
             self._text("Choose another session", 36, 180, self.heading)
             self._wrapped("Open the Codex page in Cloudy and select an online workspace and session.", 38, 238, 560, self.font, MUTED)
         elif self.state in ("recording", "transcribing", "queued"):
-            labels = {"recording": ("Listening", "Release both buttons to stop."), "transcribing": ("Transcribing", "Turning your voice into a Codex prompt."), "queued": ("Prompt queued", "Codex will prepare a plan first.")}
+            labels = {"recording": ("Listening", "Release either button to stop."), "transcribing": ("Transcribing", "Turning your voice into a Codex instruction."), "queued": ("Instruction queued", "Codex will apply it to the selected conversation.")}
             title, detail = labels[self.state]
             self._status(title, CLAY if self.state == "recording" else AMBER)
             self._text(title, 36, 180, self.heading)

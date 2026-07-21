@@ -75,9 +75,11 @@ exercises recording and transcription without impersonating a real bridge
 command.
 
 The microphone is captured with ALSA `arecord` as mono 16 kHz, 16-bit PCM WAV,
-limited to 30 seconds. Holding both buttons records; releasing either stops.
+limited to 30 seconds. Tapping one button approves or rejects; holding both for
+600 ms records, and releasing either stops. Short two-button chords are ignored.
 The transcript is displayed and requires a separate approval before it becomes
-a Codex prompt.
+a Codex instruction. The bridge steers an active turn and starts a read-only
+planning turn when the selected conversation is idle.
 
 ## Web and API boundary
 
@@ -139,9 +141,9 @@ thread state, and encrypted approval payloads.
 2. The API decrypts the user's official OpenAI API key and transcribes with
    `gpt-4o-mini-transcribe`.
 3. The user approves the displayed transcript.
-4. The bridge starts or resumes the selected Codex thread in a read-only
-   planning sandbox.
-5. Codex returns a plan to the Pod as an approval request.
+4. The bridge steers the exact active turn, or starts or resumes the selected
+   Codex thread in a read-only planning sandbox when no turn is active.
+5. Codex returns the resulting plan to the Pod as an approval request.
 6. After approval, the bridge verifies the repository has not changed and
    starts implementation with workspace write access.
 7. Command, file-change, and permission requests continue through the same
@@ -233,6 +235,9 @@ variables.
 ## References
 
 - [OpenAI GPT-4o mini Transcribe](https://developers.openai.com/api/docs/models/gpt-4o-mini-transcribe)
+- [OpenAI speech to text](https://developers.openai.com/api/docs/guides/speech-to-text)
+- [Raspberry Pi I²S peripherals](https://pip-assets.raspberrypi.com/categories/1259-audio-camera-and-display/documents/RP-009699-WP-1-Using%20the%20I2S%20peripherals%20on%20Raspberry%20Pi%20SBCs.pdf)
+- [TDK INMP441 data sheet](https://product.tdk.com/system/files/dam/doc/product/sw_piezo/mic/mems-mic/data_sheet/inmp441.pdf)
 - [pygame-ce events](https://pyga.me/docs/ref/event.html)
 - [Hono on Node.js](https://hono.dev/docs/getting-started/nodejs)
 - [Supabase Auth](https://supabase.com/docs/guides/auth)

@@ -11,5 +11,7 @@ uv --directory apps/memory run ruff check .
 uv --directory apps/memory run pyright
 uv --directory apps/memory run pytest -q
 sh -n scripts/deploy-pod.sh
+sh -n apps/pod/deploy/provision-inmp441.sh
+sh apps/pod/deploy/provision-inmp441.sh --self-check
 SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy GPIOZERO_PIN_FACTORY=mock \
   apps/pod/.venv/bin/python -m unittest discover -s apps/pod/tests -v

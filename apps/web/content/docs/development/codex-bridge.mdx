@@ -60,11 +60,12 @@ configuration. `remove-workspace` stops exposing one local repository.
 
 ## Pod workflow
 
-Hold both Pod buttons, speak a task, and release them. Cloudy uploads a mono
-16 kHz WAV recording to the API, shows the transcript, and sends it only after
-you approve the transcript. Codex first plans in a read-only sandbox. The plan
-returns to the Pod for approval; implementation starts with workspace write
-access only after that approval.
+Hold both Pod buttons for 600 ms, speak a task, and release either one. Cloudy
+uploads a mono 16 kHz WAV recording to the API, shows the transcript, and sends
+it only after you approve the transcript. If the selected conversation has an
+active turn, the bridge steers that exact turn. Otherwise Codex first plans in a
+read-only sandbox. The plan returns to the Pod for approval; implementation
+starts with workspace write access only after that approval.
 
 Command, file-change, and permission requests raised during implementation
 also return to the Pod. The bridge rejects unsupported request types and
@@ -87,3 +88,8 @@ does not bypass Codex or Pod approvals.
   verify the API URL and the bridge has not been revoked.
 - No workspace on the dashboard: add an absolute repository path and allow the
   next two-second bridge sync to complete.
+- `Codex target unavailable` on the Pod: select an online workspace and session
+  on the dashboard before holding both buttons.
+- `Microphone capture failed`: verify the INMP441 card and
+  `CLOUDY_MIC_DEVICE` using the [Pi deployment guide](/docs/pod/raspberry-pi).
+  Invalid or empty captures are deleted and never uploaded.
