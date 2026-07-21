@@ -101,6 +101,13 @@ export type LearnedCandidate = {
   identityVersion?: number
 }
 
+type ContextState = {
+  values: unknown[]
+  sources: string[]
+  warnings: string[]
+  executed: Set<string>
+}
+
 type ActionSelection = {
   candidate_id: string | null
   confidence: number
@@ -319,13 +326,16 @@ export class RuntimeEngine {
       const selectedCandidate = actionSelection?.candidate_id
         ? learnedCandidates.find(({ id }) => id === actionSelection.candidate_id) ?? null
         : null
-      let context = await this.readContext(rule, source)
+      const contextState: ContextState = { values: [], sources: [], warnings: [], executed: new Set() }
+      await this.readContext(rule, source, contextState, { selectedCandidate })
+      let context = contextState.values
       if (rule.source.provider === 'gmail' && !context.some(hasGmailMessages)) {
         const threadId = firstText(source, ['threadId', 'thread_id'])
         const capability = threadId && (await this.connections.discoverConnectionCapabilities(rule.owner_id, rule.source_connection_id))
           .find(({ name, roles }) => name === 'gmail.get_thread' && roles.includes('context'))
         if (threadId && capability) {
           context.push(bounded(await this.connections.callRuntimeCapability(rule.owner_id, capability, { thread_id: threadId }, 'context'), 16_000))
+          contextState.sources.push(capability.title ?? capability.name)
         }
       }
       if (rule.source.provider === 'telegram' && event.conversation_key) {
@@ -341,21 +351,22 @@ export class RuntimeEngine {
             ? this.connections.decryptPrivatePayload<ActionEnvelope>(item.encrypted_action_payload)
             : null,
         })))
-        if (conversation.length) context.push({ telegram_conversation: conversation })
+        if (conversation.length) {
+          context.push({ telegram_conversation: conversation })
+          contextState.sources.push('Recent Telegram conversation')
+        }
       }
-      const scheduleRule = isScheduleRule(rule)
+      const scheduleRule = isScheduleRule(rule, selectedCandidate)
       const schedule = scheduleRule ? await this.scheduleRequest(rule, source, context) : null
       if (schedule?.relevant && schedule.duration_minutes && schedule.start_date && schedule.end_date) {
-        if (!schedule.timezone && !calendarTimezone(context)) {
-          const calendar = rule.contexts.find((binding) => binding.capability_name === 'Watch Google Calendar events')
-          const metadata = calendar && (await this.connections.discoverConnectionCapabilities(rule.owner_id, calendar.connection_id))
-            .find(({ name, roles }) => name === 'google_calendar.list_calendars' && roles.includes('context'))
-          if (metadata) context.push(bounded(await this.connections.callRuntimeCapability(rule.owner_id, metadata, { limit: 50 }, 'context'), 12_000))
+        await this.readContext(rule, source, contextState, { selectedCandidate, schedule })
+        const timezone = schedule.timezone ?? calendarTimezone(context)
+        if (timezone) {
+          const slots = availableCalendarSlots(context, schedule, timezone)
+          context.push({ schedule: { timezone, slots } })
+        } else {
+          context.push({ schedule: { missing_fields: [...new Set([...schedule.missing_fields, 'timezone'])] } })
         }
-        const timezone = schedule.timezone ?? calendarTimezone(context) ?? 'UTC'
-        context = await this.readContext(rule, source, { ...schedule, timezone })
-        const slots = availableCalendarSlots(context, schedule, timezone)
-        context.push({ schedule: { timezone, slots } })
       } else if (schedule?.relevant) {
         context.push({ schedule: { missing_fields: schedule.missing_fields } })
       } else if (scheduleRule && !schedule) {
@@ -413,7 +424,9 @@ export class RuntimeEngine {
           recipient: selectedCandidate?.recipientLabel ?? null,
           channel: selectedCandidate?.binding.descriptor.channel ?? null,
         },
-      } : basePresentation
+        live_context: contextState.sources,
+        context_warnings: contextState.warnings,
+      } : { ...basePresentation, live_context: contextState.sources, context_warnings: contextState.warnings }
       await this.store.prepareRuleApproval({
         eventId: event.id,
         leaseToken: claim.leaseToken,
@@ -597,20 +610,42 @@ export class RuntimeEngine {
     return validateActionSelection(output, candidates, policy.minimum_confidence)
   }
 
-  private async readContext(rule: RuntimeRule, event: Record<string, unknown>, schedule?: ScheduleRequest) {
-    const values: unknown[] = []
-    for (const binding of rule.contexts.slice(0, 3)) {
+  private async readContext(
+    rule: RuntimeRule,
+    event: Record<string, unknown>,
+    state: ContextState,
+    activation: { selectedCandidate?: LearnedCandidate | null; schedule?: ScheduleRequest },
+  ) {
+    const bindings = rule.contexts.slice(0, 3).sort((left, right) => {
+      const leftMetadata = left.capability_id.includes('google_calendar.list_calendars') ? 0 : 1
+      const rightMetadata = right.capability_id.includes('google_calendar.list_calendars') ? 0 : 1
+      return leftMetadata - rightMetadata
+    })
+    for (const binding of bindings) {
+      if (state.executed.has(binding.capability_id)) continue
+      const policy = binding.policy ?? { required: true, activation: 'always', failure_policy: 'abort' }
+      if (!contextActive(policy.activation, event, activation.selectedCandidate, activation.schedule)) continue
       const capability = contextCapability(binding)
-      const arguments_ = resolveArguments(binding.arguments, event, {})
-      if (schedule && capability.name === 'Watch Google Calendar events') {
-        const timezone = schedule.timezone ?? calendarTimezone(values) ?? 'UTC'
-        arguments_.time_min = zonedMidnight(schedule.start_date!, timezone)
-        arguments_.time_max = zonedMidnight(addDays(schedule.end_date!, 1), timezone)
+      if (capability.id.includes('google_calendar.list_events') && !activation.schedule) continue
+      try {
+        const arguments_ = resolveArguments(binding.arguments, event, {})
+        if (activation.schedule && capability.id.includes('google_calendar.list_events')) {
+          const timezone = activation.schedule.timezone ?? calendarTimezone(state.values)
+          if (!timezone || !activation.schedule.start_date || !activation.schedule.end_date) continue
+          arguments_.time_min = zonedMidnight(activation.schedule.start_date, timezone)
+          arguments_.time_max = zonedMidnight(addDays(activation.schedule.end_date, 1), timezone)
+        }
+        state.executed.add(binding.capability_id)
+        const output = await this.connections.callRuntimeCapability(rule.owner_id, capability, arguments_, 'context')
+        state.values.push(bounded(output, 12_000))
+        state.sources.push(binding.capability_name)
+      } catch (error) {
+        if (policy.required || policy.failure_policy === 'abort') {
+          throw new Error(`Required context ${binding.capability_name} failed: ${safeError(error)}`)
+        }
+        state.warnings.push(`${binding.capability_name} was unavailable; the draft does not use it.`)
       }
-      const output = await this.connections.callRuntimeCapability(rule.owner_id, capability, arguments_, 'context')
-      values.push(bounded(output, 12_000))
     }
-    return values
   }
 
   private async scheduleRequest(rule: RuntimeRule, event: Record<string, unknown>, context: unknown[]) {
@@ -728,10 +763,28 @@ function isAllIncomingGmailSource(rule: RuntimeRule) {
   return typeof query === 'string' && query.trim().split(/\s+/u).sort().join(' ') === '-from:me in:inbox'
 }
 
-function isScheduleRule(rule: RuntimeRule) {
+function isScheduleRule(rule: RuntimeRule, selectedCandidate?: LearnedCandidate | null) {
   return rule.source.provider === 'gmail'
-    && Boolean(rule.action_capability_name?.includes('Gmail'))
+    && Boolean(selectedCandidate?.binding.descriptor.channel === 'gmail' || rule.action_capability_name?.includes('Gmail'))
     && rule.contexts.some((binding) => binding.capability_name === 'Watch Google Calendar events')
+}
+
+function contextActive(
+  activation: RuleContextBindingDraft['policy']['activation'],
+  event: Record<string, unknown>,
+  candidate?: LearnedCandidate | null,
+  schedule?: ScheduleRequest,
+) {
+  if (activation === 'always') return true
+  if (activation === 'scheduling_intent') return schedule?.relevant === true
+  if (activation === 'selected_recipient') return Boolean(candidate?.recipient)
+  return Boolean(firstText(event, ['threadId', 'thread_id', 'conversation_key', 'conversationId']))
+}
+
+function communicationChannel(capabilityId: string | null | undefined): 'gmail' | 'telegram' | undefined {
+  if (capabilityId?.includes('gmail')) return 'gmail'
+  if (capabilityId?.includes('telegram')) return 'telegram'
+  return undefined
 }
 
 function validateScheduleRequest(value: unknown): ScheduleRequest {
@@ -892,7 +945,7 @@ export function learnedCandidateId(rule: RuntimeRule, binding: LearnedActionDraf
 }
 
 function bindingCapability(
-  binding: RuleContextBindingDraft,
+  binding: RuleContextBindingDraft | RuleActionDraft,
   role: 'context' | 'action',
   safety: 'verified_read' | 'verified_write',
   effect: 'read' | 'write',

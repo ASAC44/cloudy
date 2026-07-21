@@ -272,15 +272,22 @@ export type JsonPointerBinding = {
 
 export type BoundArguments = Record<string, unknown | JsonPointerBinding>
 
+export type ContextPolicy = {
+  required: boolean
+  activation: 'always' | 'scheduling_intent' | 'selected_recipient' | 'selected_thread'
+  failure_policy: 'abort' | 'continue_with_warning'
+}
+
 export type RuleContextBindingDraft = {
   connection_id: string
   capability_id: string
   capability_name: string
   capability_schema_hash: string
   arguments: BoundArguments
+  policy: ContextPolicy
 }
 
-export type RuleActionDraft = RuleContextBindingDraft
+export type RuleActionDraft = Omit<RuleContextBindingDraft, 'policy'>
 
 export type CommunicationDescriptor = {
   channel: 'gmail' | 'telegram'

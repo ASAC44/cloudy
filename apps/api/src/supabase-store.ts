@@ -1229,7 +1229,7 @@ export class SupabaseStore implements Store, RuntimeStore {
   async getRuntimeRule(ownerId: string, ruleId: string) {
     const { data, error } = await this.db
       .from('ping_rules')
-      .select('*, ping_rule_context_bindings(connection_id, capability_id, capability_name, capability_schema_hash, arguments, position), ping_rule_action_candidates(connection_id, capability_id, capability_name, capability_schema_hash, arguments, descriptor, identity_id, identity_version, position), ping_rule_runtime_states!ping_rule_runtime_states_owner_id_rule_id_fkey(cursor, baseline_completed, next_run_at, consecutive_failures, schema_drift)')
+      .select('*, ping_rule_context_bindings(connection_id, capability_id, capability_name, capability_schema_hash, arguments, required, activation, failure_policy, position), ping_rule_action_candidates(connection_id, capability_id, capability_name, capability_schema_hash, arguments, descriptor, identity_id, identity_version, position), ping_rule_runtime_states!ping_rule_runtime_states_owner_id_rule_id_fkey(cursor, baseline_completed, next_run_at, consecutive_failures, schema_drift)')
       .eq('owner_id', ownerId)
       .eq('id', ruleId)
       .in('schema_version', [2, 3])
@@ -1240,7 +1240,10 @@ export class SupabaseStore implements Store, RuntimeStore {
     if (!source) return null
     const contexts = [...(data.ping_rule_context_bindings ?? [])]
       .sort((left, right) => left.position - right.position)
-      .map(({ position: _position, ...binding }) => binding)
+      .map(({ position: _position, required, activation, failure_policy, ...binding }) => ({
+        ...binding,
+        policy: { required, activation, failure_policy },
+      }))
     const actionCandidates = [...(data.ping_rule_action_candidates ?? [])]
       .sort((left, right) => left.position - right.position)
       .map(({ position: _position, ...candidate }) => candidate)
