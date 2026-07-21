@@ -44,11 +44,18 @@ event thread.
 Create a Ping with Gmail as the source, Google Calendar event reads as context,
 and **Reply in Gmail** as the approved action. Podex recognizes meeting,
 rescheduling, and confirmation requests, extracts the requested dates and
-duration, reads the primary calendar, and proposes up to three conflict-free
+duration, runs the preconfigured Calendar read only for scheduling intent, and
+proposes up to three conflict-free
 weekday slots. It uses the calendar timezone and Monday–Friday, 09:00–17:00
 working hours. If the email omits essential details, the proposed reply asks
 for clarification instead of guessing. Every reply must be reviewed and
 approved on the Pod before Gmail sends it.
+
+Every setup-time context binding has a fixed activation and failure policy.
+Required reads stop drafting on failure. Optional reads continue with a warning
+shown in the approval. Runtime content cannot add another tool, recipient, or
+context source. Successful live sources and optional failures are listed in the
+review payload.
 
 ## Connect Google Calendar
 

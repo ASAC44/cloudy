@@ -272,15 +272,22 @@ export type JsonPointerBinding = {
 
 export type BoundArguments = Record<string, unknown | JsonPointerBinding>
 
+export type ContextPolicy = {
+  required: boolean
+  activation: 'always' | 'scheduling_intent' | 'selected_recipient' | 'selected_thread'
+  failure_policy: 'abort' | 'continue_with_warning'
+}
+
 export type RuleContextBindingDraft = {
   connection_id: string
   capability_id: string
   capability_name: string
   capability_schema_hash: string
   arguments: BoundArguments
+  policy: ContextPolicy
 }
 
-export type RuleActionDraft = RuleContextBindingDraft
+export type RuleActionDraft = Omit<RuleContextBindingDraft, 'policy'>
 
 export type CommunicationDescriptor = {
   channel: 'gmail' | 'telegram'
@@ -662,7 +669,15 @@ export interface RuntimeStore {
   claimRuleEvent(): Promise<{ eventId: string; ownerId: string; ruleId: string; leaseToken: string } | null>
   getRuntimeEvent(ownerId: string, eventId: string): Promise<RuntimeEvent | null>
   listConversationEvents(ownerId: string, ruleId: string, conversationKey: string, limit: number): Promise<RuntimeEvent[]>
-  listMessageExamples(ownerId: string, connectionId: string, limit: number): Promise<MemoryMessageExample[]>
+  listRelevantMessageExamples(input: {
+    ownerId: string
+    connectionId?: string
+    personId?: string
+    identityId?: string
+    channel?: MemoryMessageExample['channel']
+    intent: string
+    limit: number
+  }): Promise<MemoryMessageExample[]>
   claimMemoryOutbox(): Promise<MemoryOutboxClaim | null>
   getMemoryDecisionGraphRecord(ownerId: string, decisionId: string): Promise<MemoryDecisionGraphRecord | null>
   completeMemoryOutbox(outboxId: string, leaseToken: string, graphUuid?: string): Promise<boolean>

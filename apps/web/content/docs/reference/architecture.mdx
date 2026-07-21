@@ -204,9 +204,16 @@ holding the previous hash cannot approve the changed action.
 
 Reply prompts receive no more than 12 explicit memories, bounded graph and
 read-through evidence, plus five eligible approved writing examples, each
-under a bounded character budget. General
-preferences apply across providers; automatic examples use the action
-connection ID so separate accounts do not mix.
+under a bounded character budget. Examples are ranked by identity/person,
+channel, intent, connection, approval correction, and confirmed delivery before
+falling back to global voice.
+
+Context capabilities remain fixed at rule setup. Each normalized binding is
+required or optional and activates always, for scheduling intent, for a selected
+recipient, or for a selected thread. Required failures stop drafting; optional
+failures appear as warnings. Calendar event reads wait for structured
+scheduling intent, current calendar data overrides memory, and missing dates,
+duration, or timezone produce a clarification instead of a guessed slot.
 
 ## Decision guarantees
 

@@ -130,7 +130,46 @@ test('all-incoming Gmail rules do not ask AI to infer sender metadata from IDs',
   assert.deepEqual(JSON.parse(encryptedDraft), {
     kind: 'gmail_notification_v1', sender: 'ava@example.com', time: 'Today', subject: 'Review',
     summary: 'A new incoming Gmail message matched this Ping.', email: 'Complete original email.',
+    live_context: ['gmail.get_thread'], context_warnings: [],
   })
+})
+
+test('optional live context warns while required live context stops drafting', async () => {
+  const contextBinding = {
+    connection_id: 'status-1', capability_id: 'status-1:mcp:service.status',
+    capability_name: 'Check service status', capability_schema_hash: 'c'.repeat(64), arguments: {},
+    policy: { required: false, activation: 'always' as const, failure_policy: 'continue_with_warning' as const },
+  }
+  const runtimeRule = rule()
+  runtimeRule.source.provider = 'gmail'
+  runtimeRule.definition.source.arguments = { query: 'in:inbox -from:me' }
+  runtimeRule.contexts = [contextBinding]
+  let presentation: Record<string, unknown> | undefined
+  let failed = ''
+  const store = {
+    claimRuleEvent: async () => ({ eventId: 'event-1', ownerId: runtimeRule.owner_id, ruleId: runtimeRule.id, leaseToken: 'lease' }),
+    getRuntimeRule: async () => runtimeRule,
+    getRuntimeEvent: async () => ({ id: 'event-1', event_identity: 'identity', encrypted_source_payload: JSON.stringify({ threadId: 'thread-1' }) }),
+    listAgentMemories: async () => [],
+    prepareRuleApproval: async (input: { encryptedDraft: string }) => { presentation = JSON.parse(input.encryptedDraft); return {} },
+    failRuleEvent: async (_id: string, _lease: string, error: string) => { failed = error; return true },
+    recordRuleRun: async () => undefined,
+  } as unknown as Store & RuntimeStore
+  const connections = {
+    decryptPrivatePayload: (value: string) => JSON.parse(value),
+    encryptPrivatePayload: (value: unknown) => JSON.stringify(value),
+    discoverConnectionCapabilities: async () => [],
+    callRuntimeCapability: async () => { throw new Error('calendar unavailable') },
+  }
+  assert.equal(await new RuntimeEngine(store, connections as never).evaluateOnce(), true)
+  assert.deepEqual(presentation?.context_warnings, ['Check service status was unavailable; the draft does not use it.'])
+  assert.equal(failed, '')
+
+  contextBinding.policy = { required: true, activation: 'always', failure_policy: 'abort' } as never
+  presentation = undefined
+  assert.equal(await new RuntimeEngine(store, connections as never).evaluateOnce(), true)
+  assert.equal(presentation, undefined)
+  assert.match(failed, /Required context Check service status failed/)
 })
 
 test('learned communication abstains when graph memory is unavailable', async () => {
