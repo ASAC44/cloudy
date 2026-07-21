@@ -14,9 +14,10 @@ facts, returns scoped evidence, and can be deleted or rebuilt from Postgres.
 Exact message examples remain encrypted in Postgres rather than being stored as
 raw Graphiti episode content.
 
-Graph evidence is advisory context only. The existing Ping definition still
-selects the source, optional context capabilities, and action capability. Memory
-cannot choose a new tool, authorize a write, or bypass Pod review.
+Graph evidence is advisory context only. Existing version-2 Pings still select
+one fixed action. A version-3 learned communication Ping may choose only among
+the exact Gmail or Telegram candidates authorized in that rule. Memory cannot
+introduce a tool or recipient, authorize a write, or bypass Pod review.
 
 ## Local setup
 
@@ -108,6 +109,16 @@ bounded before entering the model prompt. A Graphiti outage does not fail an
 existing fixed Ping: the recent canonical facts are used when available and the
 configured action remains unchanged. Exact eligible writing samples are still
 decrypted from Postgres only at draft time and are scoped to the action account.
+
+Learned communication rules fail closed instead: if Graphiti is unavailable,
+the model returns an unknown candidate, confidence is below the rule threshold,
+or a recipient/capability has changed, Cloudy abstains and prepares a
+notification-only review. The model sees opaque candidate IDs. The server
+resolves recipients, rechecks capability schemas and identity versions, and
+binds the exact action before hashing it for review. Approval episodes connect
+the triggering situation, chosen or rejected communication, and the opaque
+verified-identity reference so later selections can learn contact preferences
+without putting an address or message body in Graphiti.
 
 ## Isolation and ontology
 

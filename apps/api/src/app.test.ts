@@ -192,6 +192,7 @@ class FakeStore implements Store {
   async completeCallback() {}
   async listConnections() { return this.connections }
   async listAgentMemories() { return [] as AgentMemory[] }
+  async listMemoryIdentities() { return [] }
   async upsertAgentMemory(input: { ownerId: string; scope: AgentMemory['scope']; scopeId?: string; provider?: AgentMemory['provider']; memoryKey: string; content: string; source?: Record<string, unknown> }) {
     return { id: randomTestId(90), owner_id: input.ownerId, scope: input.scope, scope_id: input.scopeId ?? null, provider: input.provider ?? null, memory_key: input.memoryKey, content: input.content, source: input.source ?? {}, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
   }

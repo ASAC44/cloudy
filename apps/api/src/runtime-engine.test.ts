@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import test from 'node:test'
 
-import { availableCalendarSlots, gmailNotificationPresentation, gmailReviewPresentation, makeGithubActionEnvelope, RuntimeEngine, pointerValue, resolveArguments, telegramConversationContext } from './runtime-engine.js'
+import { availableCalendarSlots, gmailNotificationPresentation, gmailReviewPresentation, learnedCandidateId, makeGithubActionEnvelope, makeLearnedActionEnvelope, RuntimeEngine, pointerValue, resolveArguments, telegramConversationContext } from './runtime-engine.js'
 import type { GithubPullRequest } from './types/github.js'
 import type { RuntimeEvent, RuntimeRule, RuntimeStore, Store } from './types/store.js'
 
@@ -28,7 +28,7 @@ const rule = (): RuntimeRule => ({
     auth_type: 'none', status: 'connected', account_label: null, last_error: null, last_tested_at: null,
     created_at: new Date(0).toISOString(), updated_at: new Date(0).toISOString(), encrypted_payload: 'encrypted',
   },
-  contexts: [],
+  contexts: [], action_candidates: [],
   runtime: { cursor: {}, baseline_completed: false, next_run_at: new Date(0).toISOString(), consecutive_failures: 0, schema_drift: false },
 })
 
@@ -131,6 +131,110 @@ test('all-incoming Gmail rules do not ask AI to infer sender metadata from IDs',
     kind: 'gmail_notification_v1', sender: 'ava@example.com', time: 'Today', subject: 'Review',
     summary: 'A new incoming Gmail message matched this Ping.', email: 'Complete original email.',
   })
+})
+
+test('learned communication abstains when graph memory is unavailable', async () => {
+  const runtimeRule = rule()
+  runtimeRule.schema_version = 3
+  runtimeRule.source.provider = 'gmail'
+  runtimeRule.definition = {
+    ...runtimeRule.definition,
+    schema_version: 3,
+    action: null,
+    action_policy: {
+      mode: 'learned_communication', recipient_scope: 'event_participants', minimum_confidence: 0.8,
+      allowed_actions: [],
+    },
+  }
+  runtimeRule.definition.source.arguments = { query: 'in:inbox -from:me' }
+  runtimeRule.action_candidates = [{
+    connection_id: 'gmail-1', capability_id: 'gmail-1:rest:gmail.send_reply', capability_name: 'Reply in Gmail',
+    capability_schema_hash: 'b'.repeat(64),
+    arguments: { thread_id: { from: 'event', pointer: '/threadId' }, message: { from: 'decision', pointer: '/draft' } },
+    descriptor: { channel: 'gmail', mode: 'reply', recipient_argument: 'thread_id', body_argument: 'message' },
+  }]
+  let savedAction: Record<string, unknown> | undefined
+  let savedPresentation: Record<string, unknown> | undefined
+  const store = {
+    claimRuleEvent: async () => ({ eventId: 'event-1', ownerId: runtimeRule.owner_id, ruleId: runtimeRule.id, leaseToken: 'lease' }),
+    getRuntimeRule: async () => runtimeRule,
+    getRuntimeEvent: async () => ({ id: 'event-1', event_identity: 'identity', encrypted_source_payload: JSON.stringify({ threadId: 'thread-1', from: 'anne@example.com' }) }),
+    listAgentMemories: async () => [],
+    prepareRuleApproval: async (input: { encryptedAction: string; encryptedDraft: string }) => {
+      savedAction = JSON.parse(input.encryptedAction); savedPresentation = JSON.parse(input.encryptedDraft); return {}
+    },
+    recordRuleRun: async () => undefined,
+  } as unknown as Store & RuntimeStore
+  const connections = {
+    decryptPrivatePayload: (value: string) => JSON.parse(value),
+    encryptPrivatePayload: (value: unknown) => JSON.stringify(value),
+    discoverConnectionCapabilities: async () => [{
+      id: 'gmail-1:rest:gmail.send_reply', connection_id: 'gmail-1', schema_hash: 'b'.repeat(64),
+      safety: 'verified_write', effect: 'write', runtime_safe: true, roles: ['action'], name: 'gmail.send_reply',
+    }],
+  }
+  const graph = { retrieve: async () => ({ context: '', graphAvailable: false }) }
+  const engine = new RuntimeEngine(store, connections as never, graph as never)
+  assert.equal(await engine.evaluateOnce(), true)
+  assert.equal(savedAction?.kind, 'none')
+  assert.match(String((savedPresentation?.action_selection as Record<string, unknown>).rationale), /abstained/)
+})
+
+test('learned communication refuses delivery after a verified identity changes', async () => {
+  const runtimeRule = rule()
+  runtimeRule.schema_version = 3
+  runtimeRule.definition = {
+    ...runtimeRule.definition,
+    schema_version: 3,
+    action: null,
+    action_policy: {
+      mode: 'learned_communication', recipient_scope: 'explicit_allowlist', minimum_confidence: 0.8,
+      allowed_actions: [], allowed_identity_ids: ['identity-1'],
+    },
+  }
+  const binding = {
+    connection_id: 'gmail-1', capability_id: 'gmail-1:rest:gmail.send_message', capability_name: 'Send Gmail message',
+    capability_schema_hash: 'b'.repeat(64), identity_id: 'identity-1', identity_version: 1,
+    arguments: { subject: 'Service update', message: { from: 'decision' as const, pointer: '/draft' as const } },
+    descriptor: { channel: 'gmail' as const, mode: 'new_message' as const, recipient_argument: 'to' as const, body_argument: 'message' as const },
+  }
+  runtimeRule.action_candidates = [binding]
+  const candidate = {
+    id: learnedCandidateId(runtimeRule, binding), position: 0, binding, recipient: 'anne@example.com', recipientLabel: 'Anne',
+    personId: 'person-1', identityId: 'identity-1', identityVersion: 1,
+  }
+  const event = { id: 'event-1', event_identity: 'event-identity' } as RuntimeEvent
+  const action = makeLearnedActionEnvelope(runtimeRule, event, {}, {
+    match: true, title: 'Update Anne', summary: 'Send an update', risk: 'low', warnings: [], draft: 'The service is stable.',
+  }, candidate)
+  const completed: Array<Record<string, unknown>> = []
+  let delivered = false
+  const store = {
+    claimApprovedAction: async () => ({ eventId: event.id, ownerId: runtimeRule.owner_id, ruleId: runtimeRule.id, leaseToken: 'lease' }),
+    getRuntimeRule: async () => runtimeRule,
+    getRuntimeEvent: async () => ({
+      ...event, encrypted_source_payload: JSON.stringify({}), encrypted_action_payload: JSON.stringify(action),
+      action_payload_hash: createHash('sha256').update(stableJson(action)).digest('hex'),
+    }),
+    getMemoryIdentity: async () => ({
+      id: 'identity-1', owner_id: runtimeRule.owner_id, person_id: 'person-1', connection_id: 'gmail-1',
+      channel: 'gmail', encrypted_identity: JSON.stringify({ address: 'changed@example.com' }), version: 2,
+    }),
+    completeAction: async (_eventId: string, _lease: string, result: Record<string, unknown>) => { completed.push(result); return true },
+    recordRuleRun: async () => undefined,
+  } as unknown as Store & RuntimeStore
+  const connections = {
+    decryptPrivatePayload: (value: string) => JSON.parse(value),
+    discoverConnectionCapabilities: async () => [{
+      id: binding.capability_id, connection_id: binding.connection_id, schema_hash: binding.capability_schema_hash,
+      safety: 'verified_write', effect: 'write', runtime_safe: true, roles: ['action'], name: 'gmail.send_message',
+    }],
+    callRuntimeCapability: async () => { delivered = true },
+  }
+  assert.equal(await new RuntimeEngine(store, connections as never).dispatchOnce(), true)
+  assert.equal(delivered, false)
+  assert.equal(completed[0]?.delivered, false)
+  assert.match(String(completed[0]?.error), /capability_changed/)
 })
 
 test('reply corrections replace draft-bound arguments and remain encrypted until approval', async () => {
@@ -290,3 +394,11 @@ test('Gmail notification presentation exposes the complete email without a reply
     summary: 'A new email arrived.', email: 'Complete original email.',
   })
 })
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
+  if (value && typeof value === 'object') return `{${Object.entries(value as Record<string, unknown>)
+    .filter(([, item]) => item !== undefined).sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`).join(',')}}`
+  return JSON.stringify(value)
+}
