@@ -40,9 +40,9 @@ export SUPABASE_URL="$local_url"
 export SUPABASE_SECRET_KEY="$local_secret_key"
 export NEXT_PUBLIC_SUPABASE_URL="$local_url"
 export NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY="$local_public_key"
-export PODEX_PUBLIC_API_URL=http://localhost:3001
-export PODEX_WEB_URL=http://localhost:3000
-export PODEX_API_URL=http://localhost:3001
+export CLOUDY_PUBLIC_API_URL=http://localhost:3001
+export CLOUDY_WEB_URL=http://localhost:3000
+export CLOUDY_API_URL=http://localhost:3001
 
 rm -f "$status_file"
 trap - EXIT

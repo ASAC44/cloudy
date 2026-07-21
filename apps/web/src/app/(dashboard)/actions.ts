@@ -73,7 +73,6 @@ export async function createPing(
       }),
     });
     revalidatePath("/home");
-    revalidatePath("/demo");
     return { success: "Test Ping sent." };
   } catch (error) {
     return { error: error instanceof Error ? error.message : "Ping failed" };
@@ -152,7 +151,6 @@ export async function decidePendingPing(
       body: JSON.stringify({ outcome, idempotency_key: randomUUID() }),
     });
     revalidatePath("/home");
-    revalidatePath("/demo");
     revalidatePath("/logs");
     return { success: outcome === "approved" ? "Ping approved." : "Ping rejected." };
   } catch (error) {

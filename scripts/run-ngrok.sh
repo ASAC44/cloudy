@@ -6,4 +6,4 @@ command -v ngrok >/dev/null || {
   exit 1
 }
 
-exec ngrok http "${PODEX_API_PORT:-3001}"
+exec ngrok http "${CLOUDY_API_PORT:-3001}"
