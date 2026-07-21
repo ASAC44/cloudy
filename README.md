@@ -17,7 +17,12 @@
 AI agents can work for minutes or hours on their own, but they still pause when
 they need a human decision. Most of those decisions take only a few seconds:
 approve a plan, merge a pull request, send a drafted reply, or roll back a bad
-deployment. Reaching the decision often takes longer than making it.
+deployment. The slow part is not deciding. It is reaching the controls. With a
+laptop, you have to carry it everywhere, open it, find the right tab, and
+approve, which feels like bringing a bazooka to kill a mosquito. With a phone,
+you still have to pull it out, unlock it, open the app, find the request, and
+approve. That is a lot of ceremony for decisions that can usually be made at a
+glance.
 
 Cloudy turns those moments into clear, glanceable **Pings** on a small physical
 companion. It prepares the context, recommends the next action, and keeps the
